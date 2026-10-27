@@ -33,16 +33,18 @@ import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
+from functools import cached_property
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self
 
 from oasis_finance.actions import decode_args
 from oasis_finance.observation import DEFAULT_EPOCH
-from sqlalchemy import Connection
+from sqlalchemy import Connection, select
 
 from ..finance import ledger
 from ..finance.lending import capacity
+from ..finance.models import journals
 from ..finance.schemas import Snapshot
 from ..finance.store import LedgerStore
 from ..testing.scripted_model import ScriptedModel
@@ -112,21 +114,55 @@ class WorldState:
     deliveries: list[str] = field(default_factory=list)  # scheduled event ids delivered
 
 
+def _fingerprint(*, ledger: str, sqlite_dump: str, memory: Mapping[str, list[dict]],
+                 round_: int, time_step: int | None, rng: tuple, state: WorldState,
+                 queued: int, transcript: Transcript) -> dict[str, str]:
+    """One digest per captured component (round-rollback.json ``round_start_capture``)."""
+    return {
+        "ledger": ledger,
+        "OASIS SQLite": hashlib.sha256(sqlite_dump.encode()).hexdigest(),
+        "actor memory records": _digest(memory),
+        "world and OASIS clocks": f"{round_}/{'-' if time_step is None else time_step}",
+        "RNG state": _digest(rng),
+        "scheduled-event cursor": str(state.event_cursor),
+        "pending C2 deliveries": _digest(state.pending_c2),
+        "intent queue": str(queued),
+        "transcript cursor": f"{transcript.cursor}/{len(state.rounds)}/"
+                             + hashlib.sha256(transcript.to_jsonl()).hexdigest(),
+        "world state": _digest(asdict(state)),
+    }
+
+
 @dataclass(frozen=True)
 class Capture:
-    """Every component of a world at a round boundary (round-rollback.json round_start_capture)."""
+    """Every component of a world at a round boundary (round-rollback.json round_start_capture).
 
+    The ledger is pinned by its digest (the round's transaction rolls it back); every other
+    component by a copy, so the fingerprint is computed from the copies only when it is asked
+    for, which is on an aborted round.
+    """
+
+    world_id: str
+    branch_id: str
     round: int
+    ledger: str
     sqlite: sqlite3.Connection | None
     memory: dict[str, list[dict]]
     agents: dict[str, tuple]
     models: dict[str, list[tuple[set, set]]]
     oasis_time_step: int | None
     rng: tuple
-    global_rng: tuple
     state: WorldState
     transcript: tuple[ModelCall, ...]
-    fingerprint: dict[str, str]
+
+    @cached_property
+    def fingerprint(self) -> dict[str, str]:
+        return _fingerprint(
+            ledger=self.ledger,
+            sqlite_dump="\n".join(self.sqlite.iterdump()) if self.sqlite is not None else "",
+            memory=self.memory, round_=self.round, time_step=self.oasis_time_step,
+            rng=self.rng, state=self.state, queued=0,
+            transcript=Transcript(self.world_id, self.branch_id, calls=self.transcript))
 
 
 class World:
@@ -163,7 +199,6 @@ class World:
                              key=lambda e: e["round"])
         self.clock = Clock(epoch=epoch)
         self.seed = seed
-        self.rng = random.Random(seed)
         self.store = store or LedgerStore("sqlite://")
         ledger.from_snapshot(self.store, self.snapshot)
         self.queue = IntentQueue(branch_id)
@@ -283,7 +318,7 @@ class World:
                           "visible_from_h": 0, "facility_id": f["facility_id"],
                           "facility_kind": f["kind"], "state": f["state"],
                           "limit_minor": f["limit_minor"], "currency": f["currency"]})
-        items += copy.deepcopy(self.state.items)
+        items += self.state.items  # read, never written, by the observation builder
         items += [{"id": f"c2:{c['intent_id']}", "kind": "message", "to": c["actor_id"],
                    "visible_from_h": t, **{k: v for k, v in c.items() if k != "actor_id"}}
                   for c in self.state.pending_c2]
@@ -401,23 +436,16 @@ class World:
             return ""
         return "\n".join(self.platform.db.iterdump())
 
+    def _time_step(self) -> int | None:
+        return self.platform.sandbox_clock.time_step if self.platform is not None else None
+
     def fingerprint(self) -> dict[str, str]:
-        """One digest per captured component (round-rollback.json ``round_start_capture``)."""
-        platform = self.platform
-        return {
-            "ledger": _digest(self.store.dump()),
-            "OASIS SQLite": hashlib.sha256(self.sqlite_dump().encode()).hexdigest(),
-            "actor memory records": _digest(self.memory_records()),
-            "world and OASIS clocks": f"{self.clock.round}/"
-                                      f"{platform.sandbox_clock.time_step if platform else '-'}",
-            "RNG state": _digest([self.rng.getstate(), random.getstate()]),
-            "scheduled-event cursor": str(self.state.event_cursor),
-            "pending C2 deliveries": _digest(self.state.pending_c2),
-            "intent queue": str(len(self.queue)),
-            "transcript cursor": f"{self.transcript.cursor}/{len(self.state.rounds)}/"
-                                 + hashlib.sha256(self.transcript.to_jsonl()).hexdigest(),
-            "world state": _digest(asdict(self.state)),
-        }
+        """The live world's digests, comparable with ``Capture.fingerprint``."""
+        return _fingerprint(
+            ledger=_digest(self.store.dump()), sqlite_dump=self.sqlite_dump(),
+            memory=self.memory_records(), round_=self.clock.round, time_step=self._time_step(),
+            rng=random.getstate(), state=self.state, queued=len(self.queue),
+            transcript=self.transcript)
 
     def capture(self) -> Capture:
         """Pin every component a round may change; taken before step 1."""
@@ -429,19 +457,20 @@ class World:
             sqlite_copy = sqlite3.connect(":memory:")
             self.platform.db.backup(sqlite_copy)
         return Capture(
+            world_id=self.world_id,
+            branch_id=self.branch_id,
             round=self.clock.round,
+            ledger=_digest(self.store.dump()),
             sqlite=sqlite_copy,
             memory=self.memory_records(),
             agents={a: (agent.observation, agent._observed, agent.last_turn,
                         agent.last_social_results) for a, agent in self.agents.items()},
             models={a: [(set(m._used), set(m._pending)) for m in self._scripted(agent)]
                     for a, agent in self.agents.items()},
-            oasis_time_step=self.platform.sandbox_clock.time_step if self.platform else None,
-            rng=self.rng.getstate(),
-            global_rng=random.getstate(),
+            oasis_time_step=self._time_step(),
+            rng=random.getstate(),
             state=copy.deepcopy(self.state),
             transcript=self.transcript.calls(),
-            fingerprint=self.fingerprint(),
         )
 
     def restore(self, capture: Capture) -> None:
@@ -463,8 +492,7 @@ class World:
                 with model._lock:
                     model._used, model._pending = set(used), set(pending)
         self.clock.round = capture.round
-        self.rng.setstate(capture.rng)
-        random.setstate(capture.global_rng)
+        random.setstate(capture.rng)
         self.state = copy.deepcopy(capture.state)
         self.queue.drain()
         self.transcript = Transcript(self.world_id, self.branch_id, calls=capture.transcript)
@@ -474,12 +502,13 @@ class World:
     def trace(self, journal_id: str) -> list[str]:
         """The chain of cause behind a journal: the journal, its intent, the item that intent
         acted on, that item's own intent, and so on to the public posts the first one saw."""
-        journal = next((j for j in self.store.rows("journals") if j["journal_id"] == journal_id),
-                       None)
+        with self.store.reading() as c:
+            journal = c.execute(select(journals.c.source_intent_id)
+                                .where(journals.c.journal_id == journal_id)).first()
         if journal is None:
             raise LookupError(f"no journal {journal_id}")
         items = {i["id"]: i for i in self.state.items}
-        chain, intent_id = [journal_id], journal["source_intent_id"]
+        chain, intent_id = [journal_id], journal.source_intent_id
         while intent_id is not None:
             chain.append(intent_id)
             intent = self.state.intents[intent_id]

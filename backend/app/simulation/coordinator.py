@@ -44,13 +44,24 @@ from dataclasses import dataclass, field
 from datetime import UTC, timedelta
 from typing import Any
 
-from oasis_finance.actions import clearing_key
+from oasis_finance.actions import (
+    FinancialActionType,
+    ToolCallError,
+    clearing_key,
+    parse_tool_call,
+)
 from pydantic import ValidationError
 from sqlalchemy import Connection, select
 
 from ..finance import ledger, lending
-from ..finance.contracts import facility, pool_facilities, register, set_facility
-from ..finance.models import Journal, LedgerRefusal, accounts, journals
+from ..finance.contracts import (
+    ensure_account,
+    facility,
+    pool_facilities,
+    register,
+    set_facility,
+)
+from ..finance.models import Journal, LedgerRefusal, accounts, expected_flows, journals
 from ..finance.schemas import ActionIntent, Amount, ClearedAction, RevenueAdvance
 from .clock import ROUND_HOURS
 from .world import TRANSIT, World, WorldUnusable
@@ -155,12 +166,25 @@ def validate_intents(
             reason = "not_in_mandate"
         elif len(item.intent_id) > journals.c.source_intent_id.type.length:
             reason = "intent_id_too_long"  # its journal could not name it
+        elif not _fits_its_tool(item):
+            reason = "malformed_intent"
         if reason is None:
             valid.append(item)
         else:
             rejected.append(_rejection(item.intent_id, item.actor_id, item.type, round_, reason,
                                        item=item))
     return valid, rejected
+
+
+def _fits_its_tool(intent: ActionIntent) -> bool:
+    """An intent's params validate against its tool's argument schema, whoever queued it (a
+    tool already did; an injected or policy-made intent is held to the same shape)."""
+    args = intent.params.model_dump(mode="json", exclude_none=True)
+    amount = args.pop("amount", None)
+    if amount is not None:
+        args.update(amount_minor=amount["minor"], currency=amount["currency"])
+    action = FinancialActionType(intent.type)
+    return not isinstance(parse_tool_call(intent.type, args, [action]), ToolCallError)
 
 
 def _rejection(intent_id: str, actor_id: str, type_: str, round_: int, reason: str,
@@ -233,12 +257,17 @@ def _no_action(world: World, c: Connection, intent: ActionIntent) -> None:
     return None
 
 
+def _fit_id(prefix: str, base: str, width: int) -> str:
+    """``<prefix>:<base>`` when it fits ``width``, else a stable ``<prefix>-<hash>`` that does."""
+    readable = f"{prefix}:{base}"
+    if len(readable) <= width:
+        return readable
+    return f"{prefix}-{hashlib.sha256(base.encode()).hexdigest()[:width - len(prefix) - 1]}"
+
+
 def _journal_id(intent_id: str) -> str:
-    """The journal of one intent: ``j:<intent>``, or a stable short id when that would not fit."""
-    jid = f"j:{intent_id}"
-    if len(jid) <= journals.c.journal_id.type.length:
-        return jid
-    return f"j-{hashlib.sha256(intent_id.encode()).hexdigest()[:40]}"
+    """The journal of one intent."""
+    return _fit_id("j", intent_id, journals.c.journal_id.type.length)
 
 
 def _account(c: Connection, account_id: str) -> Any:
@@ -301,10 +330,12 @@ def _advance_parties(world: World, c: Connection, lender: str, borrower: str,
     _cash_of(c, world.operating(borrower), borrower, currency, "unknown_counterparty")
 
 
+# A facility's longest derived id is its arrival's settlement journal, settle:arrive:<facility>.
+FACILITY_ID_MAX = journals.c.journal_id.type.length - len("settle:arrive:")
+
+
 def _facility_id(base: str) -> str:
-    """A readable facility id that fits its column, or a stable short one when it would not."""
-    fid = f"adv:{base}"
-    return fid if len(fid) <= 48 else f"adv-{hashlib.sha256(base.encode()).hexdigest()[:24]}"
+    return _fit_id("adv", base, FACILITY_ID_MAX)
 
 
 def _offer_advance(world: World, c: Connection, *, facility_id: str, lender: str,
@@ -329,8 +360,7 @@ def _disburse(world: World, c: Connection, facility_id: str, intent: ActionInten
     if from_account is not None:
         _cash_of(c, from_account, f.pool, f.currency, "not_own_account")
     transit = f"{f.borrower}/{TRANSIT}"
-    if _account(c, transit) is None:
-        store.open_account(transit, f.borrower, f.currency, as_of=now, conn=c)
+    ensure_account(store, transit, f.borrower, f.currency, "cash", c)
     journal = lending.disburse(store, facility_id, now=now, from_account=from_account,
                                borrower_account=transit, journal_id=_journal_id(intent.intent_id),
                                round=intent.round, source_intent_id=intent.intent_id, conn=c)
@@ -493,11 +523,11 @@ def deliver(world: World, conn: Connection) -> tuple[list[dict], list[Journal]]:
         if kind == "public_post":
             posts.append(event)
         elif kind == "delay_receipt":
-            flow = next((f for f in store.rows("expected_flows", conn=conn)
-                         if f["flow_id"] == event["flow_id"]), None)
-            if flow is None:
+            expected_at = conn.execute(select(expected_flows.c.expected_at).where(
+                expected_flows.c.flow_id == event["flow_id"])).scalar()
+            if expected_at is None:
                 raise ValueError(f"scheduled event {event_id} delays no flow {event['flow_id']}")
-            store.reschedule(event["flow_id"], flow["expected_at"].replace(tzinfo=UTC)
+            store.reschedule(event["flow_id"], expected_at.replace(tzinfo=UTC)
                              + timedelta(hours=event["delay_h"]), conn=conn)
         elif kind == "message":
             _message(world, {"id": event["id"], "to": event["to"], "text": event["text"]})

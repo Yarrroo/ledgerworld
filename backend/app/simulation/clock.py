@@ -14,8 +14,10 @@ from datetime import datetime, timedelta
 
 from oasis_finance.observation import DEFAULT_EPOCH
 
+from ..finance.models import HORIZON
+
 ROUND_HOURS = 4
-HORIZON_HOURS = 72
+HORIZON_HOURS = HORIZON // timedelta(hours=1)
 HORIZON_ROUNDS = HORIZON_HOURS // ROUND_HOURS
 
 __all__ = ["HORIZON_HOURS", "HORIZON_ROUNDS", "ROUND_HOURS", "Clock", "ClockDrift"]

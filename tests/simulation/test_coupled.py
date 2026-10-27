@@ -24,7 +24,7 @@ from app.simulation.coordinator import Coordinator, clear_intents, deliver, vali
 from app.simulation.world import World, WorldUnusable, import_oasis
 from app.testing.scripted_model import ScriptedModel, ScriptedPlan
 from oasis_finance.actions import FinancialActionType, IntentQueue, NoActionArgs, submit
-from oasis_finance.observation import DEFAULT_EPOCH
+from oasis_finance.observation import DEFAULT_EPOCH, iso_utc
 
 import_oasis()  # once, from a temporary directory: importing oasis writes ./log
 
@@ -36,12 +36,9 @@ ROLLBACK = json.loads((FIXTURES / "round-rollback.json").read_text())
 ACTOR_SPECS = {a["actor_id"]: a for a in
                json.loads((FIXTURES / "actors.json").read_text())["actors"]}
 MODEL_ACTORS = ["treasury", "lender", "borrower-b", "borrower-c", "feed"]
-T0 = "2026-01-01T00:00:00Z"
+T0 = iso_utc(0)
 HASH = "0" * 64
-
-
-def iso(hours: int) -> str:
-    return f"2026-01-{1 + hours // 24:02d}T{hours % 24:02d}:00:00Z"
+iso = iso_utc
 
 
 def usd(minor: int) -> dict:
@@ -511,10 +508,10 @@ class FailingModel(ScriptedModel):
     """borrower-c at the rollback round: raises once the sibling is at its barrier."""
 
     barriers: Barriers
+    fail: bool = False
 
     async def _arun(self, messages, response_format=None, tools=None):
-        if self.barriers.armed and self.round_source() == ROLLBACK_ROUND \
-                and getattr(self, "fail", False):
+        if self.barriers.armed and self.round_source() == ROLLBACK_ROUND and self.fail:
             await self.barriers.reached.wait()
             raise InjectedFault("an actor raised in step 5")
         return self._answer(messages, tools)
@@ -531,7 +528,6 @@ def memory_record(agent, text):
 
 def rollback_world(tmp_path, name, barriers=None, fail=False, quiesce_timeout_s=5.0) -> World:
     plan = ScriptedPlan(IDLE)
-    holder = {}
 
     def model(actor_id, world):
         cls = {"borrower-b": SiblingModel, "borrower-c": FailingModel}.get(actor_id)
@@ -539,7 +535,6 @@ def rollback_world(tmp_path, name, barriers=None, fail=False, quiesce_timeout_s=
             return plan.model(actor_id, lambda: world.clock.round)
         m = cls(plan, actor_id, lambda: world.clock.round)
         m.barriers, m.world, m.fail = barriers, world, fail
-        holder[actor_id] = m
         return m
 
     return make_world(tmp_path, "shock", plan=plan, treasury=True, scenario=ROLLBACK_SCENARIO,
@@ -592,7 +587,6 @@ def control(tmp_path_factory):
 
 
 def assert_restored(world: World, capture, status: str) -> None:
-    expect = ROLLBACK["expect"]
     assert set(ROLLBACK["round_start_capture"]) <= set(capture.fingerprint)
     assert world.fingerprint() == capture.fingerprint  # all_captured_state_equals_round_start
     assert world.state.rounds[-1]["round"] == ROLLBACK_ROUND - 1  # transcript ends at round 9
@@ -601,8 +595,6 @@ def assert_restored(world: World, capture, status: str) -> None:
     assert world.failures[-1]["status"] == status
     assert world.committed_round == ROLLBACK_ROUND - 1
     assert world.unusable is None
-    assert all(v["round_status"] in ("failed", "cancelled")
-               for k, v in expect.items() if k != "invalid-intent")
 
 
 async def retry_equals_control(world: World, control) -> None:
@@ -840,7 +832,7 @@ def clear(world: World, round_: int, *intents: tuple) -> dict:
             intent_id=given[0] if given else f"i-r{round_}-{actor}-{n}", branch_id="shock",
             round=round_, actor_id=actor, type=type_, params=params, evidence_ids=[],
             obs_hash=HASH, priority_class=ACTOR_SPECS[actor]["priority_class"],
-            sim_minute=round_ * ROUND_HOURS * 60))
+            sim_minute=world.clock.sim_minute))
     with world.store.engine.begin() as conn:
         deliver(world, conn)  # what is observable is refreshed every round
         valid, rejected = validate_intents(world, built)
@@ -948,3 +940,14 @@ def test_a_delay_keeps_the_receipt_in_utc_whatever_the_epochs_zone(tmp_path):
     deliver_round(world)
     (flow,) = [f for f in world.store.rows("expected_flows") if f["flow_id"] == "receivable-1"]
     assert flow["expected_at"] == (DEFAULT_EPOCH + timedelta(hours=12 + 24)).replace(tzinfo=None)
+
+
+def test_an_intent_is_held_to_its_tools_schema_whoever_queued_it(tmp_path):
+    world = ledger_world(tmp_path, "schema")
+    out = clear(world, 1,
+                ("lender", "offer", {"amount": usd(100_000), "to": "borrower-c",
+                                     "fee_bps": 20_000}),
+                ("borrower-c", "pay", {"amount": usd(1_000)}))
+    assert verdict(out["i-r1-lender-1"]) == ("rejected", "malformed_intent")
+    assert verdict(out["i-r1-borrower-c-2"]) == ("rejected", "malformed_intent")
+    assert world.committed_round == 0 and settled(world, "borrower-c/operating") == 400_000
