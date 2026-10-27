@@ -44,8 +44,10 @@ parent World ──checkpoint()──► Checkpoint (frozen)
   namespace, and checks every component's digest against the checkpoint (ledger by
   `ledger_hash`, which leaves out `branch_meta`). A fork may not reuse the parent's id unless it
   is a replay, nor take the id of any ancestor its ledger records. `scenario` adds the fork's own
-  events after the checkpoint (an event naming a `branch` runs only there). A fork that fails
-  removes the platform file and memory graph it created, so it can be retried; a
+  events after the checkpoint (an event naming a `branch` runs only there). A fork or replay that
+  fails anywhere, building the world included, removes the platform file and memory graph it
+  created and puts a given ledger store back as it was, so the same workdir, graph and store
+  take the retry; the failure is what is raised, an undo that fails too is a note on it; a
   scenario event naming another branch is that branch's and is not checked. A replay of a branch the
   checkpoint already records keeps that row's parent and round and only sets `replay`;
   only the checkpoint's own branch or a new one may replay, never an ancestor (a cycle).

@@ -25,6 +25,7 @@ the original's memory backend neither collides with nor deletes the original's g
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import dataclasses
 import sqlite3
@@ -236,7 +237,7 @@ async def fork(
     branch gets its own ``BranchMemory`` holding the checkpoint's pinned records. ``scenario``
     adds events after the checkpoint (one naming a ``branch`` only in that branch) to the ones
     the checkpoint inherited. A fork that fails removes the platform file and the memory
-    graph it created, so it can be retried.
+    graph it created and puts a given ``store`` back as it was, so it can be retried.
     """
     return await _fork(cp, branch_id, model=model, workdir=workdir, memory_client=memory_client,
                        store=store, coordinator=coordinator, scenario=scenario, replay=False)
@@ -244,8 +245,13 @@ async def fork(
 
 async def _fork(cp: Checkpoint, branch_id: str, *, model: ModelFactory, workdir: str | Path,
                 memory_client: Any, store: LedgerStore | None, coordinator: Any,
-                scenario: Sequence[Mapping[str, Any]], replay: bool) -> Branch:
-    """``fork``, or with ``replay`` the same branch re-run under its own id."""
+                scenario: Sequence[Mapping[str, Any]], replay: bool, rounds: int = 0) -> Branch:
+    """``fork``, or with ``replay`` the same branch re-run under its own id for ``rounds``.
+
+    All or nothing: a failure anywhere, building the world included, leaves no platform file,
+    no memory graph and a given ``store`` as it was before the call. The failure is what is
+    raised; an undo step that fails too is added to it as a note.
+    """
     if branch_id in (cp.lineage if not replay else cp.lineage - {cp.branch_id}):
         raise BranchMismatch(f"{branch_id!r} is the checkpoint's branch or an ancestor of it; "
                              "a fork needs its own id and only the checkpoint's branch replays")
@@ -254,13 +260,16 @@ async def _fork(cp: Checkpoint, branch_id: str, *, model: ModelFactory, workdir:
     if early:
         raise ValueError(f"a fork's own events come after the checkpoint (round {cp.round}): "
                          f"{early}")
-    world = World(cp.world_id, branch_id, cp.snapshot.model_copy(deep=True),
-                  copy.deepcopy(list(cp.actors)), model=model, workdir=workdir,
-                  scenario=copy.deepcopy([*cp.events, *scenario]), store=store, seed=cp.seed,
-                  epoch=cp.epoch, coordinator=coordinator)
-    created = not world.db_path.exists()  # else start refuses: the file is not this fork's
+    before = store.dump() if store is not None else None  # the world loads the snapshot in
+    world: World | None = None
     memory = None
+    created = False
     try:
+        world = World(cp.world_id, branch_id, cp.snapshot.model_copy(deep=True),
+                      copy.deepcopy(list(cp.actors)), model=model, workdir=workdir,
+                      scenario=copy.deepcopy([*cp.events, *scenario]), store=store,
+                      seed=cp.seed, epoch=cp.epoch, coordinator=coordinator)
+        created = not world.db_path.exists()  # else start refuses: the file is not this fork's
         await world.start()
         if set(world.agents) != set(cp.capture.agents):
             raise BranchMismatch(f"{branch_id}'s model actors differ from the checkpoint's")
@@ -286,14 +295,21 @@ async def _fork(cp: Checkpoint, branch_id: str, *, model: ModelFactory, workdir:
                                   instance=f"replay-{uuid.uuid4().hex}" if replay else None)
             for r in cp.memory.records if cp.memory is not None else ():
                 memory.write_record(r.actor_id, r.key, r.value, r.round)
-    except BaseException:
+        await world.run(rounds)
+    except BaseException as failed:
         try:
-            await world.close()
-        finally:
-            if created:
-                world.db_path.unlink(missing_ok=True)
-            if memory is not None:
-                memory.client.graph.delete(memory.graph_id)
+            async with contextlib.AsyncExitStack() as undo:  # last in, first run; each one runs
+                if before is not None:
+                    undo.callback(_copy_ledger, before, store)
+                if memory is not None:
+                    undo.callback(memory.client.graph.delete, memory.graph_id)
+                if created:
+                    undo.callback(world.db_path.unlink, missing_ok=True)
+                if world is not None:
+                    undo.push_async_callback(world.close)
+        # Whichever undo step fails, the fork's own failure is the one its caller needs.
+        except Exception as undoing:  # noqa: BLE001
+            failed.add_note(f"undoing {branch_id} also failed: {undoing!r}")
         raise
     return Branch(world, memory, parent, checkpoint_round, replay)
 
@@ -313,7 +329,8 @@ async def replay(
 
     The transcript must begin with the checkpoint's calls; ``rounds`` defaults to every round it
     recorded after the checkpoint. ``coordinator``, ``memory_client`` and ``scenario`` are the
-    branch's own, as it was forked. The returned branch has run and is labelled a replay.
+    branch's own, as it was forked. The returned branch has run and is labelled a replay; one
+    that fails leaves its workdir, graph and ``store`` as a failed fork does.
     """
     start = cp.transcript_cursor
     calls = transcript.calls()
@@ -329,17 +346,6 @@ async def replay(
             actor_id, lambda: world.clock.round,
             lambda: world.agents[actor_id].observation.obs_hash, start=start)
 
-    branch = await _fork(cp, transcript.branch_id, model=model, workdir=workdir, store=store,
-                         coordinator=coordinator, memory_client=memory_client,
-                         scenario=scenario, replay=True)
-    try:
-        await branch.world.run(rounds)
-    except BaseException:
-        try:
-            await branch.world.close()
-        finally:
-            branch.world.db_path.unlink(missing_ok=True)
-            if branch.memory is not None:
-                branch.memory.client.graph.delete(branch.memory.graph_id)
-        raise
-    return branch
+    return await _fork(cp, transcript.branch_id, model=model, workdir=workdir, store=store,
+                       coordinator=coordinator, memory_client=memory_client,
+                       scenario=scenario, replay=True, rounds=rounds)
