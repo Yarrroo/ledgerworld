@@ -50,7 +50,8 @@ npm --prefix frontend ci
 npm --prefix frontend run build     # the build calls the API at http://localhost:5001 by default
 AIRWALLEX_MODE=fake LEDGERWORLD_ROLE=api LEDGERWORLD_DEMO_TOKEN="$(openssl rand -hex 16)" \
   uv run bash deploy/entrypoint.sh
-# open http://localhost:5001/overview  (also /treasury, /lending, /simulation?run_id=<run>)
+# open http://localhost:5001/overview  (also /treasury, /lending, /simulation?run_id=<run>,
+#   /decisions and /execution)
 ```
 
 `deploy/entrypoint.sh` serves the API and the built frontend on one origin, on port 5001. It skips
@@ -123,9 +124,11 @@ are in [docs/schema.md](docs/schema.md).
   `/api/v1/health` reports `model: scripted`.
 - **Replay:** a branch re-run from transcripts is labelled replay. The demo simulates its branches
   afresh on every run.
-- **Not built yet:** there are no Decisions or Execution screens; the demo shows those beats in
-  its output and receipt. The demo's Break beat shows the losing policies' failure conditions.
-  Reverse stress (`backend/app/decisions/reverse_stress.py`) is tested but is not part of the demo.
+- **Screens and runs:** Decisions (`/decisions`) and Execution (`/execution`) read a prepared
+  run. Without the job queue (`REDIS_URL`), the local server above has no run to show, so those
+  screens and Simulation have nothing to display. The demo's Break beat shows the losing
+  policies' failure conditions. Reverse stress (`backend/app/decisions/reverse_stress.py`) is
+  tested but is not part of the demo.
 
 ## Attribution
 

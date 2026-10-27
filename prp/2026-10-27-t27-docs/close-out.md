@@ -35,9 +35,9 @@
 ## Follow-ups / known gaps
 - The screenshots come from a local fake-mode server, not the public URL the brief names: no
   public deployment exists yet. Retake them once `LEDGERWORLD_URL` is live.
-- There is no Simulation screenshot. That screen needs a prepared run, which needs the job queue.
-- `deploy/Dockerfile` sets `VITE_API_BASE_URL=/`. `frontend/src/api/v1.js` then requests
-  `//api/v1/...`, a protocol-relative URL to host `api`, so the compose-built frontend cannot reach
-  its API. This is a deploy defect outside this item's files.
+- There are no Simulation, Decisions or Execution screenshots. Those screens need a prepared run,
+  which needs the job queue.
+- (Resolved on main before the merge: `apiUrl` in `frontend/src/api/v1.js` now joins
+  `VITE_API_BASE_URL=/` without producing `//api/v1/...`.)
 - `deploy/Dockerfile` does not set `VITE_SOURCE_URL`, so the deployed footer has no AGPL §13 source
   link. The README says so.

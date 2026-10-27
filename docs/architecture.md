@@ -87,7 +87,7 @@ clocks, RNG, event cursor and queues. A rejected intent becomes `no_action` and 
 | `backend/app/reports/` | grounded reports: every figure names its source |
 | `backend/app/demo/` | the seven-beat demo behind `scripts/demo.sh` |
 | `backend/app/testing/` | `ScriptedModel`, `FakeGraphMemory` and their plans |
-| `frontend/src/views/` | Overview, Treasury, Lending, Simulation (new); the upstream views are unchanged |
+| `frontend/src/views/` | Overview, Treasury, Lending, Simulation, Decisions, Execution (new); the upstream views are unchanged |
 
 ## The execution path
 
