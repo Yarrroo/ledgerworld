@@ -51,17 +51,41 @@ def pay(store: LedgerStore, account_id: str, amount_minor: int, *, to_account: s
         now: datetime, journal_id: str, round: int = 0, source_intent_id: str | None = None,
         source_leg_id: str | None = None, horizon: timedelta = HORIZON,
         conn: Connection | None = None) -> Journal:
-    """Check and post a discretionary payment in one transaction; raises the refusal."""
+    """Check and post a discretionary payment in one transaction; raises the refusal.
+
+    S(now) counts the account's arrivals due by `now`, so once cleared they land before the
+    posting (`land_arrivals`); a refused payment lands nothing.
+    """
     with store.transaction(conn) as c:
         store.lock(account_id, to_account, conn=c)
         refusal = check_outflow(store.view(account_id, conn=c), amount_minor, now, horizon)
         if refusal is not None:
             raise refusal
+        land_arrivals(store, account_id, now, round=round, conn=c)
         return store.apply(Journal(
             journal_id=journal_id, kind="payment", round=round, sim_time=now,
             source_intent_id=source_intent_id, source_leg_id=source_leg_id,
             postings=(Posting(account_id, -amount_minor), Posting(to_account, amount_minor))),
             conn=c)
+
+
+def land_arrivals(store: LedgerStore, account_id: str, now: datetime, *, round: int = 0,
+                  conn: Connection | None = None) -> list[Journal]:
+    """Land the account's pending arrivals due by `now`, as step 8 would (system brief §7.2).
+
+    S(now) counts an arrival expected by `now`, so an outflow cleared against it at step 7 is
+    posted only after it lands; otherwise the posting falls below settled and is refused. Called
+    inside the outflow's transaction; step 8 then finds the arrival settled and skips it.
+    """
+    landed: list[Journal] = []
+    with store.transaction(conn) as c:
+        for flow in store.due_flows("in", now, account_id=account_id, conn=c):
+            journal = store.settle_flow(
+                flow.flow_id, counterparty=store.external_account(flow.currency, conn=c),
+                at=now, round=round, if_pending=True, conn=c)  # landed meanwhile: skipped
+            if journal is not None:
+                landed.append(journal)
+    return landed
 
 
 def settle_due(store: LedgerStore, now: datetime, *, round: int = 0,
@@ -95,8 +119,12 @@ def settle_due(store: LedgerStore, now: datetime, *, round: int = 0,
             for flow in store.due_flows(direction, now, conn=c):
                 if direction == "out" and not known(flow.account_id):
                     continue
-                done.append(store.settle_flow(flow.flow_id, counterparty=payee(flow.currency),
-                                              at=now, round=round, conn=c))
+                # An arrival an outflow landed since the read (`land_arrivals`) is skipped.
+                journal = store.settle_flow(flow.flow_id, counterparty=payee(flow.currency),
+                                            at=now, round=round, if_pending=direction == "in",
+                                            conn=c)
+                if journal is not None:
+                    done.append(journal)
         for ob in store.due_obligations(now, conn=c):
             reservation_id = ob.reservation_id
             state = store.reservation(reservation_id, conn=c).state if reservation_id else None
