@@ -289,8 +289,26 @@ const executeWhy = computed(() => {
   return ''
 })
 
-/** No answer, or a server/proxy failure: the POST may or may not have taken effect. */
-const unanswered = (error) => error.status === 0 || error.status >= 500
+/**
+ * No answer, a server/proxy failure, or a 2xx this screen cannot read: the POST may or may not
+ * have taken effect. Only a 4xx is a definite refusal.
+ */
+const unanswered = (error) => !(error instanceof ApiError) || error.status === 0 || error.status >= 500
+
+/** A successful POST whose body is missing or incomplete: answered, but what it did is unknown. */
+const unreadable = () => new ApiError(0, 'unreadable', 'the answer could not be read')
+const isText = (x) => typeof x === 'string' && x !== ''
+const isTime = (iso) => typeof iso === 'string' && !Number.isNaN(Date.parse(iso))
+
+/** The approval a 201 bound, with every term the review shows; anything less is unreadable. */
+function boundApproval (answer) {
+  const a = answer?.approval
+  const readable = isTime(answer?.as_of) && isText(a?.approval_id) && isText(a.plan_hash) &&
+    isText(a.snapshot_id) && isText(a.mode) && isTime(a.expires_at) && Array.isArray(a.legs) &&
+    a.legs.every((l) => Number.isSafeInteger(l?.amount?.minor) && isText(l.amount.currency))
+  if (!readable) throw unreadable()
+  return a
+}
 
 function refusal (error) {
   return REFUSALS[error.code] || `Refused: ${error.message}`
@@ -324,7 +342,7 @@ async function confirmApproval () {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { run_id: state.body.run_id, policy: policy.value }
     })
-    flow.approval = answer.approval
+    flow.approval = boundApproval(answer)
     flow.serverAt = Date.parse(answer.as_of)
     flow.receivedAt = Date.now()
     now.value = flow.receivedAt
@@ -349,8 +367,10 @@ async function executePlan () {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { approval_id: id }
     })
-    flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
-    follow(answer.execution_id)
+    // the server names an execution by its approval id; any other answer is unreadable
+    if (answer?.execution_id !== id) throw unreadable()
+    flow.message = `Execution ${id} accepted; reading its provider state.`
+    follow(id)
   } catch (error) {
     if (!unanswered(error)) {
       flow.submitting = false

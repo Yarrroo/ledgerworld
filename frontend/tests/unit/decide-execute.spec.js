@@ -94,6 +94,8 @@ const paidPayout = () => {
 // ------------------------------------------------------------------------------ transport
 
 const refuse = (status, code, detail = code) => ({ refused: { status, body: { error: { code, detail } } } })
+/** A 2xx whose body does not parse: the POST was answered, but what it did cannot be read. */
+const UNREADABLE = { unreadable: true }
 const timeout = () => new TypeError('The operation was aborted due to timeout')
 
 /** Answer "METHOD /path" from ``answers``; anything unlisted is a 404. Returns the call log. */
@@ -109,6 +111,9 @@ function serve (answers) {
     if (answer === undefined) answer = refuse(404, 'not_found', `nothing at ${path}`)
     if (answer.refused) {
       return { ok: false, status: answer.refused.status, json: async () => clone(answer.refused.body) }
+    }
+    if (answer === UNREADABLE) {
+      return { ok: true, status: 201, json: async () => { throw new SyntaxError('Unexpected end of JSON input') } }
     }
     return { ok: true, status: 200, json: async () => clone(answer) }
   }))
@@ -684,4 +689,52 @@ describe('vet round 2, re-read', () => {
     release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
     await flushPromises()
   })
+})
+
+describe('a successful POST whose answer cannot be read is an unknown outcome', () => {
+  const { approval: _, ...noApproval } = approvalBody()
+  const approvals = {
+    'an unparseable body': UNREADABLE,
+    'a body with no approval': noApproval,
+    'an approval with no id': approvalBody({ approval_id: undefined }),
+    'an approval with no legs': approvalBody({ legs: undefined }),
+    'an approval with no readable expiry': approvalBody({ expires_at: 'soon' }),
+    'no server time': { ...approvalBody(), as_of: undefined }
+  }
+  for (const [what, answer] of Object.entries(approvals)) {
+    it(`approval POST answered with ${what}: blocked for the operator, never confirmed again`, async () => {
+      const { w, calls } = await reviewReady({ 'POST /approvals': answer })
+      await approve(w)
+      expect(text(w, 'blocked')).toBe(kase('approval-post-timeout').expect.message)
+      expect(w.find('[data-test="message"]').exists()).toBe(false) // not shown as a refusal
+      expect(w.find('[data-test="execute"]').exists()).toBe(false)
+      expect(disabled(w, 'confirm')).toBe(true)
+      await w.get('[data-test="confirm"]').trigger('click')
+      await flushPromises()
+      expect(posts(calls, '/approvals')).toHaveLength(1)
+    })
+  }
+
+  const executions = {
+    'an unparseable body': UNREADABLE,
+    'a body with no execution id': { as_of: '2026-11-05T10:00:05Z', mode: 'fake' },
+    'another execution id': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-9' }
+  }
+  for (const [what, answer] of Object.entries(executions)) {
+    it(`execution POST answered with ${what}: read back by the approval id, never resent`, async () => {
+      const { w, calls } = await reviewReady({
+        'POST /executions': answer,
+        'GET /executions/apr-1': executionBody({ legs: [advance(), sentPayout()] })
+      })
+      await approve(w)
+      await w.get('[data-test="execute"]').trigger('click')
+      await flushPromises()
+      expect(posts(calls, '/executions')).toHaveLength(1)
+      expect(calls.filter((x) => x.method === 'GET' && x.path === '/executions/apr-1')).toHaveLength(1)
+      expect(calls.some((x) => x.method === 'GET' && x.path === '/executions/apr-9')).toBe(false)
+      expect(text(w, 'blocked')).toContain('reading its status by approval id apr-1. Do not send again.')
+      expect(text(w, 'context')).toContain('execution apr-1')
+      expect(text(w, 'leg-status')).toContain('reconciled as of')
+    })
+  }
 })
