@@ -43,7 +43,14 @@
      "minor": 4500000,
      "status": "known"
     }
-   }
+   },
+   "unobserved": [
+    {
+     "account_id": "lender/venue",
+     "as_of": null,
+     "status": "unknown"
+    }
+   ]
   },
   "facilities": [
    {

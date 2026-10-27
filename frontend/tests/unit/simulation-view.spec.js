@@ -27,7 +27,8 @@ const GraphStub = defineComponent({
   name: 'GraphPanel',
   props: { graphData: Object },
   emits: ['toggle-maximize', 'refresh'],
-  setup (props, { emit }) {
+  setup (props, { emit, expose }) {
+    expose({ closeDetailPanel: () => {} })
     watch(() => props.graphData, (g) => graphs.push(g), { immediate: true })
     return () => h('div', { 'data-test': 'graph-panel', 'data-nodes': props.graphData?.nodes.length ?? 0 }, [
       h('button', { type: 'button', 'data-test': 'expand', onClick: () => emit('toggle-maximize') }, 'Expand'),
@@ -83,9 +84,15 @@ function run (change = {}) {
   }
 }
 
+/** A C6 ErrorResponse the recorder answers with its HTTP status. */
+class Refusal {
+  constructor (status, code, detail) { Object.assign(this, { status, code, detail }) }
+}
+
 /**
- * Record every request and answer it: GET /runs/<id> from ``body``, POSTs from ``posts``. An
- * answer may be a function (called per request, may return a promise held by the test).
+ * Record every request and answer it: GET /runs/<id> from ``body``, every other path from
+ * ``posts``. An answer may be a function (called per request, may return a promise held by the
+ * test), an Error (the network failed) or a Refusal (the API refused).
  */
 function serve (body, posts = {}) {
   const calls = []
@@ -93,9 +100,12 @@ function serve (body, posts = {}) {
     const path = new URL(url).pathname.replace('/api/v1', '')
     const method = init.method || 'GET'
     calls.push({ path, method, headers: init.headers, body: init.body ? JSON.parse(init.body) : undefined })
-    let answer = method === 'GET' ? (path === `/runs/${ctx.run_id}` ? body : undefined) : posts[path]
+    let answer = method === 'GET' && path === `/runs/${ctx.run_id}` ? body : posts[path]
     if (typeof answer === 'function') answer = await answer()
     if (answer instanceof Error) throw answer
+    if (answer instanceof Refusal) {
+      return { ok: false, status: answer.status, json: async () => ({ error: { code: answer.code, detail: answer.detail } }) }
+    }
     if (answer === undefined) throw new Error(`no recorded answer for ${method} ${path}`)
     return { ok: true, status: method === 'GET' ? 200 : 202, json: async () => clone(answer) }
   }))
@@ -405,23 +415,6 @@ describe('review findings, each pinned', () => {
     expect(graphs[graphs.length - 1]).toBe(shown)
   })
 
-  it('a successful fork reloads the run, and a later failure clears the old success', async () => {
-    let answer = { as_of: at(20), mode: 'fake', job_id: 'job-1', run_id: ctx.run_id, branch_ids: ['b-1'] }
-    const { wrapper: w, calls } = await open(run(), { [`/runs/${ctx.run_id}/fork`]: () => answer })
-    await w.get('[data-test="token"]').setValue('demo-token-for-test')
-    await scrubTo(w, 4)
-    const before = calls.filter((c) => c.method === 'GET').length
-    await w.get('[data-test="fork"]').trigger('click')
-    await flushPromises()
-    expect(calls.filter((c) => c.method === 'GET').length).toBe(before + 1)
-    expect(w.find('[data-test="forked"]').exists()).toBe(true)
-    answer = new Error('fork_in_progress')
-    await w.get('[data-test="fork"]').trigger('click')
-    await flushPromises()
-    expect(w.find('[data-test="forked"]').exists()).toBe(false)
-    expect(text(w, 'fork-error')).toContain('fork_in_progress')
-  })
-
   it('the cursor names the round\'s own simulated time, and none for an unloaded round', async () => {
     const body = run()
     body.rounds[1].t_hours = 17 // round 4 at an hour that is not round × 4
@@ -489,6 +482,165 @@ describe('review findings, each pinned', () => {
     reload.resolve(body)
     await flushPromises()
     expect(disabled(w, 'refresh')).toBe(false)
+  })
+})
+
+describe('an accepted fork is followed until its branches arrive or it fails', () => {
+  const FORKED = ['b-1', 'b-2', 'b-3']
+  const accepted = { as_of: at(20), mode: 'fake', job_id: 'job-1', run_id: ctx.run_id, branch_ids: FORKED }
+  const decisions = (status) => ({
+    as_of: at(20), mode: 'fake', run_id: ctx.run_id, snapshot_id: 'lf2', checkpoint_round: 4,
+    cohort: 'c', weight_kind: 'w', status, results: [], selected: status === 'selected' ? 'integrated' : null,
+    escalation: null
+  })
+  /** The run as a fork job at ``round`` leaves it: one child branch and cash path per policy. */
+  function withChildren (body, round = 4) {
+    for (const id of FORKED) {
+      body.branches.push({ branch_id: id, parent_branch_id: ctx.branch_id, checkpoint_round: round, policy: 'p', replay: false })
+      body.cash_paths.push({ branch_id: id, account_id: 'lender-pool', points: [{ t: at(16), value: { minor: round, currency: 'USD', status: 'known' } }] })
+    }
+    return body
+  }
+  async function forkAt4 (runAnswer, decisionsAnswer, forkAnswer = accepted) {
+    vi.useFakeTimers()
+    const opened = await open(runAnswer, {
+      [`/runs/${ctx.run_id}/fork`]: forkAnswer, [`/decisions/${ctx.run_id}`]: decisionsAnswer
+    })
+    await opened.wrapper.get('[data-test="token"]').setValue('demo-token-for-test')
+    await scrubTo(opened.wrapper, 4)
+    await opened.wrapper.get('[data-test="fork"]').trigger('click')
+    await flushPromises()
+    return opened
+  }
+  const of = (calls, path) => calls.filter((c) => c.path === path)
+
+  it('a fork finishing later appears without the operator refreshing; only a fork_failed ends it', async () => {
+    let finished = false
+    const answers = [new Error('connection reset'), new Refusal(429, 'rate_limited', 'slow down'),
+      decisions('pending'), decisions('selected')]
+    const { wrapper: w, calls } = await forkAt4(
+      () => (finished ? withChildren(run()) : run()),
+      () => { const a = answers.shift() ?? decisions('selected'); if (!answers.length) finished = true; return a })
+    expect(text(w, 'forked')).toContain('running')
+    await vi.advanceTimersByTimeAsync(4000) // the decisions read fails: said, and still checked
+    expect(text(w, 'fork-lag')).toContain('connection reset')
+    expect(w.get('[data-test="fork-lag"]').attributes('role')).toBe('status')
+    await vi.advanceTimersByTimeAsync(4000) // a refusal that is not fork_failed is not a failed fork
+    expect(text(w, 'fork-lag')).toContain('slow down')
+    expect(text(w, 'forked')).toContain('running')
+    await vi.advanceTimersByTimeAsync(4000) // still pending
+    expect(text(w, 'forked')).toContain('running')
+    expect(w.find('[data-test="fork-lag"]').exists()).toBe(false)
+    await vi.advanceTimersByTimeAsync(4000) // decided: the run is re-read and holds the children
+    expect(text(w, 'forked')).toContain('branches and cash paths loaded')
+    expect(of(calls, `/decisions/${ctx.run_id}`)).toHaveLength(4)
+    const gets = calls.length
+    await vi.advanceTimersByTimeAsync(20000) // done: nothing more is polled
+    expect(calls.length).toBe(gets)
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1) // the POST is never retried
+  })
+
+  it('accepting a fork does not re-read the run: its job was only queued', async () => {
+    const { calls } = await forkAt4(run(), decisions('pending'))
+    expect(of(calls, `/runs/${ctx.run_id}`)).toHaveLength(1) // the mount's read, nothing after
+  })
+
+  it('decided before the run holds the children: the run is re-read until every branch is there', async () => {
+    let reads = 0
+    const { wrapper: w, calls } = await forkAt4(
+      () => (++reads >= 3 ? withChildren(run()) : run()), decisions('all_infeasible'))
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(text(w, 'forked')).toContain('running')
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(text(w, 'forked')).toContain('branches and cash paths loaded')
+    expect(of(calls, `/runs/${ctx.run_id}`)).toHaveLength(3)
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1)
+  })
+
+  it('a re-fork is not done on the previous fork\'s branches, which carry the same ids', async () => {
+    let reads = 0
+    const { wrapper: w } = await forkAt4(
+      () => withChildren(run(), ++reads >= 3 ? 4 : 3), decisions('selected'))
+    await vi.advanceTimersByTimeAsync(4000) // decided; the run still holds the round-3 fork
+    expect(text(w, 'forked')).toContain('running')
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(text(w, 'forked')).toContain('branches and cash paths loaded')
+  })
+
+  it('a failed run read after the decision is said, and the fork is still followed', async () => {
+    let reads = 0
+    const { wrapper: w } = await forkAt4(() => {
+      reads += 1
+      if (reads === 2) return new Refusal(503, 'store_unavailable', 'the store did not answer')
+      return reads > 2 ? withChildren(run()) : run()
+    }, decisions('selected'))
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(text(w, 'fork-lag')).toContain('the store did not answer')
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(w.find('[data-test="fork-lag"]').exists()).toBe(false)
+    expect(text(w, 'forked')).toContain('branches and cash paths loaded')
+  })
+
+  it('a decided fork whose branches never reach the run is reported, and polling stops', async () => {
+    const { wrapper: w, calls } = await forkAt4(run(), decisions('selected'))
+    await vi.advanceTimersByTimeAsync(5 * 4000)
+    expect(w.find('[data-test="forked"]').exists()).toBe(false)
+    expect(text(w, 'fork-error')).toContain('its branches have not reached the run')
+    expect(disabled(w, 'fork')).toBe(false)
+    const gets = calls.length
+    await vi.advanceTimersByTimeAsync(20000)
+    expect(calls.length).toBe(gets)
+  })
+
+  it('a fork whose worker failed is reported as failed, and polling stops', async () => {
+    const { wrapper: w, calls } = await forkAt4(run(),
+      new Refusal(409, 'fork_failed', `the fork of ${ctx.run_id} failed; fork it again`))
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(w.find('[data-test="forked"]').exists()).toBe(false)
+    expect(text(w, 'fork-error')).toBe(`Fork failed: the fork of ${ctx.run_id} failed; fork it again`)
+    const gets = calls.length
+    await vi.advanceTimersByTimeAsync(20000)
+    expect(calls.length).toBe(gets)
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1)
+  })
+
+  it('Fork waits while a fork is followed; a later refusal clears the old success', async () => {
+    let answer = accepted
+    let finished = false
+    const { wrapper: w, calls } = await forkAt4(() => (finished ? withChildren(run()) : run()),
+      () => { finished = true; return decisions('selected') }, () => answer)
+    expect(disabled(w, 'fork')).toBe(true)
+    expect(text(w, 'fork-why')).toBe('A fork is running: fork again once its branches arrive')
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(text(w, 'forked')).toContain('branches and cash paths loaded')
+    expect(disabled(w, 'fork')).toBe(false)
+    answer = new Refusal(409, 'fork_in_progress', `run ${ctx.run_id} is being forked; wait for its decisions`)
+    await w.get('[data-test="fork"]').trigger('click')
+    await flushPromises()
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(2)
+    expect(w.find('[data-test="forked"]').exists()).toBe(false)
+    expect(text(w, 'fork-error')).toContain('is being forked')
+  })
+
+  it('a check in flight when the screen closes does not start polling again', async () => {
+    const slow = held()
+    const { wrapper: w, calls } = await forkAt4(run(), () => slow.promise)
+    await vi.advanceTimersByTimeAsync(4000) // the decisions read is in flight
+    mounted.splice(mounted.indexOf(w), 1)
+    w.unmount()
+    slow.resolve(decisions('pending'))
+    await flushPromises()
+    const gets = calls.length
+    await vi.advanceTimersByTimeAsync(20000)
+    expect(calls.length).toBe(gets)
+  })
+
+  it('leaving the run stops following its fork', async () => {
+    const { calls, router } = await forkAt4(run(), decisions('pending'))
+    await router.push('/simulation?run_id=run-other')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(20000)
+    expect(of(calls, `/decisions/${ctx.run_id}`)).toHaveLength(0)
   })
 })
 

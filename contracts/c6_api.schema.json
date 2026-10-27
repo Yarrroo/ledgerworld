@@ -637,7 +637,35 @@
     },
     "Capacity": {
       "additionalProperties": false,
-      "description": "K_p and the parts it is computed from.",
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "unobserved": {
+                "minItems": 1
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "authority": {
+                "const": "full"
+              }
+            },
+            "required": [
+              "authority"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unobserved": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ],
+      "description": "K_p, the parts it is computed from, and the pool's cash accounts in its currency that it\ncould not count (each stale or unknown), all read at one moment: authority is full exactly\nwhen nothing is unobserved. Accounts in other currencies are never counted in K_p and are\nlisted by the overview's completeness, not here.",
       "properties": {
         "K_p": {
           "$ref": "#/$defs/Metric"
@@ -652,12 +680,20 @@
         },
         "parts": {
           "$ref": "#/$defs/CapacityParts"
+        },
+        "unobserved": {
+          "items": {
+            "$ref": "#/$defs/NotCurrent"
+          },
+          "title": "Unobserved",
+          "type": "array"
         }
       },
       "required": [
         "K_p",
         "authority",
-        "parts"
+        "parts",
+        "unobserved"
       ],
       "title": "Capacity",
       "type": "object"

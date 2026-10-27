@@ -102,16 +102,17 @@ import {
 
 const router = useRouter()
 
-/** Lending, and the same snapshot's completeness: C6 Lending lists no pool accounts, so the
- * accounts that are not current (each stale or unknown) are read from the overview of the same
- * context. */
+/** Lending, with the prepared demo run of the same context. The pool accounts K_p could not
+ * count, each stale or unknown, come from Lending itself (`capacity.unobserved`, read at the same
+ * moment as its authority), never from the overview: two reads either side of the freshness
+ * boundary would pair full authority with accounts the newer read no longer counts. */
 async function load () {
   const [lending, overview] = await Promise.all([getLending(), getOverview()])
   if (contextKey(lending) !== contextKey(overview)) {
     throw new ApiError(0, 'context_mismatch',
       'lending and overview answered for different snapshots or modes; reload')
   }
-  return { ...lending, notCurrent: overview.completeness.accounts, demo: overview.demo }
+  return { ...lending, demo: overview.demo }
 }
 
 const { state, refresh } = useReading(load)
@@ -139,8 +140,7 @@ const calculation = computed(() => {
   return `${terms.join(' - ')} = ${amountText(capacity.value.K_p)}`
 })
 
-const notCurrent = computed(() => state.body.notCurrent
-  .filter((a) => a.account_id.startsWith(`${state.body.pool}/`)).map(freshness))
+const notCurrent = computed(() => capacity.value.unobserved.map(freshness))
 
 const fundingWhy = computed(() => {
   if (state.status === 'error') return 'Last loaded, not current; reload before funding'

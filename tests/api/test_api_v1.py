@@ -190,6 +190,56 @@ def test_venue_freeze_is_partial_and_unknown_is_never_zero():
     assert lending["capacity"]["parts"]["settled_known"]["minor"] == 4_500_000
 
 
+def test_lending_carries_its_own_completeness_across_the_freshness_boundary():
+    """Authority and the unobserved pool accounts come from one read: at t + 6 h the pool is
+    fresh and nothing is unobserved; a second later both turn together, whatever the overview."""
+    now = [NOW + timedelta(hours=6)]
+    http = client(build(clock=lambda: now[0]))
+    fresh = check(http.get("/api/v1/lending"), "LendingResponse")["capacity"]
+    assert (fresh["authority"], fresh["unobserved"]) == ("full", [])
+    now[0] += timedelta(seconds=1)
+    later = check(http.get("/api/v1/lending"), "LendingResponse")["capacity"]
+    assert later["authority"] == "reduced" and later["K_p"]["status"] == "stale"
+    assert [(u["account_id"], u["status"]) for u in later["unobserved"]] == [
+        ("lender/operating", "stale"), ("lender/venue", "stale")]
+    accounts = check(http.get("/api/v1/overview"), "OverviewResponse")["completeness"]["accounts"]
+    assert all(u in accounts for u in later["unobserved"])  # the same reason and time
+    stressed = check(client(build(observed(stressed=True))).get("/api/v1/lending"),
+                     "LendingResponse")["capacity"]
+    assert (stressed["authority"], stressed["unobserved"]) == (
+        "reduced", [{"account_id": "lender/venue", "status": "unknown", "as_of": None}])
+
+
+def test_lending_capacity_full_authority_means_nothing_unobserved():
+    body = check(client(build()).get("/api/v1/lending"), "LendingResponse")
+    schema = {"$schema": C6["$schema"], "$defs": C6["$defs"], "$ref": "#/$defs/LendingResponse"}
+    venue = {"account_id": "lender/venue", "status": "unknown", "as_of": None}
+    for authority, unobserved in (("full", [venue]), ("reduced", [])):
+        wrong = body | {"capacity": body["capacity"] | {"authority": authority,
+                                                         "unobserved": unobserved}}
+        with pytest.raises(ValueError, match="authority is full exactly when"):
+            c6.LendingResponse.model_validate(wrong)
+        assert not Draft202012Validator(schema).is_valid(wrong)
+
+
+def test_k_p_status_reads_only_the_accounts_k_p_counts():
+    """A stale pool account in another currency is not counted in K_p, so it leaves K_p's status
+    and its authority alone: both come from the one read that computes K_p."""
+    snap = observed()
+    snap["accounts"].append({
+        "id": "lender/eur", "entity": "lender", "currency": "EUR", "observability": "known",
+        "as_of": iso(NOW - timedelta(hours=7)),
+        "buckets": {k: {"minor": 0, "currency": "EUR"} for k in ("settled", "reserved", "pledged")}
+        | {"pending_in": [], "pending_out": []}})
+    http = client(build(snap))
+    capacity = check(http.get("/api/v1/lending"), "LendingResponse")["capacity"]
+    assert (capacity["authority"], capacity["unobserved"]) == ("full", [])
+    assert capacity["K_p"]["status"] == "known"
+    overview = check(http.get("/api/v1/overview"), "OverviewResponse")
+    assert overview["lender_capacity"]["status"] == "known"
+    assert "lender/eur" in overview["completeness"]["missing"]
+
+
 def test_lending_shows_k_p_its_parts_and_an_unassessed_revenue():
     body = check(client(build()).get("/api/v1/lending"), "LendingResponse")
     assert (body["pool"], body["capacity"]["K_p"]["minor"]) == ("lender", 4_200_000)
