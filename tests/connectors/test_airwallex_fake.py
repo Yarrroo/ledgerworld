@@ -736,3 +736,25 @@ def test_the_fake_refuses_an_amount_with_a_trailing_newline():
     with pytest.raises(ProviderError) as refused:
         client._request("POST", "/api/v1/transfers/create", body, request_id="leg-n-1")
     assert refused.value.http == 400
+
+
+@pytest.mark.parametrize(("value", "canonical"), [
+    (Decimal("1.5"), "1.50"), (100, "100.00"), ("0", "0.00"), (Decimal("10000.00"), "10000.00"),
+])
+def test_a_provider_amount_is_padded_to_the_currency(value, canonical):
+    assert provider_amount(value, "USD") == canonical
+
+
+def test_a_transient_login_failure_is_an_unclear_probe():
+    transport, client = make()
+    send = transport.send
+
+    def login_down(method, path, json=None, headers=None):
+        if path == "/api/v1/authentication/login":
+            raise TransportTimeout(after_send=True)
+        return send(method, path, json, headers)
+
+    transport.send = login_down
+    assert client.probe_connected("auto") == "B"
+    with pytest.raises(ConfigError):
+        client.probe_connected("on")

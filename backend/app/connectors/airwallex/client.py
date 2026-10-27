@@ -187,7 +187,7 @@ def provider_amount(value: Any, currency: str | None) -> str:
         scaled = number.scaleb(EXPONENT[currency])
         if scaled != scaled.to_integral_value():
             raise OutcomeUnknown(None, f"a {currency} amount has more places than the currency")
-        number = scaled.to_integral_value().scaleb(-EXPONENT[currency])
+        number = Decimal(int(scaled)).scaleb(-EXPONENT[currency])  # padded: 1.5 -> 1.50
     return format(number, "f")
 
 
@@ -253,6 +253,10 @@ class AirwallexClient:
         self._token = token
         self._renew_at = self.clock() + TOKEN_LIFETIME_S - RENEW_BEFORE_S
 
+    def _ensure_token(self) -> None:
+        if self._token is None or self.clock() >= self._renew_at:
+            self.login()
+
     def _scrub(self, text: str) -> str:
         creds = self.transport.credentials
         for secret in (creds.api_key, creds.client_id, self._token):
@@ -274,8 +278,7 @@ class AirwallexClient:
         failures = 0
         relogged = False
         while True:
-            if self._token is None or self.clock() >= self._renew_at:
-                self.login()
+            self._ensure_token()
             sent = {"Authorization": f"Bearer {self._token}", "x-api-version": self.api_version,
                     "Content-Type": "application/json", **(headers or {})}
             try:
@@ -366,8 +369,11 @@ class AirwallexClient:
         setting = setting or connected_setting()
         if setting == "off":
             return "B"
-        if self._token is None or self.clock() >= self._renew_at:
-            self.login()  # bad credentials fail the start; they are not an unclear probe
+        try:
+            self._ensure_token()
+        except ProviderError as refused:
+            if refused.code == "auth_fail":
+                raise  # bad credentials fail the start; they are not an unclear probe
         try:
             self._request("GET", CONNECTED_PROBE_PATH)
             return "A"
