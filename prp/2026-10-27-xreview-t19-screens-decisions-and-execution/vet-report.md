@@ -1,7 +1,7 @@
 # Review record: unreadable successful POSTs on the Execution screen
 > Risk: the outcome of a payment-executing POST, `Execution.vue`. Range 96f5bfc..HEAD, plus the
-> merge with main. Instruments: a correctness review at high effort (three passes: two rounds,
-> then one after merging main), a quality pass and a security pass (clean). Nothing left open.
+> merge with main. Instruments: a correctness review at high effort (four passes: two rounds,
+> then two after merging main twice), a quality pass and a security pass (clean). Nothing left open.
 
 | Pass | Finding | Grade | Outcome |
 |---|---|---|---|
@@ -21,7 +21,7 @@
 | 2 | An unreadable linked execution failed the whole load and blocked review | medium | applied, proven |
 | 2 | "Not recorded" and "could not be read" could stand together | low | applied, proven |
 | 2 | `funded_by`/`facility_id`/`after` element types unchecked | low | applied, proven |
-| 2 | RFC 3339 space/lowercase forms rejected | medium | applied, proven |
+| 2 | RFC 3339 space/lowercase forms rejected | medium | applied, then reversed in merge 2 (Safari) |
 | 2 | Hoist the timer helpers in the spec | low | applied (quality) |
 | 2 | fx `to_currency` not shown in the dialog | medium | recorded: missing column; follow-up |
 | 2 | Validate against the contract schemas | low | recorded: no validator in the frontend; follow-up |
@@ -31,8 +31,15 @@
 | merge | The read error said "last loaded" when nothing was loaded | low | applied (wording) |
 | merge | Records named the tooling that produced them | low | applied (wording) |
 | merge | An unknown execution stays blocked after a read shows it | medium | recorded: a quarantine decision; follow-up |
-| merge | Space-form times parse differently in Safari | low | recorded: the server emits `T`; Safari fails closed |
 | merge | fx `to_currency`; `request()` altitude; schema reuse | — | duplicates of recorded rows |
+| merge 2 | A failing read in flight at unmount re-armed the poll forever | medium | applied, proven |
+| merge 2 | A 4xx read was retried forever, and "Reading again" said regardless | medium | applied, proven |
+| merge 2 | A selected decision with no policy or costless results opened the review | medium | applied, proven |
+| merge 2 | A failure was shown against the next execution followed | medium | applied, proven |
+| merge 2 | A leg state outside C6 passed and rendered "undefined" | low | applied, proven |
+| merge 2 | Safari does not parse the space form, so its expiry never fires | medium | applied, proven: only the `T` form is read |
+| merge 2 | The newest failure's generation could move back | low | applied, unproven: the race cannot be staged reliably |
+| merge 2 | A 201 with zero legs is called unknown though its id is known | low | recorded: outside C3 (minItems 1), so not read |
 
 Coverage: read the whole of `Execution.vue`, `api/v1.js`, the C3/C6 schemas and the API routes the
 screen calls. Simulation was read for the outcome rule only.
