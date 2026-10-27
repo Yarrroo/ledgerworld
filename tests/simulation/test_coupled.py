@@ -15,6 +15,7 @@ import copy
 import json
 import random
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from app.finance.lending import capacity
@@ -145,6 +146,17 @@ def test_one_clock_four_hour_rounds_and_a_drift_fails():
     clock.check(1)
     with pytest.raises(ClockDrift):
         clock.check(0)
+    # OASIS's clock moves at step 1; the step's own advance is taken back, and a step that did
+    # not advance it once fails the round.
+    oasis = SimpleNamespace(time_step=1)
+    assert clock.advance(oasis) == 2 and oasis.time_step == 2
+    oasis.time_step += 1  # what env.step does after its actions
+    clock.settle_step(oasis)
+    assert oasis.time_step == 2
+    with pytest.raises(ClockDrift):
+        clock.settle_step(oasis)
+    with pytest.raises(ClockDrift):
+        clock.advance(SimpleNamespace(time_step=0))
 
 
 # ---------------------------------------------------------------- clearing-order.json (step 7)
@@ -320,6 +332,49 @@ def test_the_oasis_clock_and_the_round_clock_agree(tmp_path):
     # The rumour went on the platform in round 3, before that round's step.
     (post,) = [i for i in shock.state.items if i["id"] == "p-r3-1"]
     assert post["visible_from_h"] == 3 * ROUND_HOURS
+
+
+def test_a_rounds_posts_and_traces_are_stamped_with_that_round(tmp_path):
+    """Scheduled and agent-made posts, and their action traces, carry the round they were
+    written in, an aborted and retried round included; OASIS's clock advances once a round."""
+    scheduled = [{"round": r, "kind": "public_post", "post_id": f"p-r{r}-1", "author": "feed",
+                  "text": f"scheduled in round {r}"} for r in (1, 2)]
+    plan = ScriptedPlan(IDLE + [
+        {"actor_id": "feed", "round": r, "tool_calls": [
+            {"name": "create_post", "args": {"content": f"agent post in round {r}"}}]}
+        for r in (1, 2)])
+
+    def fail(world, ctx):
+        raise InjectedFault("after step 7")
+
+    async def go():
+        world = make_world(tmp_path, "shock", plan=plan, scenario=scheduled)
+        async with world:
+            await world.coordinator.run_round(world)
+            before = world.fingerprint()
+            world.coordinator.hooks["cleared"] = fail
+            with pytest.raises(InjectedFault):
+                await world.coordinator.run_round(world)
+            assert world.fingerprint() == before
+            del world.coordinator.hooks["cleared"]
+            await world.coordinator.run_round(world)
+            db = world.platform.db
+            posts = db.execute("SELECT content, created_at FROM post ORDER BY post_id").fetchall()
+            traces = db.execute("SELECT info, created_at FROM trace WHERE action = 'create_post'"
+                                " ORDER BY rowid").fetchall()
+            return world, posts, traces
+
+    world, posts, traces = run(go())
+    assert [(c, int(t)) for c, t in posts] == [
+        ("scheduled in round 1", 1), ("agent post in round 1", 1),
+        ("scheduled in round 2", 2), ("agent post in round 2", 2)]
+    assert [(json.loads(i)["content"], int(t)) for i, t in traces] == [
+        (c, int(t)) for c, t in posts]
+    assert (world.clock.round, world.platform.sandbox_clock.time_step) == (2, 2)
+    assert [r["round"] for r in world.state.rounds] == [1, 2]
+    # Each post's world item is visible from the round its row is stamped with.
+    items = {i["text"]: i["visible_from_h"] for i in world.state.items}
+    assert all(items[c] == int(t) * ROUND_HOURS for c, t in posts)
 
 
 def test_a_round_that_fails_mid_way_leaves_the_ledger_untouched(tmp_path):
