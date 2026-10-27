@@ -69,7 +69,26 @@
     {"id": "money_safety_hunts", "name": "the eight money-safety hunts", "tests": []}
   ],
   "g2": [
-    {"id": "actions_only_through_tools", "name": "actions only through tools", "tests": []},
+    {"id": "actions_only_through_tools", "name": "actions only through tools", "tests": [
+      "tests/simulation/test_actions.py::test_two_scripted_actors_change_ledger_state_only_through_tools",
+      "tests/simulation/test_actions.py::test_a_post_runs_on_the_platform_and_queues_no_intent",
+      "tests/simulation/test_actions.py::test_malformed_output_gets_one_repair_then_no_action[repaired]",
+      "tests/simulation/test_actions.py::test_malformed_output_gets_one_repair_then_no_action[still-malformed]",
+      "tests/simulation/test_actions.py::test_malformed_output_gets_one_repair_then_no_action[unknown-tool]",
+      "tests/simulation/test_actions.py::test_malformed_output_gets_one_repair_then_no_action[float-never-reaches-ledger]",
+      "tests/simulation/test_actions.py::test_a_malformed_social_call_is_repaired_with_the_response",
+      "tests/simulation/test_actions.py::test_an_observation_never_holds_the_future_or_another_actors_cash",
+      "tests/simulation/test_actions.py::test_a_turn_needs_its_own_observation_first",
+      "tests/simulation/test_actions.py::test_each_agent_offers_exactly_its_mandate_and_the_set_is_sealed[borrower-b]",
+      "tests/simulation/test_actions.py::test_each_agent_offers_exactly_its_mandate_and_the_set_is_sealed[borrower-c]",
+      "tests/simulation/test_actions.py::test_each_agent_offers_exactly_its_mandate_and_the_set_is_sealed[feed]",
+      "tests/simulation/test_actions.py::test_each_agent_offers_exactly_its_mandate_and_the_set_is_sealed[lender]",
+      "tests/simulation/test_actions.py::test_each_agent_offers_exactly_its_mandate_and_the_set_is_sealed[treasury]",
+      "tests/simulation/test_actions.py::test_each_agent_offers_exactly_its_mandate_and_the_set_is_sealed[venue]",
+      "tests/simulation/test_actions.py::test_a_finance_agent_is_never_offered_a_purchase",
+      "tests/simulation/test_actions.py::test_an_agent_without_a_model_is_refused",
+      "tests/simulation/test_actions.py::test_acting_by_data_runs_only_the_social_subset"
+    ]},
     {"id": "public_shock_traceable_response", "name": "public shock traceable response", "tests": []},
     {"id": "failed_round_rolls_back", "name": "failed round rolls back", "tests": []},
     {"id": "sibling_isolation", "name": "sibling isolation", "tests": []},

@@ -12,12 +12,17 @@ raises, so a tool the actor still holds refuses any later call.
 Upstream ``SocialAgent.perform_action_by_llm`` returns exceptions instead of raising
 (oasis-seam.md S5), so the guardrail inspects every call before any tool runs rather than relying
 on a tool to raise.
+
+An agent may also be offered social tools (``social``: name to OpenAI schema). A social call is
+checked against its schema with the rest of the response and, once the response is accepted, is
+returned in ``TurnResult.social`` for the agent to run on the platform; the guardrail never runs
+it and never queues an intent for it.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Generator, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -64,10 +69,12 @@ class TurnResult:
     alert: Alert | None
     refused: tuple[ToolCallError, ...]
     calls: tuple[RawCall, ...]  # the response whose calls were queued, empty on fallback
+    social: tuple[RawCall, ...] = ()  # its social calls, arguments decoded, for the agent to run
 
 
 Messages = list[dict[str, Any]]
 Tools = list[dict[str, Any]]
+Social = Mapping[str, dict[str, Any]]
 Responder = Callable[[Messages, Tools], Sequence[RawCall]]
 AsyncResponder = Callable[[Messages, Tools], Awaitable[Sequence[RawCall]]]
 
@@ -95,15 +102,54 @@ def repair_marker(actor_id: str, round: int) -> str:
     return f"repair:{actor_id}:r{round}"
 
 
-def _check(calls: Sequence[RawCall], actor: FinanceActor) -> tuple[list, list[ToolCallError]]:
-    parsed, refused = [], []
+_JSON_TYPES: dict[str, Callable[[Any], bool]] = {
+    "string": lambda v: isinstance(v, str),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "number": lambda v: isinstance(v, int | float) and not isinstance(v, bool),
+    "boolean": lambda v: isinstance(v, bool),
+}
+
+
+def parse_social_call(call: RawCall, schema: dict[str, Any]) -> RawCall | ToolCallError:
+    """A social call with its arguments decoded and checked against the tool's schema."""
+    name, args = call.name, call.arguments
+    if isinstance(args, str):
+        try:
+            args = json.loads(args) if args.strip() else {}
+        except (ValueError, RecursionError) as error:
+            return ToolCallError(name, "malformed_tool_args",
+                                 f"{name}: arguments are not JSON ({str(error)[:200]})")
+    if not isinstance(args, Mapping):
+        return ToolCallError(name, "malformed_tool_args", f"{name}: arguments are not an object")
+    params = schema["function"].get("parameters", {})
+    props = params.get("properties", {})
+    problems = [f"{name}.{k}: missing" for k in params.get("required", []) if k not in args]
+    problems += [f"{name}.{k}: not an argument of {name}" for k in args if k not in props]
+    problems += [f"{name}.{k}: not a {props[k]['type']}" for k, v in args.items()
+                 if k in props and not _JSON_TYPES.get(props[k].get("type"), lambda _: True)(v)]
+    if problems:
+        return ToolCallError(name, "malformed_tool_args", "; ".join(problems))
+    return RawCall(name, dict(args), call.call_id)
+
+
+def _check(
+    calls: Sequence[RawCall], actor: FinanceActor, social: Social
+) -> tuple[list, list[RawCall], list[ToolCallError]]:
+    parsed, social_calls, refused = [], [], []
     if not calls:
         refused.append(ToolCallError("", "no_tool_call",
                                      "the response called no tool; call no_action to wait"))
     for call in calls:
+        if call.name in social:
+            result = parse_social_call(call, social[call.name])
+            (refused if isinstance(result, ToolCallError) else social_calls).append(result)
+            continue
         result = parse_tool_call(call.name, call.arguments, actor.tools)
-        (refused if isinstance(result, ToolCallError) else parsed).append(result)
-    return parsed, refused
+        if isinstance(result, ToolCallError):
+            refused.append(result)
+        else:
+            parsed.append((FinancialActionType(call.name), result))
+    return parsed, social_calls, refused
 
 
 def _assistant(calls: Sequence[RawCall], round: int, actor_id: str) -> Messages:
@@ -129,20 +175,23 @@ def _turn(
     observation: Observation,
     sim_minute: int | None,
     social_prompt: str | None,
+    social: Social | None = None,
+    system: str | None = None,
 ) -> Generator[tuple[Messages, Tools], Sequence[RawCall], TurnResult]:
     round = observation.round
     minute = observation.t_hours * 60 if sim_minute is None else sim_minute
+    social = social or {}
     actor.begin_turn(Turn(round, minute, observation.obs_hash, observation.evidence_ids))
-    tools = [tool_schema(a) for a in actor.tools]
+    tools = [tool_schema(a) for a in actor.tools] + list(social.values())
     prompt = observation.to_prompt() + (f"\n\n{social_prompt}" if social_prompt else "")
+    rule = (f"You are {actor.actor_id}. You act on money only through your tools; each tool "
+            "call proposes one action, which the ledger clears or rejects after the round.")
     messages: Messages = [
-        {"role": "system", "content": (
-            f"You are {actor.actor_id}. You act on money only through your tools; each tool "
-            "call proposes one action, which the ledger clears or rejects after the round.")},
+        {"role": "system", "content": f"{system}\n\n{rule}" if system else rule},
         {"role": "user", "content": prompt},
     ]
     calls = yield messages, tools
-    parsed, refused = _check(calls, actor)
+    parsed, social_calls, refused = _check(calls, actor, social)
     repairs = 0
     while refused and repairs < MAX_REPAIRS:
         repairs += 1
@@ -154,7 +203,7 @@ def _turn(
                 "amount_minor is an integer number of minor units. If you cannot, call "
                 "no_action.")}]
         calls = yield messages, tools
-        parsed, refused = _check(calls, actor)
+        parsed, social_calls, refused = _check(calls, actor, social)
     if refused:
         first = refused[0]
         alert = Alert(actor.actor_id, actor.branch_id, round, first.code,
@@ -162,9 +211,8 @@ def _turn(
         fallback = submit(queue, actor, [(FinancialActionType.NO_ACTION, NoActionArgs(
             reason=f"fallback after repair: {first.code}"))])
         return TurnResult(fallback, repairs, alert, tuple(refused), ())
-    intents = submit(queue, actor, [
-        (FinancialActionType(call.name), args) for call, args in zip(calls, parsed, strict=True)])
-    return TurnResult(intents, repairs, None, (), tuple(calls))
+    intents = submit(queue, actor, parsed) if parsed else ()
+    return TurnResult(intents, repairs, None, (), tuple(calls), tuple(social_calls))
 
 
 def run_turn(
@@ -175,9 +223,11 @@ def run_turn(
     *,
     sim_minute: int | None = None,
     social_prompt: str | None = None,
+    social: Social | None = None,
+    system: str | None = None,
 ) -> TurnResult:
     """Run one actor's turn and queue its intents; see the module docstring."""
-    turn = _turn(queue, actor, observation, sim_minute, social_prompt)
+    turn = _turn(queue, actor, observation, sim_minute, social_prompt, social, system)
     try:
         request = next(turn)
         while True:
@@ -196,9 +246,11 @@ async def arun_turn(
     *,
     sim_minute: int | None = None,
     social_prompt: str | None = None,
+    social: Social | None = None,
+    system: str | None = None,
 ) -> TurnResult:
     """``run_turn`` for a coordinator that runs every actor at once."""
-    turn = _turn(queue, actor, observation, sim_minute, social_prompt)
+    turn = _turn(queue, actor, observation, sim_minute, social_prompt, social, system)
     try:
         request = next(turn)
         while True:

@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Finance actions, platform, observation and clock extensions of camel-oasis"
 requires-python = ">=3.12,<3.13"
 license = { text = "AGPL-3.0" }
-dependencies = []
+dependencies = [
+    "camel-oasis==0.2.5",
+    # camel-ai 0.2.78's agent stack imports FastMCP from mcp.server, which mcp 2 removed.
+    "mcp<2",
+]
 
 [build-system]
 requires = ["hatchling"]
