@@ -211,7 +211,14 @@
       "tests/simulation/test_branches.py::test_another_branchs_early_event_is_no_reason_to_refuse_a_fork",
       "tests/simulation/test_branches.py::test_a_fork_that_fails_anywhere_can_be_retried[start]",
       "tests/simulation/test_branches.py::test_a_fork_that_fails_anywhere_can_be_retried[close]",
-      "tests/simulation/test_branches.py::test_a_fork_that_fails_anywhere_can_be_retried[memory]"
+      "tests/simulation/test_branches.py::test_a_fork_that_fails_anywhere_can_be_retried[memory]",
+      "tests/simulation/test_branch_memory.py::test_namespace_is_world_branch",
+      "tests/simulation/test_branch_memory.py::test_sibling_read_raises_namespace_violation",
+      "tests/simulation/test_branch_memory.py::test_own_read_and_siblings_do_not_leak",
+      "tests/simulation/test_branch_memory.py::test_snapshot_is_immutable_after_parent_writes",
+      "tests/simulation/test_branch_memory.py::test_child_restored_from_snapshot_sees_parent_records",
+      "tests/simulation/test_branch_memory.py::test_restore_refuses_non_empty_self_and_other_world",
+      "tests/simulation/test_branch_memory.py::test_memory_matches_branch_reference_model"
     ]},
     {"id": "replay_identity", "name": "replay identity", "tests": [
       "tests/simulation/test_branches.py::test_replay_identity",
