@@ -405,5 +405,119 @@ class RoundRollback(unittest.TestCase):
         self.assertEqual(wr.projected(w.ledger, "treasury/operating", 40) - FLOOR, -1_000_000)
 
 
+class Guards(unittest.TestCase):
+    """Edge cases the fixtures do not pin but the round contract implies."""
+
+    def pay(self, params, actor="borrower-b"):
+        led = wr.new_ledger()
+        wr.account(led, wr.operating(actor))["settled"] = 900_000
+        it = {"intent_id": f"i-r0-{actor}-1", "actor_id": actor, "priority_class": 2, "sim_minute": 0,
+              "type": params.pop("type", "pay"), "params": params}
+        return wr.clear_all(led, {}, [it], MANDATES, 0, 0)[0]
+
+    def test_malformed_intent_is_rejected_not_a_round_failure(self):
+        cases = [({"amount_minor": 100, "currency": "USD"}, "missing_field"),
+                 ({"to": "supplier-2"}, "missing_field"),
+                 ({"amount": 500, "to": "supplier-2"}, "amount_not_integer_minor"),
+                 ({"type": "disburse", "request": "req:x:r0", "amount_minor": 100, "currency": "USD",
+                   "from_account": "lender/operating"}, "unknown_request")]
+        for params, reason in cases:
+            with self.subTest(params=params):
+                res = self.pay(dict(params), actor="lender" if params.get("type") == "disburse" else "borrower-b")
+                self.assertEqual((res["status"], res["reason"]), ("rejected", reason))
+
+    def test_disburse_without_pool_is_rejected(self):
+        led = wr.new_ledger()
+        wr.account(led, "lender/operating")["settled"] = 900_000
+        reqs = {"req:borrower-c:r0": {"id": "req:borrower-c:r0", "borrower": "borrower-c", "lender": "lender",
+                                      "amount": 100, "origin_intent": "x", "round": 0, "status": "accepted"}}
+        it = {"intent_id": "i-r1-lender-1", "actor_id": "lender", "priority_class": 1, "sim_minute": 240,
+              "type": "disburse", "params": {"request": "req:borrower-c:r0", "amount_minor": 100,
+                                             "currency": "USD", "from_account": "lender/operating"}}
+        res = wr.clear_all(led, reqs, [it], MANDATES, 4, 1)[0]
+        self.assertEqual((res["status"], res["reason"]), ("rejected", "no_pool"))
+
+    def test_unknown_actor_fails_closed(self):
+        res = self.pay({"amount_minor": 100, "currency": "USD", "to": "s"}, actor="stranger")
+        self.assertEqual((res["status"], res["reason"]), ("rejected", "unknown_actor"))
+
+    def world(self):
+        return wr.World("w", "control", wr.new_ledger(), ACTORS, [{"default": True, "tool_calls": []}],
+                        [{"round": 0, "kind": "synthetic", "id": "ev-px", "px": 9_900}])
+
+    def test_committed_round_joins_children_and_retires_its_writer(self):
+        w, stash = self.world(), {}
+
+        async def child(writer):
+            for _ in range(3):
+                await asyncio.sleep(0)
+            writer.remember("feed", {"round": 0, "child": True})
+
+        async def hook(world, writer, actor):
+            writer.spawn(child(writer))
+            stash["writer"] = writer
+        w.actor_hooks["feed"] = hook
+        w.run(1)
+        self.assertIn({"round": 0, "child": True}, w.memory["feed"])
+        with self.assertRaises(wr.StaleWriter):
+            stash["writer"].post({"id": "late", "round": 1})
+        with self.assertRaises(wr.StaleWriter):
+            stash["writer"].spawn(child(stash["writer"]))
+
+    def test_non_exception_restores_and_propagates_unchanged(self):
+        w = self.world()
+        cap = w.capture()
+
+        def boom(world):
+            raise SystemExit("stop")
+        w.hooks = {"before_transcript": boom}
+        with self.assertRaises(SystemExit):
+            asyncio.run(w.run_round())
+        self.assertEqual(w.capture(), cap)
+
+    def test_second_cancel_during_abort_marks_world_unusable(self):
+        w = self.world()
+        w.quiesce_timeout = 5
+
+        async def go():
+            stuck, release = asyncio.Event(), asyncio.Event()
+
+            async def stubborn(world, writer, actor):
+                stuck.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    await release.wait()
+                    raise
+            w.actor_hooks["feed"] = stubborn
+            coord = asyncio.ensure_future(w.run_round())
+            await stuck.wait()
+            coord.cancel()
+            while not any(e[0] == "admission_closed" for e in w.lifecycle):
+                await asyncio.sleep(0)
+            coord.cancel()
+            try:
+                with self.assertRaises(asyncio.CancelledError):
+                    await coord
+                self.assertTrue(w.unusable)
+            finally:
+                release.set()
+                await asyncio.gather(*w.round_tasks, return_exceptions=True)
+        asyncio.run(go())
+
+    def test_trace_of_settlement_journal(self):
+        led = wr.new_ledger()
+        wr.account(led, "treasury/operating")["settled"] = 100
+        j = wr.post_journal(led, [("treasury/operating", -100), ("payroll/operating", 100)], "settlement", None, 0)
+        w = wr.World("w", "control", led, ACTORS, [{"default": True, "tool_calls": []}])
+        self.assertEqual(w.trace(j["seq"]), [f"journal {j['seq']} (settlement)"])
+
+    def test_scheduled_price_event_is_observed(self):
+        w = self.world()
+        w.run(1)
+        obs, _, _ = w.observe("treasury", 0, 0)
+        self.assertIn("ev-px", [p["source"] for p in obs["prices"]])
+
+
 if __name__ == "__main__":
     unittest.main()

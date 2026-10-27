@@ -153,19 +153,34 @@ def _amount(params: dict):
     return None, None
 
 
+REQUIRED = {"pay": ("amount", "to"), "request_advance": ("amount", "from"), "accept": ("request",),
+            "disburse": ("request", "amount", "from_account"), "no_action": ()}
+
+
 def validate(intent: dict, mandates: dict) -> str | None:
-    """Step 6: schema, mandate. Returns a rejection reason or None."""
-    tools = mandates.get(intent["actor_id"])
-    if tools is not None and intent["type"] not in tools:
+    """Step 6: mandate, amount, required fields. Returns a rejection reason or None.
+    The amount is checked before field presence: round-rollback's invalid intent has no `to`
+    and must be rejected as `amount_not_integer_minor`."""
+    if intent["actor_id"] not in mandates:
+        return "unknown_actor"
+    if intent["type"] not in mandates[intent["actor_id"]]:
         return "outside_mandate"
-    minor, currency = _amount(intent["params"])
-    if minor is not None or "amount" in intent["params"]:
+    if intent["type"] not in REQUIRED:
+        return "unsupported_type"
+    prm = intent["params"]
+    if "amount" in prm and not isinstance(prm["amount"], dict):
+        return "amount_not_integer_minor"
+    minor, currency = _amount(prm)
+    if minor is not None or "amount" in prm:
         if not is_minor(minor):
             return "amount_not_integer_minor"
         if minor <= 0:
             return "amount_not_positive"
         if currency != CURRENCY:
             return "currency_mismatch"
+    for field in REQUIRED[intent["type"]]:
+        if (minor is None) if field == "amount" else (field not in prm):
+            return "missing_field"
     return None
 
 
@@ -220,6 +235,8 @@ def clear(ledger: dict, requests: dict, intent: dict, t: float, round_: int) -> 
         src = prm["from_account"]
         if not src.startswith(actor + "/"):
             return reject("not_own_account")
+        if actor not in ledger["pools"]:
+            return reject("no_pool")
         cap = k_p(ledger, actor)
         if minor > cap:
             return reject("capacity", K_p=cap)
@@ -296,6 +313,11 @@ class RoundWriter:
         self.world.queue.append(intent)
 
     def spawn(self, coro):
+        try:
+            self._check()
+        except StaleWriter:
+            coro.close()
+            raise
         if not self.world.admission_open:
             coro.close()
             raise AdmissionClosed()
@@ -374,7 +396,7 @@ class World:
         c2 = [c for c in self.pending_c2 if c["actor_id"] == actor_id]
         posts = [p for p in self.oasis["posts"] if p["round"] <= round_]
         obs = {"actor": actor_id, "round": round_, "t_hours": t, "accounts": own, "messages": sorted(msgs),
-               "c2": c2, "posts": posts, "prices": self.oasis["prices"][-1:],
+               "c2": c2, "posts": posts, "prices": [p for p in self.oasis["prices"] if p["round"] == round_],
                "memory": self.memory.get(actor_id, [])}
         return obs, sha(obs), {p["id"] for p in posts} | set(msgs)
 
@@ -403,7 +425,7 @@ class World:
         except BaseException as exc:
             status = "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
             await self._abort(cap, status, exc)
-            if status == "cancelled":
+            if not isinstance(exc, Exception):                 # cancel, SystemExit, KeyboardInterrupt
                 raise
             raise RoundFailed(status) from exc
 
@@ -413,12 +435,18 @@ class World:
         self.lifecycle.append(("admission_closed", rnd))
         for task in self.round_tasks:                          # 2 cancel and join, children included
             task.cancel()
-        pending = set()
-        if self.round_tasks:
-            _, pending = await asyncio.wait(self.round_tasks, timeout=self.quiesce_timeout)
+        try:
+            while self.round_tasks and not all(t.done() for t in self.round_tasks):
+                _, pending = await asyncio.wait(self.round_tasks, timeout=self.quiesce_timeout)
+                if pending:                                    # tasks spawned while cancelling are joined too
+                    break
+        except asyncio.CancelledError:                         # cancelled again mid-abort: nothing proved
+            self.unusable = True
+            self.diagnostics.append({"round": rnd, "status": "unusable", "error": "cancelled during abort"})
+            raise
         live = [t for t in self.round_tasks if not t.done()]
         self.lifecycle.append(("joined", rnd, len(live)))
-        if pending or live:                                    # 3 quiescence unproved
+        if live:                                               # 3 quiescence unproved
             self.unusable = True
             self.diagnostics.append({"round": rnd, "status": "unusable", "error": repr(exc)})
             raise WorldUnusable("round-owned tasks survived cancellation") from exc
@@ -461,7 +489,18 @@ class World:
         # 5 agents propose intents, concurrently
         writer = RoundWriter(self)
         tasks = [writer.spawn(self._actor_step(writer, a, r, obs[a][1], obs[a][2])) for a in self.llm_actors]
-        calls = await asyncio.gather(*tasks)
+        # wait, not gather: a cancelled gather waits on its children, so one actor that refuses
+        # to stop would hold the coordinator before _abort could cancel, join and detect it.
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        for task in tasks:
+            if task in done and task.exception():
+                raise task.exception()
+        calls = [task.result() for task in tasks]
+        while not all(t.done() for t in self.round_tasks):     # round-owned children finish in-round
+            await asyncio.wait(self.round_tasks)
+        for task in self.round_tasks:
+            if task.exception():
+                raise task.exception()
         self.oasis["time_step"] += 1
         if self.oasis["time_step"] != r + 1:
             raise RuntimeError("OASIS clock drifted from the world clock")
@@ -493,12 +532,13 @@ class World:
         self.pending_c2.extend(c2)
         # 10 commit and append the transcript
         self._hook("before_transcript")
-        journal_ids = [j["seq"] for j in self.ledger["journals"] if j["round"] == r]
+        journal_ids = sorted([c["journal_seq"] for c in c2 if "journal_seq" in c] + [j["seq"] for j in settle])
         entry = {"round": r, "observations": {a: obs[a][1] for a in obs},
                  "tool_calls": dict(zip(self.llm_actors, calls)),
                  "intents": [i["intent_id"] for i in intents], "c2": c2, "journal_ids": journal_ids}
         self.transcript.append(entry)
         self.clock["next_round"] = r + 1
+        self.epoch += 1                                        # durable: this round's writers retire
         self.diagnostics.append({"round": r, "status": "committed"})
         return entry
 
@@ -510,6 +550,8 @@ class World:
     # -- cause chain: journal <- intent <- request <- intent <- post
     def trace(self, journal_seq: int) -> list:
         j = next(x for x in self.ledger["journals"] if x["seq"] == journal_seq)
+        if j["intent_id"] is None:                             # mandatory settlement or arrival
+            return [f"journal {j['seq']} ({j['kind']})"]
         chain = [f"journal of {j['intent_id']}"]
 
         def follow(intent_id):

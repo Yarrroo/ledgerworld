@@ -2,7 +2,7 @@
 
 `refmodel/world_ref.py` (stdlib only) runs the coupled round of system brief §7.2 against the three
 agent-world fixtures, loaded unchanged from `prp/…/agent-world/fixtures/`. Check:
-`python -m unittest discover -s refmodel -p test_world_ref.py` — 20 tests, green on 2026-10-27
+`python -m unittest discover -s refmodel -p test_world_ref.py` — 28 tests, green on 2026-10-27
 (Python 3.12). Mutating out the queue sort, the restore, the writer-epoch bump or the task cancel
 each turns tests red. Fixture paths below are relative to that directory; money is USD minor units.
 
@@ -25,6 +25,7 @@ each turns tests red. Fixture paths below are relative to that directory; money 
 | W5 | HANDOFF line 44 vs `00-system.md:165` | HANDOFF says arrivals are "delivered in step 2". §7.2 runs pending arrivals in step 8. The model marks `overdue` in step 2 and posts arrival journals in step 8. | low · medium |
 | W6 | `coupled-chain.json` `borrower_c_after` vs HANDOFF line 44 | For a request with no facility, the fixture's settled increase means disburse settles at once. An offered facility arrives as `pending_in` at the next boundary. The model settles at once on the request path; T08 must state this. | low · medium |
 | W7 | `round-rollback.json:29` | The injected intent has no `intent_id`, `priority_class`, `sim_minute` or `to`. The model assigns them, and the amount check runs first. | low · high |
+| W9 | HANDOFF `Coordinator.run_round` ("`env.step`… `asyncio.gather`") | A coordinator that awaits `asyncio.gather` cannot be cancelled past a stubborn actor. Cancelling a gather waits on its children, so the abort never starts and quiescence detection never runs. The model waits with `asyncio.wait(FIRST_EXCEPTION)` and lets the abort cancel and join (test `test_second_cancel_during_abort_marks_world_unusable`). T08 wraps upstream `env.step`, which gathers internally, so it must keep the actor step in its own task and cancel that task. | medium · high |
 | W8 | `round-rollback.json` `quiescence` | Proving that a task which won't stop is unusable needs a detection bound (a timeout). The model uses one only for detection. All ordering uses barriers, as the fixture requires. | info · high |
 
 Not modelled (out of this oracle's scope): OASIS/camel APIs, SQLite file copy, branches/fork (T09),
