@@ -42,7 +42,7 @@ from typing import Any, Self
 
 from oasis_finance.actions import decode_args
 from oasis_finance.observation import DEFAULT_EPOCH
-from oasis_finance.rng import WORLD_RNG, route_oasis_random
+from oasis_finance.rng import drawing_from, route_oasis_random, using
 from sqlalchemy import Connection, select
 
 from ..finance import ledger
@@ -241,13 +241,11 @@ class World:
             graph.add_agent(agent)
         platform = self.oasis.Platform(db_path=str(self.db_path), recsys_type="random")
         self.env = self.oasis.OasisEnv(graph, platform, database_path=str(self.db_path))
-        # The platform's task, created here, draws from this world's RNG for its whole life
-        # (oasis_finance.rng); a round's own draws are given it by the coordinator.
-        token = WORLD_RNG.set(self.rng)
-        try:
+        # The platform's task, created here, draws from this world's RNG for its whole life, and
+        # so does every env.step, whoever calls it (oasis_finance.rng).
+        with using(self.rng):
             await self.env.reset()
-        finally:
-            WORLD_RNG.reset(token)
+        self.env.step = drawing_from(self.rng, self.env.step)
         platform.sandbox_clock.time_step = self.clock.round
         return self
 

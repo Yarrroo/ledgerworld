@@ -9,35 +9,46 @@
   starting a sibling world (`random.seed`), running it, restoring it (`random.setstate`), or any
   other `random` draw in the process changed this world's recommendations and its captured RNG
   state.
-- `packages/oasis-finance/src/oasis_finance/rng.py` (new): `WORLD_RNG`, a context variable, and
+- `packages/oasis-finance/src/oasis_finance/rng.py` (new): `WORLD_RNG`, a context variable;
   `route_oasis_random()`, which points the `random` of `oasis.social_platform.platform` and
-  `.recsys` at a proxy that resolves each draw on the context's RNG. A context that holds none
-  falls back to the process `random`, so upstream scripts that run OASIS outside a `World` behave
-  as before.
-- `World` owns `self.rng = random.Random(seed)`. `start()` sets it around `env.reset()`, so the
-  platform's task draws from it for its whole life. `Coordinator.run_round` sets it in the round
-  context it already builds, so `env.step`'s direct recommender call draws from it too.
-  `capture`, `restore` and `fingerprint` read and write it, with `setstate` in place, never by
-  replacing the object. `World.seed` (dead) is gone.
-- `checks/required.json`: the two new tests join `failed_round_rolls_back` (g2).
+  `.recsys` at a proxy that resolves each draw on the context's RNG; `using(rng)` and
+  `drawing_from(rng, call)`. A context that holds no RNG falls back to the process `random`, so
+  upstream scripts that run OASIS outside a `World` behave as before.
+- `World` owns `self.rng = random.Random(seed)`. `start()` runs `env.reset()` under it, so the
+  platform's task draws from it for its whole life, and wraps that env's `step`, so the
+  recommender `env.step` runs directly draws from it whoever calls it. `capture`, `restore` and
+  `fingerprint` read and write it, with `setstate` in place, never by replacing the object.
+  `World.seed` (dead) is gone. The coordinator is unchanged.
+- `checks/required.json`: the three new tests join `failed_round_rolls_back` (g2).
 
 ## Verification
 - Regression test `test_a_sibling_world_leaves_this_worlds_random_stream_alone`. A seed-1 world
   runs beside a seed-2 sibling that starts, runs two rounds, fails a round and is restored, with a
   `random.seed(99)` in between. Each round, the world's recommendation table, every actor's
   refresh draw and its RNG digest must equal a solo control. It failed on d7e5adc. With the fix,
-  it fails if either routing path is removed: the env.reset context (refresh draws differ) or the
-  round context (recommendation table differs).
-- `test_no_oasis_module_draws_from_the_process_random`: fails if routing is skipped (it names
-  `platform` and `recsys`). It also fails if a camel-oasis upgrade adds a module that holds
-  `random`.
+  it fails if either routing is removed: the env.reset context (refresh draws differ) or the
+  `env.step` wrapper (recommendation table differs).
+- `test_a_direct_env_step_draws_from_the_worlds_rng`: an `env.step` called outside any round,
+  after the process stream is reseeded, equals one without the reseed. It fails without the
+  `env.step` wrapper.
+- `test_no_oasis_module_draws_from_the_process_random`: fails when an imported `oasis` module
+  holds the process `random` or one of its functions (`from random import sample`). It names
+  `platform` and `recsys` if routing is skipped. A module first imported after the test
+  collection, and numpy or torch draws, are not seen.
 - T08's accept: `uv run pytest -q tests/simulation/test_coupled.py` passes. Touched suites
-  (`tests/simulation tests/execution/test_import_fence.py`): 214 passed.
-  `checks/tests/test_kpi.py tests/test_skeleton.py`: 54 passed. ruff, `checks/attribution.py`
-  and `checks/no_secrets.py` are clean. The full gate is the landing train's.
-- Vet T3, concurrency: `/code-review high`, `/security-review` (no findings) and `/simplify`.
-  Round 1 applied the move into oasis-finance, removed the instance patch of `update_rec_table`,
-  added the platform-task draws to the test, plus the module guard and the cleanups.
+  (`tests/simulation tests/execution/test_import_fence.py checks/tests/test_kpi.py
+  tests/test_skeleton.py`): 269 passed. ruff, `checks/attribution.py` and `checks/no_secrets.py`
+  are clean. The full gate is the landing train's.
+- Vet T3, concurrency, two rounds: `/code-review high` each round, `/security-review` (no
+  findings) and `/simplify`. Round 1 moved the routing into oasis-finance, replaced the argcount-
+  dependent patch of `update_rec_table`, added the platform-task draws to the test, the module
+  guard and the cleanups. Round 2 moved the round routing out of the coordinator into a wrapper
+  of the world's own `env.step`, so a caller other than a round is covered, widened the guard to
+  imported names, and made a failed refresh fail by name.
+- Recorded, not applied: a strict mode that raises when no RNG is set (it changes behaviour for
+  OASIS code outside any world, and that is a design decision). The new module lives in
+  `packages/oasis-finance`, a package T07's brief owns: the repo rule puts camel-oasis extensions
+  there, and this adds a module without editing any T07 file.
 
 ## Docs updated
 - `world.py` module docstring; `oasis_finance/rng.py` states the mechanism and the task-inheritance

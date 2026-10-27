@@ -783,8 +783,11 @@ async def draws(world: World) -> tuple:
     """What the world's random stream decided: the recommendation table a round drew, the post
     each actor's refresh drew on the platform's task, and the RNG after both."""
     rec = world.platform.db.execute("SELECT user_id, post_id FROM rec ORDER BY user_id, post_id")
-    feeds = [[p["post_id"] for p in (await agent.env.action.refresh())["posts"]]
-             for agent in world.agents.values()]
+    feeds = []
+    for agent in world.agents.values():
+        refreshed = await agent.env.action.refresh()
+        assert refreshed["success"], refreshed
+        feeds.append([p["post_id"] for p in refreshed["posts"]])
     return tuple(rec.fetchall()), feeds, world.fingerprint()["RNG state"]
 
 
@@ -834,11 +837,31 @@ def test_a_sibling_world_leaves_this_worlds_random_stream_alone(tmp_path):
     assert run(beside_a_sibling()) == control
 
 
+def test_a_direct_env_step_draws_from_the_worlds_rng(tmp_path):
+    """The recommender env.step runs draws from the world's RNG whoever calls it, not only a
+    coordinator's round."""
+
+    async def step(name, reseed):
+        world = drawing_world(tmp_path, name, seed=1)
+        async with world:
+            await world.run(1)
+            if reseed:
+                random.seed(99)
+            await world.env.step({})
+            return await draws(world)
+
+    assert run(step("plain", False)) == run(step("reseeded", True))
+
+
 def test_no_oasis_module_draws_from_the_process_random():
-    """A camel-oasis upgrade that draws from ``random`` in a new module fails here, not by a
-    sibling world quietly moving this one's stream."""
-    unrouted = [name for name, module in list(sys.modules.items())
-                if name.split(".")[0] == "oasis" and getattr(module, "random", None) is random]
+    """An imported OASIS module that holds the process ``random``, or one of its functions
+    (``from random import sample``), fails here; a module first imported later is not seen."""
+    unrouted = [
+        f"{name}.{attr}" for name, module in list(sys.modules.items())
+        if name.split(".")[0] == "oasis"
+        for attr, value in list(vars(module).items())
+        if value is random or getattr(value, "__self__", None) is random._inst
+    ]
     assert unrouted == []
 
 
