@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  merge-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # attribution diffs against the upstream import commit
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      - run: bash checks/merge.sh
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ledgerworld
+          POSTGRES_PASSWORD: ledgerworld
+          POSTGRES_DB: ledgerworld
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ledgerworld"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      LEDGER_DATABASE_URL: postgresql+psycopg://ledgerworld:ledgerworld@localhost:5432/ledgerworld
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --frozen
+      # Exit code 5 means no pg test is collected yet; anything else is a real result.
+      - run: uv run pytest -q -m pg || [ $? -eq 5 ]

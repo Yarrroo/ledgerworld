@@ -1,0 +1,14 @@
+LedgerWorld
+Licensed under the GNU Affero General Public License v3.0 (see LICENSE).
+
+This product is a modified version of MiroFish
+  https://github.com/666ghj/MiroFish
+  Licence: GNU Affero General Public License v3.0
+  Pinned commit: 7657031ac01184afe2cb220f5ee3545573b5e843 (2026-10-01)
+The unmodified upstream tree is the parentless commit "import: upstream engine at
+7657031, unmodified"; every later change is recorded in ATTRIBUTION.md and in
+`git diff upstream-7657031`.
+
+This product depends on, without modifying:
+  camel-oasis 0.2.5  - https://github.com/camel-ai/oasis - Apache License 2.0
+  camel-ai 0.2.78    - https://github.com/camel-ai/camel - Apache License 2.0

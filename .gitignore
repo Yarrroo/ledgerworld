@@ -58,3 +58,7 @@ backend/uploads/
 
 # Docker 数据
 data/
+
+# LedgerWorld
+var/
+frontend/dist/

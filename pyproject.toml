@@ -1,0 +1,43 @@
+[project]
+name = "ledgerworld"
+version = "0.1.0"
+description = "An agentic treasury that rehearses a crisis in a coupled agent world before it spends a dollar"
+requires-python = ">=3.12,<3.13"
+license = { text = "AGPL-3.0" }
+dependencies = [
+    "mirofish-backend",
+    "oasis-finance",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "hypothesis>=6.100.0",
+    "respx>=0.21.0",
+    "fakeredis>=2.23.0",
+    "ruff>=0.6.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["backend", "packages/oasis-finance"]
+
+[tool.uv.sources]
+mirofish-backend = { workspace = true }
+oasis-finance = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "checks/tests", "deploy/tests", "backend/tests"]
+pythonpath = ["."]
+addopts = "-m 'not live and not pg' --ignore=tests/test_local_star_count_fetch.py"
+markers = [
+    "live: calls a real provider, model or hosted service; never run by the merge gate",
+    "pg: needs a PostgreSQL server; run only in CI",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
