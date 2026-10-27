@@ -155,9 +155,9 @@ class Reference:
         self.pledges[pledge_id] = Pledge(account_id, collateral_ref, amount)
 
     def release_pledge(self, pledge_id: str) -> None:
-        """Releasing a pledge that is not active changes nothing."""
-        pledge = self.pledges[pledge_id]
-        if pledge.state == "active":
+        """Releasing a pledge that is not active, or not there, changes nothing."""
+        pledge = self.pledges.get(pledge_id)
+        if pledge is not None and pledge.state == "active":
             pledge.state = "released"
 
     def observe(self, account_id: str, unknown: bool, as_of: datetime) -> None:

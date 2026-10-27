@@ -7,6 +7,9 @@ step the five g1 ledger invariants are checked against the reference: journals b
 orphan posting, reserved ≤ settled, no double pledge, unknown ≠ zero. So a passing g1 covers
 sequences, not just samples. The seed and the example budget are fixed, so the merge gate runs
 the same sequences every time, offline.
+
+Not modelled here: pending_in flows, obligations, reserve floors and hold expiry (`expect`,
+`add_obligation`, `expire_due`), and an outflow journal written straight onto an unknown balance.
 """
 
 from __future__ import annotations
@@ -29,7 +32,8 @@ from hypothesis.stateful import (
     rule,
     run_state_machine_as_test,
 )
-from ledger_reference import Reference, Refused
+
+from tests.finance.ledger_reference import Reference, Refused
 
 T0 = datetime(2026, 1, 5, tzinfo=UTC)
 CASH = {"a/usd": "USD", "a/usd-2": "USD", "a/eur": "EUR"}
@@ -51,8 +55,8 @@ def outcome(write: Callable[[], object], *, own_account: bool = False) -> str:
         write()
     except (LedgerRefusal, Refused) as refusal:
         return refusal.code
-    except ValueError:
-        if not own_account:
+    except ValueError as error:
+        if not own_account or "against its own account" not in str(error):
             raise
         return "own_account"
     return "ok"
@@ -123,9 +127,13 @@ class LedgerMachine(RuleBasedStateMachine):
             if amount:
                 assert self.journal([(OUTSIDE[currency], -amount), (account_id, amount)]) == "ok"
 
-    @rule(src=anywhere, dst=anywhere, data=st.data(),
+    @rule(src=anywhere, data=st.data(),
           shape=st.sampled_from(["journal", "journal", "unbalanced", "bare posting"]))
-    def post(self, src: str, dst: str, data: st.DataObject, shape: str) -> None:
+    def post(self, src: str, data: st.DataObject, shape: str) -> None:
+        # Mostly an account of src's currency, so most journals can land; sometimes any.
+        currency = self.ref.accounts[src].currency
+        alike = [a for a in ACCOUNTS if self.ref.accounts[a].currency == currency]
+        dst = data.draw(st.sampled_from(alike) | anywhere)
         amount = self.amount(data, src)
         if shape == "bare posting":
             assert self.same(lambda: self.store.apply(Posting(src, amount)),
@@ -135,6 +143,8 @@ class LedgerMachine(RuleBasedStateMachine):
             assert self.journal([(src, -amount), (dst, amount + skew)]) == "journal_unbalanced"
         elif self.ref.state(src, self.now) == "unknown":
             # Nothing executes on an unknown balance: the outflow is refused before any write.
+            # A raw journal here is accepted unchecked, and re-observing the account as known
+            # does not re-check its promises, so reserved can come back above settled.
             refusal = check_outflow(self.store.view(src), amount, self.now)
             assert refusal is not None and refusal.code == "unknown_balance"
         else:
@@ -180,9 +190,8 @@ class LedgerMachine(RuleBasedStateMachine):
 
     @rule(account=cash, unknown=st.booleans())
     def observe(self, account: str, unknown: bool) -> None:
-        self.writes += 1
-        self.store.observe(account, "unknown" if unknown else "known", self.now)
-        self.ref.observe(account, unknown, self.now)
+        self.same(lambda: self.store.observe(account, "unknown" if unknown else "known", self.now),
+                  lambda: self.ref.observe(account, unknown, self.now))
 
     @rule(hours=st.integers(1, 3))
     def let_time_pass(self, hours: int) -> None:
