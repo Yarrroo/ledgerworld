@@ -8,8 +8,9 @@ typed results or raises the typed errors of `errors.py`:
 - a 429 → retried here with the same `request_id`, exponential backoff with jitter, at most 3
   attempts; a GET that times out or fails with a 5xx is retried the same way (it moves nothing);
 - a 401 → one re-login, then the same request once; a second 401 → `ProviderError(auth_fail)`;
-- a replayed `request_id` (`duplicate_request_id`, `request_id_duplicate`, 409) →
-  `DuplicateRequest`; the caller finds the original with `find_transfer`/`find_conversion`.
+- a replayed `request_id` (`duplicate_request_id`, `request_id_duplicate`, 409, or the
+  conversions' `400 invalid_argument` "request_id '…' has been used") → `DuplicateRequest`; the
+  caller finds the original with `find_transfer`/`find_conversion`.
 
 The bearer token is cached until 60 s before its 30-minute lifetime ends. No message, log line or
 exception built here carries the key, the client id or the token.
@@ -20,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -30,7 +32,7 @@ from urllib.parse import quote as urlquote
 
 from app.finance.schemas import EXPONENT, Money, Receipt, to_provider_decimal
 
-from .errors import ConfigError, DuplicateRequest, OutcomeUnknown, ProviderError
+from .errors import AirwallexError, ConfigError, DuplicateRequest, OutcomeUnknown, ProviderError
 from .transport import Transport, TransportTimeout, api_version_from, select_transport
 
 log = logging.getLogger(__name__)
@@ -43,11 +45,16 @@ RENEW_BEFORE_S = 60
 MAX_ATTEMPTS = 3
 BACKOFF_BASE_S = 0.5
 DUPLICATE_CODES = frozenset({"duplicate_request_id", "request_id_duplicate"})
+# The conversions endpoint refuses a replay as `400 invalid_argument` with this message
+# (sandbox, api_version 2024-09-27): "request_id '<id>' has been used in the past. ...".
+USED_REQUEST_ID = re.compile(r"\brequest_id\b.*\bhas been used\b", re.IGNORECASE | re.DOTALL)
 # A quote is refused without its validity (`field_required`); the conversion follows at once.
 QUOTE_VALIDITY = "MIN_15"
 # `reason` and `reference` are required on a payout; the reason is one of the provider's own.
 TRANSFER_REASON = "business_expenses"
 CONVERSIONS_PATH = "/api/v1/fx/conversions"
+# A payout's way to `PAID`; the sandbox walks it on its own as well as on a transition.
+PAYOUT_PATH = ("SCHEDULED", "PROCESSING", "SENT", "PAID")
 
 LegMode = Literal["A", "B"]
 ConnectedSetting = Literal["auto", "on", "off"]
@@ -318,7 +325,7 @@ class AirwallexClient:
                 continue
             if request_id is not None and status == 409:
                 raise DuplicateRequest(request_id, in_flight=True, code=code)
-            if request_id is not None and code in DUPLICATE_CODES:
+            if request_id is not None and _replayed(status, code, envelope):
                 raise DuplicateRequest(request_id, in_flight=False, code=code)
             if status >= 500 and method != "GET":
                 raise OutcomeUnknown(request_id, f"http {status}")
@@ -368,6 +375,10 @@ class AirwallexClient:
 
     def global_accounts(self) -> list[dict]:
         return self._items(self._request("GET", "/api/v1/global_accounts"))
+
+    def global_account_in(self, currency: str) -> str | None:
+        """The Global Account for `currency` (`global_accounts_by_currency`), or None."""
+        return global_accounts_by_currency(self.global_accounts()).get(currency)
 
     def probe_connected(self, setting: ConnectedSetting | None = None) -> LegMode:
         """Mode A only when the connected-accounts list answers 200 with an `ACTIVE` account;
@@ -484,12 +495,38 @@ class AirwallexClient:
     def simulate_transition(
         self, transfer_id: str, next_status: str, *, failure_type: str | None = None
     ) -> ProviderObject:
-        """Sandbox only: move a transfer to its next status (`PAID`, or `FAILED`)."""
+        """Sandbox only: move a transfer to its next status (`PAID`, or `FAILED`).
+
+        The sandbox moves a payout on by itself (it reads back `PROCESSING` straight after the
+        create) and answered a transition with a 500. So a transition that is refused or left
+        unknown is read back, and a transfer at or past `next_status` on `PAYOUT_PATH` is the
+        answer. A refusal otherwise stands. A step of `PAYOUT_PATH` left unknown, with the
+        transfer still on the step before it, is sent again (it is keyed on the transfer and
+        creates nothing; the no-second-POST rule is for creates), at most `MAX_ATTEMPTS` times.
+        Any other unknown raises `OutcomeUnknown` naming the transfer and the status it holds."""
         body = {"next_status": next_status}
         if failure_type is not None:
             body["failure_type"] = failure_type
         path = f"/api/v1/simulation/transfers/{urlquote(transfer_id, safe='')}/transition"
-        return ProviderObject.parse("transfer", self._request("POST", path, body))
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return ProviderObject.parse("transfer", self._request("POST", path, body))
+            except (ProviderError, OutcomeUnknown) as failed:
+                try:
+                    now = self.get_transfer(transfer_id)
+                except AirwallexError:
+                    raise failed from None  # the read-back's failure never hides the answer
+                if _reached(now.status, next_status):
+                    return now
+                if isinstance(failed, ProviderError):
+                    raise
+                if attempt >= MAX_ATTEMPTS or not _just_before(now.status, next_status):
+                    raise OutcomeUnknown(
+                        None, f"transition to {next_status}: {failed.reason}, transfer at "
+                        f"{now.status}", provider_id=transfer_id) from None
+                self._backoff(attempt)
 
     def _create(
         self,
@@ -517,6 +554,53 @@ def active_account(answer: Any) -> str | None:
             if isinstance(account, str) and account:
                 return account
     return None
+
+
+def account_currencies(account: Mapping[str, Any], *, own: bool = False) -> list[str]:
+    """The currencies a Global Account takes, its own first: `currency` when it carries one (as
+    the sandbox did before 2024-09-27), then `required_features[].currency`, then (unless
+    `own`) `supported_features[].currency` (the 2024-09-27 shape has no `currency` key)."""
+    candidates = [account.get("currency")]
+    for key in ("required_features",) if own else ("required_features", "supported_features"):
+        features = account.get(key)
+        if isinstance(features, list):
+            candidates += [f.get("currency") for f in features if isinstance(f, dict)]
+    return list(dict.fromkeys(c for c in candidates if isinstance(c, str) and c))
+
+
+def global_accounts_by_currency(accounts: list) -> dict[str, str]:
+    """Currency → Global Account id: an account whose own currency it is wins over one that
+    only supports it; among equals, the first listed."""
+    found: dict[str, str] = {}
+    for own in (True, False):
+        for account in accounts:
+            account_id = account.get("id") if isinstance(account, dict) else None
+            if isinstance(account_id, str) and account_id:
+                for currency in account_currencies(account, own=own):
+                    found.setdefault(currency, account_id)
+    return found
+
+
+def _reached(status: str | None, target: str) -> bool:
+    """`status` is `target`, or past it on `PAYOUT_PATH`."""
+    if status == target:
+        return True
+    return status in PAYOUT_PATH and target in PAYOUT_PATH and (
+        PAYOUT_PATH.index(status) > PAYOUT_PATH.index(target))
+
+
+def _just_before(status: str | None, target: str) -> bool:
+    """`status` is the step before `target` on `PAYOUT_PATH`."""
+    return status in PAYOUT_PATH and target in PAYOUT_PATH[1:] and (
+        PAYOUT_PATH.index(status) + 1 == PAYOUT_PATH.index(target))
+
+
+def _replayed(status: int, code: str | None, envelope: Mapping[str, Any]) -> bool:
+    """A refusal that says the `request_id` was used before, in any of the provider's spellings."""
+    if code in DUPLICATE_CODES:
+        return True
+    message = _text(envelope, "message") or ""
+    return status == 400 and code == "invalid_argument" and bool(USED_REQUEST_ID.search(message))
 
 
 def _text(envelope: Mapping[str, Any], key: str) -> str | None:

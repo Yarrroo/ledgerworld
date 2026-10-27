@@ -39,10 +39,12 @@ from typing import Any
 
 from app.connectors.airwallex.client import (
     LOGIN_PATH,
+    PAYOUT_PATH,
     AirwallexClient,
     active_account,
     client_from_env,
     connected_setting,
+    global_accounts_by_currency,
 )
 from app.connectors.airwallex.errors import (
     AirwallexError,
@@ -63,7 +65,7 @@ FAKE_BENEFICIARY = START["beneficiaries"][0]["id"]
 FX_BUY = Money(minor=1_000_000, currency="EUR")
 PAYOUT = Money(minor=10_000, currency="USD")
 ADVANCE = Money(minor=1_000_000, currency="USD")
-TO_PAID = ("PROCESSING", "SENT", "PAID")
+TO_PAID = PAYOUT_PATH[1:]
 # The probe path is assumed (canonical-requests.json): its answer is recorded, not diffed.
 RECORDED_ONLY = frozenset({"connected-probe"})
 # The minimum key sets of canonical-requests.json; both sides must carry them.
@@ -270,12 +272,13 @@ class ContractPass:
     def global_accounts(self) -> tuple[bool, str | None, str]:
         accounts = self.client.global_accounts()
         self._observe()
-        wanted = [a for a in accounts if isinstance(a, dict) and a.get("currency") == "USD"
-                  and self.global_account_id in (None, a.get("id"))]
-        if not wanted:
+        # The account the gateway would take: the pinned one if it takes USD, else its pick.
+        pinned = [a for a in accounts if isinstance(a, dict) and a.get("id") == self.global_account_id]
+        wanted = global_accounts_by_currency(pinned if self.global_account_id else accounts)
+        if "USD" not in wanted:
             return False, None, f"no USD global account among {len(accounts)}"
-        self.state["global_account"] = wanted[0]["id"]
-        return True, wanted[0]["id"], f"{len(accounts)} listed"
+        self.state["global_account"] = wanted["USD"]
+        return True, wanted["USD"], f"{len(accounts)} listed"
 
     def connected_probe(self) -> tuple[bool, str | None, str]:
         before = len(self.recorder.answers)
@@ -344,8 +347,14 @@ class ContractPass:
 
     def payout_to_paid(self) -> tuple[bool, str | None, str]:
         transfer = self._need("transfer")
-        for status in TO_PAID:
-            self.client.simulate_transition(transfer.provider_id, status)
+        # The sandbox moves a payout on by itself; a step it already took is read back as made.
+        try:
+            for status in TO_PAID:
+                self.client.simulate_transition(transfer.provider_id, status)
+        except AirwallexError as failed:
+            self._observe()
+            return False, transfer.provider_id, self._scrub(
+                f"to {status}: {type(failed).__name__}: {failed}")
         final = self.client.get_transfer(transfer.provider_id)
         self._observe()
         delta = self._usd() - self.state["usd_before_payout"]

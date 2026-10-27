@@ -339,8 +339,9 @@ def fund_wallet(client: Any, plan: dict) -> list[dict]:
              if minor > held.get(c, 0)}
     if not short:
         return []
-    accounts = {a["currency"]: a["id"] for a in reversed(client.global_accounts())
-                if isinstance(a, dict) and "currency" in a and "id" in a}
+    from ..connectors.airwallex.client import global_accounts_by_currency
+
+    accounts = global_accounts_by_currency(client.global_accounts())
     setup = []
     for currency, minor in short.items():
         if currency not in accounts:
