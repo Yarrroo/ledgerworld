@@ -7,17 +7,19 @@ which of them the payment met is not this step's to decide.
 
 from __future__ import annotations
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 
+INDEX = "obligations_one_per_reservation"
 SHARED = text("SELECT reservation_id, obligation_id FROM obligations WHERE reservation_id IN ("
               "SELECT reservation_id FROM obligations WHERE reservation_id IS NOT NULL "
               "GROUP BY reservation_id HAVING count(*) > 1) ORDER BY reservation_id, obligation_id")
 
 
 def upgrade(conn: Connection) -> None:
+    if INDEX in {i["name"] for i in inspect(conn).get_indexes("obligations")}:
+        return
     shared = conn.execute(SHARED).all()
     if shared:
         raise ValueError(f"obligations share a reservation: {[tuple(r) for r in shared]}")
-    conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS obligations_one_per_reservation "
-                         "ON obligations (reservation_id)")
+    conn.exec_driver_sql(f"CREATE UNIQUE INDEX {INDEX} ON obligations (reservation_id)")

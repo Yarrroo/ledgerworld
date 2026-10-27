@@ -532,7 +532,10 @@ class LedgerStore:
         try:
             yield
         except IntegrityError as exc:
-            if reservation_id is None or "reservation_id" not in str(exc.orig):
+            # PostgreSQL names the index, SQLite the column; nothing else on the table does.
+            if reservation_id is None or not any(
+                    name in str(exc.orig)
+                    for name in ("obligations_one_per_reservation", "obligations.reservation_id")):
                 raise
             with self.reading(conn) as c:
                 owner = c.execute(select(obligations.c.obligation_id).where(
