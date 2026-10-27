@@ -696,3 +696,70 @@ def test_siblings_draw_alike_whatever_order_they_run_in(tmp_path, order):
     assert all(rec for rec, _ in seen["a"]), "every round drew recommendations"
     assert seen["a"] == seen["b"]
     assert untouched
+
+
+# --------------------------------------- correction: concurrent social writes replay identically
+
+POSTERS = ("borrower-b", "borrower-c")
+
+
+def posters_world(tmp: Path, branch: str, model) -> coupled.World:
+    """main with both borrowers able to post."""
+    specs = [{**coupled.ACTOR_SPECS[a],
+              "tools": [*coupled.ACTOR_SPECS[a]["tools"], *(["create_post"] if a in POSTERS
+                                                            else [])]}
+             for a in coupled.MODEL_ACTORS + ["payroll", "market-maker"]]
+    (tmp / branch).mkdir()
+    return coupled.World(WORLD_ID, branch, coupled.snapshot(treasury=False), specs, model=model,
+                         workdir=tmp / branch)
+
+
+def test_concurrent_posts_replay_through_the_following_round(tmp_path):
+    """Two actors post in round 1 and their models answer in the reverse of their order (a
+    barrier holds borrower-b's answer until borrower-c has answered); a replay answers at once,
+    in order. The posts still land in one order, so round 2's observations, which name each post
+    by its platform id, are the recorded ones and the replay runs on past them."""
+    plan = ScriptedPlan(copy.deepcopy(coupled.IDLE) + [
+        {"actor_id": a, "round": 1, "tool_calls": [
+            {"name": "create_post", "args": {"content": f"{a} posts"}}]} for a in POSTERS])
+    answered = {a: asyncio.Event() for a in POSTERS}
+
+    def model(actor_id, world):
+        scripted = plan.model(actor_id, lambda: world.clock.round)
+        answer = scripted._arun
+
+        async def barrier(messages, response_format=None, tools=None):
+            if actor_id == "borrower-b" and world.clock.round == 1:
+                await answered["borrower-c"].wait()
+            out = await answer(messages, response_format, tools)
+            if actor_id in answered:
+                answered[actor_id].set()
+            return out
+
+        scripted._arun = barrier
+        return scripted
+
+    def posts(world) -> list[tuple]:
+        return world.platform.db.execute(
+            "SELECT post_id, user_id, content FROM post ORDER BY post_id").fetchall()
+
+    async def go():
+        world = posters_world(tmp_path, PARENT, model)
+        await world.start()
+        cp = checkpoint(world)
+        await world.run(2)
+        (tmp_path / "again").mkdir()
+        replayed = await replay(cp, world.transcript, workdir=tmp_path / "again")
+        out = (posts(world), posts(replayed.world), world.transcript.calls(),
+               replayed.world.transcript.calls(), journal_bytes(world),
+               journal_bytes(replayed.world))
+        await world.close()
+        await replayed.world.close()
+        return out
+
+    original, again, calls, replay_calls, journals, replay_journals = asyncio.run(go())
+    assert [c for _, _, c in original] == [f"{a} posts" for a in POSTERS]
+    assert again == original
+    assert {c.round for c in replay_calls} == {1, 2}
+    assert replay_calls == calls
+    assert replay_journals == journals
