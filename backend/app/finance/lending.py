@@ -37,7 +37,7 @@ from .contracts import (
     repayment_minor,
     set_facility,
 )
-from .ledger import check_outflow
+from .ledger import check_outflow, land_arrivals
 from .models import (
     HORIZON,
     Journal,
@@ -196,6 +196,9 @@ def disburse(store: LedgerStore, facility_id: str, *, now: datetime,
                    or check_outflow(store.view(source, conn=c), f.limit_minor, now, horizon))
         if refusal is not None:
             raise refusal
+        # Checked as cleared (K_p on settled cash, S counting arrivals due now); the source's due
+        # arrivals land before the posting, so it does not fall below settled.
+        land_arrivals(store, source, now, round=round, conn=c)
         income, expense = f"{f.pool}/fee-income", f"{f.borrower}/fee-expense"
         payable = advance_payable(f)
         fee, owed = f.fee_minor, f.owed_minor
