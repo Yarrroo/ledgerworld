@@ -11,7 +11,7 @@
   "entity": "borrower-a",
   "account": "borrower-a/operating",
   "legs": [],
-  "plan_hash": "2072516a1b79b12586e50fae8c39e5831eac12234542daa73ca6df06e047eff9",
+  "plan_hash": "8a1b733f575b52498c5815755363f3f01b26bea9f8a2afb00b9d6143f342ff23",
   "snapshot_id": "obs-2026-11-05T09:58Z",
   "expires_at": "2026-11-05T10:15:00Z",
   "mode": "fake",
