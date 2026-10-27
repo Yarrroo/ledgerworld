@@ -266,7 +266,7 @@ class _Rows:
         self.rowcount = result.rowcount
         names = result.keys() if result.returns_rows else ()
         self.description = [(name,) for name in names] if result.returns_rows else None
-        self._rows = iter([tuple(row) for row in result.fetchall()] if result.returns_rows else [])
+        self._rows = iter([tuple(row) for row in result] if result.returns_rows else [])
         result.close()
 
     def __iter__(self):
