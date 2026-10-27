@@ -33,7 +33,7 @@ Close disabled while a POST is in flight): at 390 px, Execution with receipts an
 execution the server has no record of. No horizontal scroll, no control under 44 px. The one
 console error is the browser's own log of the expected 404.
 
-**Re-sweep for an unreadable successful POST** (board item 94): the same mock, with the approval
+**Re-sweep for an unreadable successful POST:** the same mock, with the approval
 POST answering 201 with an HTML page, then the execution POST answering an empty 202. The approval
 shows the operator-resolution block with Confirm disabled, and no refusal text (phone,
 `ux/unreadable-approval-phone.png`). The execution shows "outcome unknown … Do not send again",
