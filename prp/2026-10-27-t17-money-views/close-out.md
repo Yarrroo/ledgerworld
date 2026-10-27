@@ -28,6 +28,14 @@
   horizontal scroll, no control under 44 px and no clipped figure; the mode label stays in view
   while scrolling, and keyboard order and focus are correct.
 
+## Docs updated
+
+- `README.md`: Node 20+ (vite 7 and vitest 4 need it; it said 18+), the three screen routes, and
+  the unit-test command.
+- `ATTRIBUTION.md`: rows for the router, `frontend/package.json` and its lock.
+- `CLAUDE.md` was not touched: the order keeps it off-limits, and the repo has no dev-workflows
+  block to refresh.
+
 ## Reflect
 
 - Contract gap for the API: `LendingResponse` lists none of the pool's accounts. Lending reads the
@@ -40,3 +48,11 @@
 - `npm audit` reports high-severity advisories in upstream runtime dependencies (axios,
   @vue/server-renderer, follow-redirects, nanoid, postcss). They predate this change and are not
   this item's to fix.
+- Follow-up (deploy): the Dockerfile installs Debian's Node 18 on `python:3.11`, but vite 7 (already
+  upstream) needs Node 20.19 or later, so the image's frontend build predates this change and
+  fails there.
+- Follow-up (deploy): `VITE_SOURCE_URL` is not in `.env.example`. The shell's AGPL source footer
+  renders only when it is set (system brief §3).
+- Follow-up (T19): the memory-only token entry for writes is not built here. `request()` takes a
+  token argument for it.
+- Follow-up (T26): `/` is still the upstream home, so the judge path opens `/overview` directly.
