@@ -116,3 +116,18 @@ def test_a_repayment_funded_by_an_arrival_due_now_posts():
     paid = repay(store, "adv-30k", end, now=end)
     assert paid.amount_minor == 150000
     assert store.view("borrower-a/operating").settled_minor == 0
+
+
+def test_step_8_skips_an_arrival_an_outflow_landed_after_it_was_read(monkeypatch):
+    """A concurrent writer (PostgreSQL) lands an arrival between step 8's read and its write."""
+    store = world()
+    flow = store.expect(ACCOUNT, "in", 50000, T0, kind="receivable")
+    read = store.due_flows("in", T0)
+    pay(store, ACCOUNT, 40000, to_account=PAYEE, now=T0, journal_id="pay-1")
+    real = store.due_flows
+    monkeypatch.setattr(store, "due_flows",
+                        lambda direction, now, **kw: read if direction == "in"
+                        else real(direction, now, **kw))
+    assert settle_due(store, T0) == []  # skipped, not raised: step 8 still runs whole
+    assert [j["journal_id"] for j in store.rows("journals")].count(f"settle:{flow}") == 1
+    assert store.view(ACCOUNT).settled_minor == 20000

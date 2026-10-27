@@ -324,13 +324,18 @@ class LedgerStore:
                                     journal_id=journal_id, round=round, conn=c)
 
     def settle_flow(self, flow_id: str, *, counterparty: str, at: datetime,
-                    journal_id: str | None = None, round: int = 0,
-                    conn: Connection | None = None) -> Journal:
-        """A pending flow lands: an arrival from, or a payment to, `counterparty`."""
+                    journal_id: str | None = None, round: int = 0, if_pending: bool = False,
+                    conn: Connection | None = None) -> Journal | None:
+        """A pending flow lands: an arrival from, or a payment to, `counterparty`.
+
+        `if_pending` returns None for a flow another writer already landed, instead of raising.
+        """
         with self.transaction(conn) as c:
             flow = c.execute(select(expected_flows)
                              .where(expected_flows.c.flow_id == flow_id)).one()
             if flow.state != "pending":
+                if if_pending:
+                    return None
                 raise ValueError(f"flow {flow_id} is {flow.state}, not pending")
             if counterparty == flow.account_id:
                 raise ValueError(f"flow {flow_id} cannot settle against its own account")
@@ -341,6 +346,8 @@ class LedgerStore:
                                                             expected_flows.c.state == "pending")
                                .values(state="settled"))
             if landed.rowcount != 1:
+                if if_pending:
+                    return None
                 raise ValueError(f"flow {flow_id} is no longer pending")
             if flow.reservation_id:
                 c.execute(update(reservations)
@@ -418,14 +425,17 @@ class LedgerStore:
             if done.rowcount != 1:
                 raise ValueError(f"no pending flow {flow_id}")
 
-    def due_flows(self, direction: Literal["in", "out"], now: datetime,
-                  conn: Connection | None = None) -> list[Any]:
-        """Pending flows expected by `now`, in time order."""
+    def due_flows(self, direction: Literal["in", "out"], now: datetime, *,
+                  account_id: str | None = None, conn: Connection | None = None) -> list[Any]:
+        """Pending flows expected by `now`, in time order; of one account when it is named."""
+        where = [expected_flows.c.direction == direction, expected_flows.c.state == "pending",
+                 expected_flows.c.expected_at <= _naive(now)]
+        if account_id is not None:
+            where.append(expected_flows.c.account_id == account_id)
         with self.reading(conn) as c:
-            return c.execute(select(expected_flows).where(
-                expected_flows.c.direction == direction, expected_flows.c.state == "pending",
-                expected_flows.c.expected_at <= _naive(now))
-                .order_by(expected_flows.c.expected_at, expected_flows.c.flow_id)).all()
+            return c.execute(select(expected_flows).where(*where)
+                             .order_by(expected_flows.c.expected_at,
+                                       expected_flows.c.flow_id)).all()
 
     def add_obligation(self, obligation_id: str, account_id: str, amount_minor: int,
                        due_at: datetime, *, kind: str, reservation_id: str | None = None,

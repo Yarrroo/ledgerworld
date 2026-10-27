@@ -77,13 +77,15 @@ def land_arrivals(store: LedgerStore, account_id: str, now: datetime, *, round: 
     posted only after it lands; otherwise the posting falls below settled and is refused. Called
     inside the outflow's transaction; step 8 then finds the arrival settled and skips it.
     """
+    landed: list[Journal] = []
     with store.transaction(conn) as c:
-        due = [f for f in store.due_flows("in", now, conn=c) if f.account_id == account_id]
-        if not due:
-            return []
-        payee = store.external_account(due[0].currency, conn=c)
-        return [store.settle_flow(f.flow_id, counterparty=payee, at=now, round=round, conn=c)
-                for f in due]
+        for flow in store.due_flows("in", now, account_id=account_id, conn=c):
+            journal = store.settle_flow(
+                flow.flow_id, counterparty=store.external_account(flow.currency, conn=c),
+                at=now, round=round, if_pending=True, conn=c)  # landed meanwhile: skipped
+            if journal is not None:
+                landed.append(journal)
+    return landed
 
 
 def settle_due(store: LedgerStore, now: datetime, *, round: int = 0,
@@ -117,8 +119,12 @@ def settle_due(store: LedgerStore, now: datetime, *, round: int = 0,
             for flow in store.due_flows(direction, now, conn=c):
                 if direction == "out" and not known(flow.account_id):
                     continue
-                done.append(store.settle_flow(flow.flow_id, counterparty=payee(flow.currency),
-                                              at=now, round=round, conn=c))
+                # An arrival an outflow landed since the read (`land_arrivals`) is skipped.
+                journal = store.settle_flow(flow.flow_id, counterparty=payee(flow.currency),
+                                            at=now, round=round, if_pending=direction == "in",
+                                            conn=c)
+                if journal is not None:
+                    done.append(journal)
         for ob in store.due_obligations(now, conn=c):
             reservation_id = ob.reservation_id
             state = store.reservation(reservation_id, conn=c).state if reservation_id else None
