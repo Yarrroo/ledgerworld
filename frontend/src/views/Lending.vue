@@ -1,24 +1,10 @@
 <template>
-  <ScreenShell title="Lending" :body="body" :busy="state.status === 'loading'" :refresh="refresh">
+  <ScreenShell v-slot="{ body }" title="Lending" :reading="state" :refresh="refresh">
     <p class="lw-source">
       The lender pool's usable capacity K_p, its parts, and each facility's principal, fee,
       observed revenue and outstanding balance.
     </p>
 
-    <div v-if="state.error" class="lw-alert" role="alert" data-test="error">
-      <strong>{{ STATES.error.icon }} {{ body ? STATES.error.word : 'Could not load' }}.</strong>
-      {{ state.error.message }}
-      <button type="button" class="lw-button lw-button--quiet" @click="refresh">Retry</button>
-    </div>
-    <p v-if="state.contextChanged" class="lw-note" role="status" data-test="context-changed">
-      The provider mode or snapshot changed; every figure below was reloaded for
-      {{ LABELS[body.mode] || body.mode }}, snapshot {{ body.snapshot_id }}.
-    </p>
-
-    <div v-if="!body" class="lw-strip">
-      <article class="lw-tile"><span class="lw-skeleton" aria-label="Loading" /></article>
-    </div>
-    <template v-else>
       <section class="lw-strip" aria-label="Answer">
         <article class="lw-tile" data-test="capacity">
           <div class="lw-tile__label">Pool capacity K_p · {{ body.pool }}</div>
@@ -53,7 +39,7 @@
             <tr v-for="p in parts" :key="p.key">
               <td>{{ p.label }}</td>
               <td class="lw-num">{{ metricText(p.metric) }}</td>
-              <td>{{ (STATES[p.metric.status] || STATES.unassessed).word }}</td>
+              <td>{{ stateOf(p.metric.status).word }}</td>
             </tr>
           </tbody>
         </table>
@@ -97,7 +83,6 @@
           <span id="fund-why" class="lw-time" data-test="fund-why">{{ fundingWhy }}</span>
         </template>
       </div>
-    </template>
   </ScreenShell>
 </template>
 
@@ -105,8 +90,8 @@
 import { computed } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import {
-  ApiError, LABELS, STATES, ScreenShell, contextKey, formatAmount, formatMoney, getLending,
-  getOverview, metricText, routeExists, useReading
+  ApiError, ScreenShell, amountText, contextKey, getLending, getOverview, metricText, money,
+  routeExists, stateOf, useReading
 } from '../api/v1.js'
 
 const router = useRouter()
@@ -144,9 +129,8 @@ const parts = computed(() => PARTS.map(([key, label]) => ({
 })))
 
 const calculation = computed(() => {
-  const amount = (m) => (m.minor === null ? metricText(m) : formatAmount(m.minor, m.currency))
-  const terms = PARTS.map(([key]) => amount(capacity.value.parts[key]))
-  return `${terms.join(' - ')} = ${amount(capacity.value.K_p)}`
+  const terms = PARTS.map(([key]) => amountText(capacity.value.parts[key]))
+  return `${terms.join(' - ')} = ${amountText(capacity.value.K_p)}`
 })
 
 const unobserved = computed(() =>
@@ -168,5 +152,4 @@ const fundingTarget = computed(() => {
   return run ? { path: '/decisions', query: { run_id: run } } : { path: '/decisions' }
 })
 
-const money = (m) => formatMoney(m.minor, m.currency)
 </script>

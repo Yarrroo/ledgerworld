@@ -27,3 +27,9 @@ had no focus ring and now have one.
 Not done here: there is no durable viewport test, because this repo has no Playwright harness yet
 (T26 owns `e2e/`). Contrast was not measured on the rendered page; the token pairs were computed
 from their hex values, recorded in `tokens.css`.
+
+**Re-sweep after vet round 1** (the shell took over the error and context notices and the
+skeleton, and the views were restructured): 18 of 18 rows pass. That is three screens at 390,
+768 and 1440 px, in light and in dark. There was no horizontal scroll, no control under 44 px and
+no clipped figure, the mode label stayed in view with every calculation open and the page scrolled
+to the bottom, and the console logged no warnings.

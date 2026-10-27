@@ -11,7 +11,7 @@ import Overview from '../../src/views/Overview.vue'
 import Treasury from '../../src/views/Treasury.vue'
 import Lending from '../../src/views/Lending.vue'
 import {
-  contextKey, formatMoney, latestOnly, metricText, useReading
+  contextKey, formatMoney, formatTime, latestOnly, metricText, useReading
 } from '../../src/api/v1.js'
 
 import moneyViews from '../../../prp/2026-10-20-ledgerworld/design/modules/ui/fixtures/money-views.json'
@@ -27,19 +27,28 @@ const stateCase = (id) => dataStates.cases.find((c) => c.id === id)
 const clone = (x) => JSON.parse(JSON.stringify(x))
 const Stub = { render: () => h('div', 'stub') }
 
-/** Answer each /api/v1 path from ``answers`` (a body, or a function returning one). */
+/** Answer each /api/v1 path from ``answers`` (a body, an Error, or a function returning one). */
 function serve (answers) {
-  const calls = []
   vi.stubGlobal('fetch', vi.fn(async (url) => {
     const path = new URL(url).pathname.replace('/api/v1', '')
-    calls.push(path)
     let answer = answers[path]
     if (typeof answer === 'function') answer = await answer()
     if (answer === undefined) throw new Error(`no recorded answer for ${path}`)
     if (answer instanceof Error) throw answer
     return { ok: true, status: 200, json: async () => clone(answer) }
   }))
-  return calls
+}
+
+/** Serve Lending beside an overview of the same context (Lending reads both). */
+function serveLending (lending, overview = overviewLf1.instance) {
+  const current = () => (typeof lending === 'function' ? lending() : lending)
+  serve({
+    '/lending': current,
+    '/overview': () => {
+      const l = current()
+      return l instanceof Error ? overview : { ...clone(overview), snapshot_id: l.snapshot_id, mode: l.mode }
+    }
+  })
 }
 
 function router (extra = ['/simulation', '/decisions']) {
@@ -64,6 +73,7 @@ async function open (component, path, routes) {
 }
 
 const text = (wrapper, test) => wrapper.get(`[data-test="${test}"]`).text().replace(/\s+/g, ' ')
+const disabled = (wrapper, test) => wrapper.get(`[data-test="${test}"]`).attributes('disabled') !== undefined
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -118,21 +128,32 @@ describe('money-views fixture', () => {
   it('Overview names why the simulation cannot open when its screen or its run is absent', async () => {
     serve({ '/overview': overviewLf1.instance })
     let w = await open(Overview, '/overview', [])
-    expect(w.get('[data-test="open-simulation"]').attributes('disabled')).toBeDefined()
-    expect(w.text()).toContain('The simulation screen is not part of this build')
+    expect(disabled(w, 'open-simulation')).toBe(true)
+    expect(text(w, 'open-simulation-why')).toBe('The simulation screen is not part of this build')
     const body = clone(overviewLf1.instance)
     body.demo.run_id = null
     serve({ '/overview': body })
     w = await open(Overview, '/overview')
-    expect(w.get('[data-test="open-simulation"]').attributes('disabled')).toBeDefined()
-    expect(w.text()).toContain('No demonstration run is prepared')
+    expect(disabled(w, 'open-simulation')).toBe(true)
+    expect(text(w, 'open-simulation-why')).toBe('No demonstration run is prepared')
+  })
+
+  it('Overview says it is loading, not that no run exists, while a refresh is in flight', async () => {
+    let hold = false
+    serve({ '/overview': () => (hold ? new Promise(() => {}) : overviewLf1.instance) })
+    const w = await open(Overview, '/overview')
+    hold = true
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(disabled(w, 'open-simulation')).toBe(true)
+    expect(text(w, 'open-simulation-why')).toBe('Loading the current overview')
   })
 
   it('Treasury receipt-delayed-240h: floor breached, the shortfall and its calculation', async () => {
     serve({ '/treasury': treasuryDelayed.instance })
     const w = await open(Treasury, '/treasury')
     const { expect: want } = record('Treasury', 'receipt-delayed-240h')
-    expect(text(w, 'floor-status')).toBe(`✕${want.status}`) // icon, then the word
+    expect(text(w, 'floor-status')).toBe(`✕${want.status}`)
     expect(text(w, 'shortfall')).toBe(want.shortfall)
     const calc = text(w, 'calculation')
     expect(calc).toContain(want.calculation.split(';')[0])
@@ -144,14 +165,12 @@ describe('money-views fixture', () => {
     expect(text(w, 'spendable')).toContain('USD 20,000.00')
     expect(text(w, 'timeline')).toContain('✕ below floor, short USD 10,000.00')
     // payroll stays visible with its reservation and both time labels
-    expect(want.payroll_remains_visible).toBe(true)
     const obligations = text(w, 'obligations')
     expect(obligations).toContain('payroll · payroll-1')
     expect(obligations).toContain('USD 50,000.00')
     expect(obligations).toContain('res-payroll-1')
     expect(obligations).toContain('2026-01-06 16:00 UTC (t=40 h)')
-    // the currency is always named: every money figure carries it, or the calculation names it
-    expect(want.currency_always_named).toBe(true)
+    // the currency is always named: every money figure carries it, the calculation names it
     for (const figure of w.findAll('.lw-figure')) {
       expect(figure.text()).toMatch(/^(lowest )?USD |^Unknown$|^Not assessed$/)
     }
@@ -159,9 +178,7 @@ describe('money-views fixture', () => {
   })
 
   it('Lending lf2-before: K_p and the calculation from its API parts', async () => {
-    const lf2 = clone(overviewLf1.instance)
-    lf2.snapshot_id = lendingLf2.instance.snapshot_id
-    serve({ '/lending': lendingLf2.instance, '/overview': lf2 })
+    serveLending(lendingLf2.instance)
     const w = await open(Lending, '/lending')
     const { expect: want } = record('Lending', 'lf2-before')
     expect(text(w, 'capacity-value')).toBe(want.capacity)
@@ -183,8 +200,7 @@ describe('money-views fixture', () => {
     expect(text(w, 'capacity-value')).toBe(want.capacity)
     expect(text(w, 'unobserved')).toContain(`lender/venue · ? ${want.venue}`)
     expect(text(w, 'unobserved')).not.toMatch(/USD 0\.00/)
-    expect(want.funding_enabled).toBe(false)
-    expect(w.get('[data-test="fund"]').attributes('disabled')).toBeDefined()
+    expect(disabled(w, 'fund')).toBe(!want.funding_enabled)
     expect(text(w, 'fund-why')).toBe(want.reason)
     expect(text(w, 'authority')).toContain('reduced')
   })
@@ -197,12 +213,60 @@ describe('money-views fixture', () => {
   })
 })
 
+// ------------------------------------------------------------------ Treasury: P's terms
+
+function treasuryWith (change) {
+  const body = clone(treasuryDelayed.instance)
+  change(body, body.accounts[0])
+  return body
+}
+
+describe('Treasury shows the terms the ledger counts in P', () => {
+  it('a committed reservation is counted once, through its outflow, not again as its obligation', async () => {
+    serve({
+      '/treasury': treasuryWith((body, a) => {
+        a.buckets.pending_out.push({
+          flow_id: 'out:res-payroll-1', kind: 'payroll', reservation_id: 'res-payroll-1',
+          amount: { minor: 5000000, currency: 'USD' }, expected_at: '2026-01-06T16:00:00Z'
+        })
+      })
+    })
+    const w = await open(Treasury, '/treasury')
+    expect(text(w, 'calculation')).toContain('70,000.00 settled - 50,000.00 payroll = 20,000.00')
+    expect(text(w, 'calculation')).not.toContain('payroll - 50,000.00 payroll')
+  })
+
+  it('a missed obligation is still owed and is still a term', async () => {
+    serve({ '/treasury': treasuryWith((body) => { body.obligations[0].state = 'missed' }) })
+    const w = await open(Treasury, '/treasury')
+    expect(text(w, 'calculation')).toContain('70,000.00 settled - 50,000.00 payroll = 20,000.00')
+  })
+
+  it('an unknown floor reads Unknown, never Floor kept', async () => {
+    serve({
+      '/treasury': treasuryWith((body, a) => {
+        a.floor = { minor: null, currency: 'USD', status: 'unknown', as_of: null }
+      })
+    })
+    const w = await open(Treasury, '/treasury')
+    expect(text(w, 'floor-status')).toBe('?Unknown')
+    expect(w.find('.lw-status--ok').exists()).toBe(false)
+    expect(text(w, 'timeline')).not.toContain('floor kept')
+  })
+})
+
 // ------------------------------------------------------------------- data-states.json
 
 function overviewWith (metric) {
   const body = clone(overviewLf1.instance)
   body.cash = { ...metric }
   return body
+}
+
+function lendingWithKp (change) {
+  const lending = clone(lendingLf2.instance)
+  lending.capacity.K_p = change(lending.capacity.K_p)
+  return lending
 }
 
 describe('data-states fixture', () => {
@@ -223,15 +287,10 @@ describe('data-states fixture', () => {
     expect(text(w, 'settled')).toContain(c.expect.text)
     expect(text(w, 'settled')).not.toContain('USD 0.00')
 
-    const lending = clone(lendingLf2.instance)
-    lending.capacity.K_p = unknown
-    const overview = clone(overviewLf1.instance)
-    overview.snapshot_id = lending.snapshot_id
-    serve({ '/lending': lending, '/overview': overview })
+    serveLending(lendingWithKp(() => unknown))
     const l = await open(Lending, '/lending')
     expect(text(l, 'capacity-value')).toBe('Unknown')
-    expect(c.expect.approval_enabled).toBe(false)
-    expect(l.get('[data-test="fund"]').attributes('disabled')).toBeDefined()
+    expect(disabled(l, 'fund')).toBe(!c.expect.approval_enabled)
   })
 
   it('stale keeps its value, says so, shows its as_of and disables funding', async () => {
@@ -242,21 +301,15 @@ describe('data-states fixture', () => {
     expect(text(w, 'settled')).toContain(c.expect.text)
     expect(text(w, 'as-of')).toBe('as of 2026-01-04 12:00 UTC')
 
-    const lending = clone(lendingLf2.instance)
-    lending.capacity.K_p = { ...lending.capacity.K_p, status: 'stale' }
-    const overview = clone(overviewLf1.instance)
-    overview.snapshot_id = lending.snapshot_id
-    serve({ '/lending': lending, '/overview': overview })
+    serveLending(lendingWithKp((kp) => ({ ...kp, status: 'stale' })))
     const l = await open(Lending, '/lending')
     expect(text(l, 'capacity-value')).toBe('USD 42,000.00 · stale')
-    expect(l.get('[data-test="fund"]').attributes('disabled')).toBeDefined()
+    expect(disabled(l, 'fund')).toBe(!c.expect.approval_enabled)
   })
 
   it('partial shows the known metrics and names what is missing', async () => {
-    const c = stateCase('partial')
     serve({ '/overview': overviewFreeze.instance })
     const w = await open(Overview, '/overview')
-    expect(c.expect.show_known_metrics && c.expect.missing_fields_named).toBe(true)
     expect(text(w, 'settled')).toContain('USD 70,000.00')
     expect(text(w, 'lender-capacity')).toContain('USD 27,000.00')
     expect(text(w, 'partial')).toContain('lender/venue')
@@ -269,42 +322,36 @@ describe('data-states fixture', () => {
     body.coverage.headroom = { minor: null, currency: 'USD', status: 'unassessed' }
     serve({ '/overview': body })
     const w = await open(Overview, '/overview')
-    expect(text(w, 'floor-status')).toBe(`–${c.expect.text}`) // icon, then the word
+    expect(text(w, 'floor-status')).toBe(`–${c.expect.text}`)
     expect(text(w, 'coverage')).not.toContain('Floor kept')
     expect(w.find('.lw-status--ok').exists()).toBe(c.expect.show_green_feasible)
   })
 
-  it('loading marks the page busy and shows no zero', async () => {
-    const c = stateCase('loading')
+  it('loading marks the page busy, shows no figure and no enabled action', async () => {
     serve({ '/overview': () => new Promise(() => {}) })
     const r = router()
     await r.push('/overview')
     const w = mount(Overview, { global: { plugins: [r] } })
     await flushPromises()
-    expect(c.expect.aria_busy).toBe(true)
-    expect(w.get('main').attributes('aria-busy')).toBe('true')
+    expect(w.get('main').attributes('aria-busy')).toBe(String(stateCase('loading').expect.aria_busy))
     expect(w.findAll('.lw-skeleton').length).toBeGreaterThan(0)
-    expect(w.text()).not.toMatch(/\d/)
+    expect(w.get('main').text()).not.toMatch(/\d/)
     expect(text(w, 'mode')).toBe('Provider mode not loaded')
-    expect(w.get('[data-test="open-simulation"]').attributes('disabled')).toBeDefined()
+    expect(w.find('a.lw-button').exists()).toBe(false)
   })
 
   it('a failed refresh keeps the last values labelled not current, and disables funding', async () => {
     const c = stateCase('refresh-failed')
-    const overview = clone(overviewLf1.instance)
-    overview.snapshot_id = lendingLf2.instance.snapshot_id
-    serve({ '/lending': lendingLf2.instance, '/overview': overview })
+    let fail = false
+    serveLending(() => (fail ? new Error('connection reset') : lendingLf2.instance))
     const w = await open(Lending, '/lending')
-    expect(c.previous_status).toBe('known')
     expect(w.get('[data-test="fund"]').attributes('href')).toBeDefined()
-    serve({ '/lending': new Error('connection reset'), '/overview': overview })
+    fail = true
     await w.get('[data-test="refresh"]').trigger('click')
     await flushPromises()
-    expect(c.expect.error_visible).toBe(true)
     expect(text(w, 'error')).toContain(c.expect.previous_values_label)
     expect(text(w, 'capacity-value')).toBe('USD 42,000.00') // last loaded, still shown
-    expect(c.expect.approval_enabled).toBe(false)
-    expect(w.get('[data-test="fund"]').attributes('disabled')).toBeDefined()
+    expect(disabled(w, 'fund')).toBe(!c.expect.approval_enabled)
     expect(text(w, 'fund-why')).toBe('Last loaded, not current; reload before funding')
   })
 
@@ -327,8 +374,7 @@ describe('data-states fixture', () => {
 
   it('same-context out-of-order polls: the older generation is discarded, the incident stays', () => {
     const c = stateCase('same-context-out-of-order-polls')
-    const key = contextKey({ mode: c.context.mode, run_id: c.context.execution_id })
-    const guard = latestOnly(key)
+    const guard = latestOnly(contextKey({ mode: c.context.mode, run_id: c.context.execution_id }))
     const tickets = c.responses.map(() => guard.issue())
     let shown = null
     const discarded = []
@@ -341,39 +387,62 @@ describe('data-states fixture', () => {
     expect(Boolean(shown.incident)).toBe(c.expect.incident_still_visible)
   })
 
-  it('mode-changed: the banner follows the new answer and nothing old is merged in', async () => {
-    const c = stateCase('mode-changed')
-    let mode = c.from
-    const lending = () => ({ ...clone(lendingLf2.instance), mode })
-    const overview = () => ({ ...clone(overviewLf1.instance), snapshot_id: lendingLf2.instance.snapshot_id, mode })
-    serve({ '/lending': lending, '/overview': overview })
-    const w = await open(Lending, '/lending')
-    expect(text(w, 'mode')).toBe(dataStates.labels[c.from])
-    mode = c.to
-    // a reload of the screen reads the new context whole
-    const again = await open(Lending, '/lending')
-    expect(text(again, 'mode')).toBe(c.expect.banner)
-    // and within one reading, a context change is announced rather than merged
-    const reads = [overviewLf1.instance, { ...clone(overviewLf1.instance), mode: c.to }]
+  it('a reading applies only its newest request, whichever answers first', async () => {
+    const answers = []
     const probe = mount(defineComponent({
       setup () {
-        const { state, refresh } = useReading(async () => reads.shift())
-        return { state, refresh }
+        return useReading(() => new Promise((resolve) => answers.push(resolve)))
       },
       render: () => h('div')
     }))
+    probe.vm.refresh() // a second request while the first is out
+    answers[0]({ ...clone(overviewLf1.instance), snapshot_id: 'old' })
     await flushPromises()
-    await probe.vm.refresh()
-    expect(probe.vm.state.contextChanged).toBe(c.expect.reload_context)
-    expect(probe.vm.state.body.mode).toBe(c.to)
+    expect(probe.vm.state.body).toBe(null)
+    expect(probe.vm.state.status).toBe('loading')
+    answers[1](clone(overviewLf1.instance))
+    await flushPromises()
+    expect(probe.vm.state.body.snapshot_id).toBe('lf1')
+  })
+
+  it('mode-changed: the banner follows the new answer and nothing old is merged in', async () => {
+    const c = stateCase('mode-changed')
+    let mode = c.from
+    serveLending(() => ({ ...clone(lendingLf2.instance), mode }))
+    const w = await open(Lending, '/lending')
+    expect(text(w, 'mode')).toBe(dataStates.labels[c.from])
+    mode = c.to
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'mode')).toBe(c.expect.banner)
+    expect(Boolean(text(w, 'context-changed'))).toBe(c.expect.reload_context)
+    expect(text(w, 'context-changed')).toContain(c.expect.banner)
   })
 })
 
-describe('formatting', () => {
+describe('formatting and labels', () => {
   it('money is integer minor units with the currency named', () => {
     expect(formatMoney(7000000, 'USD')).toBe('USD 70,000.00')
     expect(formatMoney(-1000000, 'USD')).toBe('USD -10,000.00')
     expect(formatMoney(5, 'USD')).toBe('USD 0.05')
     expect(formatMoney(1234, 'JPY')).toBe('JPY 1,234')
+  })
+
+  it('an amount beyond exact integers is refused, never printed rounded or in exponent form', () => {
+    expect(formatMoney(1e21, 'USD')).toBe('USD Unrepresentable amount')
+    expect(formatMoney(2 ** 53 + 2, 'USD')).toBe('USD Unrepresentable amount')
+  })
+
+  it('an unparseable time is Unavailable, not a crash', () => {
+    expect(formatTime('not a time')).toEqual({ utc: 'Unavailable', local: '' })
+  })
+
+  it('a hypothetical branch or a replay is never labelled the observed snapshot', async () => {
+    serve({ '/overview': { ...clone(overviewLf1.instance), branch_id: 'br-integrated' } })
+    let w = await open(Overview, '/overview')
+    expect(text(w, 'source')).toBe(`${dataStates.labels.branch} br-integrated`)
+    serve({ '/overview': { ...clone(overviewLf1.instance), branch_id: 'br-1', replay: true } })
+    w = await open(Overview, '/overview')
+    expect(text(w, 'source')).toContain(dataStates.labels.replay)
   })
 })
