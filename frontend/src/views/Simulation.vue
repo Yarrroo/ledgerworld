@@ -210,7 +210,8 @@ const graphData = computed(() => {
   if (!current.value) return { nodes: [], edges: [] }
   const r = display.value
   const posts = (body.value.feed ?? []).filter((p) => p.round <= r && p.branch_id === base.value.branch_id)
-  const intents = [...byRound.value].filter(([n]) => n <= r).flatMap(([, v]) => v.intents)
+  const views = [...byRound.value].filter(([n]) => n <= r).map(([, v]) => v)
+  const intents = views.flatMap((v) => v.intents)
   const nodes = new Map()
   const node = (uuid, name, label) => nodes.has(uuid) || nodes.set(uuid, { uuid, name, labels: ['Entity', label] })
   const edges = []
@@ -226,6 +227,7 @@ const graphData = computed(() => {
     node(`actor:${i.actor_id}`, i.actor_id, 'Actor')
     owner.set(i.intent_id, `actor:${i.actor_id}`)
   }
+  for (const [id, actorId] of requestOwners(views)) owner.set(id, `actor:${actorId}`)
   for (const i of intents) {
     for (const e of i.evidence_ids ?? []) {
       const target = owner.get(e)
@@ -237,6 +239,30 @@ const graphData = computed(() => {
   }
   return same({ nodes: [...nodes.values()], edges })
 })
+
+/**
+ * The request messages the shown rounds minted, each to the borrower that asked. The coordinator
+ * turns a `request_advance` that drew on no offer (accepted, no journal) into the message
+ * `req:<actor>:r<round>`, then `-2`, `-3`… for that actor's later ones in the same round, and a
+ * lender cites that id, never the intent. An id no shown intent minted resolves to nothing.
+ */
+function requestOwners (views) {
+  const owners = new Map()
+  const minted = new Map()
+  for (const v of views) {
+    const asked = new Set(v.cleared
+      .filter((c) => c.status === 'accepted' && !c.journal_id)
+      .map((c) => c.intent_id))
+    for (const i of v.intents) {
+      if (i.type !== 'request_advance' || !asked.has(i.intent_id)) continue
+      const base = `req:${i.actor_id}:r${i.round}`
+      const n = (minted.get(base) ?? 0) + 1
+      minted.set(base, n)
+      owners.set(n === 1 ? base : `${base}-${n}`, i.actor_id)
+    }
+  }
+  return owners
+}
 
 // A poll that changes nothing the graph shows hands back the same object, so the graph view
 // keeps its layout, zoom and selection instead of re-rendering every few seconds.
