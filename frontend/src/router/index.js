@@ -44,7 +44,9 @@ const routes = [
   },
   { path: '/overview', name: 'Overview', component: () => import('../views/Overview.vue') },
   { path: '/treasury', name: 'Treasury', component: () => import('../views/Treasury.vue') },
-  { path: '/lending', name: 'Lending', component: () => import('../views/Lending.vue') }
+  { path: '/lending', name: 'Lending', component: () => import('../views/Lending.vue') },
+  { path: '/decisions', name: 'Decisions', component: () => import('../views/Decisions.vue') },
+  { path: '/execution', name: 'Execution', component: () => import('../views/Execution.vue') }
 ]
 
 const router = createRouter({
