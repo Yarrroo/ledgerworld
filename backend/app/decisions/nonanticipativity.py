@@ -193,6 +193,7 @@ def guarded_decide(policy: Policy, world: World, round_: int) -> Decision:
     """Run `policy` on the guarded view of `world` at `round_`; any early read rejects it."""
     decide = getattr(policy, "decide", policy)
     view = PolicyView(world, round_)
+    obs_hash = view.obs_hash()  # taken before the policy can touch the view
     try:
         actions = decide(view)
     except AnticipationViolation:
@@ -203,9 +204,10 @@ def guarded_decide(policy: Policy, world: World, round_: int) -> Decision:
         raise
     if view.violations:
         raise view.violations[0]
-    actions = list(actions)
+    if not isinstance(actions, list):
+        raise TypeError(f"a policy returns a list of actions, got {type(actions).__name__}")
     canonical(actions)
-    return Decision(round_, view.t_h, actions, view.evidence_ids, view.obs_hash())
+    return Decision(round_, round_ * HOURS_PER_ROUND, actions, view.evidence_ids, obs_hash)
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,11 +229,12 @@ def paired_history_check(policy: Policy, tree: ScenarioTree) -> dict[str, list[D
 
     Raises `AnticipationViolation`: with the path for the first early read (scenarios in tree
     order, rounds rising), else with the first round and scenario pair whose observable
-    histories are equal through that round while their decisions at it differ.
+    histories are equal through that round while their decisions at it differ. The histories
+    come from the tree itself, never from what a policy's run reports.
     """
+    seen = observable_histories(tree)
     decisions = {sid: [guarded_decide(policy, world, r) for r in range(tree.rounds)]
                  for sid, world in tree.scenarios.items()}
-    seen = {sid: [d.obs_hash for d in ds] for sid, ds in decisions.items()}
     acted = {sid: [canonical(d.actions) for d in ds] for sid, ds in decisions.items()}
     for r in range(tree.rounds):
         for a, b in combinations(decisions, 2):
@@ -262,9 +265,14 @@ def snapshot_world(snapshot: Snapshot) -> dict[str, Leaf]:
     Lists of records are keyed by their id (`accounts[<id>]`), an account's buckets sit on the
     account, money stays one leaf `{minor, currency}`, a time `<x>_at` (or `as_of`) becomes
     `<x>_h` (`as_of_h`) in whole hours from the snapshot's `as_of`, and a pending inflow carries
-    `status = "expected"`, which the round coordinator moves on to `overdue` or `arrived`.
+    `status = "expected"`, which the round coordinator moves on to `overdue` or `arrived`. An
+    account observed after the snapshot's `as_of` is refused: it would be read before it was seen.
     """
     t0 = snapshot.as_of
+    for account in snapshot.accounts:
+        if account.as_of > t0:
+            raise ValueError(f"account {account.id} is observed at {account.as_of.isoformat()}, "
+                             "after the snapshot's as_of")
     leaves: dict[str, Leaf] = {}
 
     def walk(path: str, value: Any, list_name: str | None = None) -> None:

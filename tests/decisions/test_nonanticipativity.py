@@ -238,3 +238,45 @@ def test_every_honest_policy_passes_and_every_clairvoyant_one_is_named():
             rejected.append(spec["id"])
     assert accepted == FIXTURE["expect_all"]["honest_accepted"]
     assert len(rejected) == FIXTURE["expect_all"]["clairvoyant_rejected"]
+
+
+def test_a_policy_that_moves_the_views_clock_is_caught():
+    def time_traveller(view: PolicyView) -> list:
+        view._round = 100  # the read below is then "on time", and the view's hash changes
+        arrives_h = view.get(f"{RCV}.arrived_h")
+        return [dict(ADVANCE)] if arrives_h > 200 and view.get(f"{RCV}.expected_h") == 12 else []
+
+    tree = lf1_tree()
+    assert guarded_decide(time_traveller, tree.scenarios["s-late"], 0).obs_hash == (
+        observable_histories(tree)["s-late"][0])
+    with pytest.raises(AnticipationViolation) as caught:
+        paired_history_check(time_traveller, tree)
+    assert caught.value.node == {"round": 0, "scenarios": ["s-late", "s-short"]}
+
+
+def test_a_policy_that_erases_its_violation_is_caught_by_the_pair():
+    def eraser(view: PolicyView) -> list:
+        try:
+            view.get(f"{RCV}.arrived_h")
+        except AnticipationViolation as violation:
+            view._violations.clear()  # hides the read from the view guard...
+            if violation.available_at_h > 200:  # ...and acts on what the rejection revealed
+                return [dict(ADVANCE)]
+        return []
+
+    with pytest.raises(AnticipationViolation) as caught:
+        paired_history_check(eraser, lf1_tree())
+    assert caught.value.node == {"round": 0, "scenarios": ["s-late", "s-short"]}
+
+
+def test_a_policy_must_return_a_list_of_actions():
+    world = lf1_tree().scenarios["s-late"]
+    with pytest.raises(TypeError, match="list"):
+        guarded_decide(lambda view: dict(ADVANCE), world, 0)
+
+
+def test_a_snapshot_cannot_hold_an_account_observed_after_it():
+    data = LF1.model_dump(mode="json")
+    data["accounts"][0]["as_of"] = "2026-01-05T02:00:00Z"
+    with pytest.raises(ValueError, match="after the snapshot"):
+        snapshot_world(Snapshot.model_validate(data))

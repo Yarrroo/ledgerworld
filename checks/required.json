@@ -24,7 +24,9 @@
       "tests/decisions/test_nonanticipativity.py::test_a_side_channel_policy_is_caught_by_the_paired_history_check[private-store]",
       "tests/decisions/test_nonanticipativity.py::test_a_swallowed_early_read_still_rejects",
       "tests/decisions/test_nonanticipativity.py::test_the_view_shows_nothing_early_and_hands_out_copies",
-      "tests/decisions/test_nonanticipativity.py::test_every_honest_policy_passes_and_every_clairvoyant_one_is_named"
+      "tests/decisions/test_nonanticipativity.py::test_every_honest_policy_passes_and_every_clairvoyant_one_is_named",
+      "tests/decisions/test_nonanticipativity.py::test_a_policy_that_moves_the_views_clock_is_caught",
+      "tests/decisions/test_nonanticipativity.py::test_a_policy_that_erases_its_violation_is_caught_by_the_pair"
     ]},
     {"id": "credential_isolation", "name": "credential isolation", "tests": [
       "tests/execution/test_import_fence.py::test_simulation_side_never_reaches_airwallex",
