@@ -60,7 +60,8 @@
    provider status. Do not send again." There is no reverse or resend control.
 7. **Polling**: every 5 s while a leg is pending, submitted or unknown, through `latestOnly`; it
    updates text in place and never moves focus. Leaving the screen ends it: a read or POST
-   answered after unmount applies nothing and schedules nothing.
+   answered after unmount writes nothing to the screen and schedules nothing; an unknown outcome
+   is still held in tab memory, so returning restores its block.
 
 ## Contract gaps (recorded, not hard-coded)
 
