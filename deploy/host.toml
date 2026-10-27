@@ -9,6 +9,15 @@
 #   docker compose -f deploy/compose.yml --env-file <host env file> up -d --build
 #   (the host env file sets VITE_SOURCE_URL, or the image does not build)
 #   then GET $LEDGERWORLD_URL/api/v1/health answers {"ok": true, ...}
+# Prepare the anonymous judge path once, after the app and sim worker are healthy:
+#   docker compose -f deploy/compose.yml --env-file <host env file> exec -T app python -m app.demo.prepare
+# It uses this app's database and queue; fake provider only, no browser POST or demo token.
+# Repeating it reuses the same run and reconciled execution. --timeout defaults to 300 seconds.
+# Fake provider objects survive command restarts. The prepared comparison is read-only;
+# start a new API run for another comparison. Stale balances, changed advance terms and failed
+# jobs are refused rather than reset; inspect the worker log.
+# scripts/demo.sh remains the separate seven-beat receipt/video runner; it does not publish
+# the app's prepared context. Never run the preparation command in a sandbox deployment.
 
 [host]
 target = "compose"

@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -122,6 +122,7 @@ class Runner:
     workdir: Path
     model: ModelFactory | None = None
     world: DemoWorld | None = None
+    terms: dict[str, dict] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.workdir = Path(self.workdir)
@@ -136,7 +137,13 @@ class Runner:
         def handler(job: Job, ctx: JobContext) -> None:
             with tempfile.TemporaryDirectory(prefix=f"{job.job_id}-", dir=self.workdir,
                                              ignore_cleanup_errors=True) as scratch:
-                body(job, ctx, Path(scratch))
+                if job.payload.get("prepared_demo"):
+                    from ..demo.jobs import demo_runner
+
+                    body_for_demo = getattr(demo_runner(self), body.__name__)
+                    body_for_demo(job, ctx, Path(scratch))
+                else:
+                    body(job, ctx, Path(scratch))
         return handler
 
     def _world(self, family: Family, workdir: Path, branch_id: str) -> World:
@@ -204,7 +211,7 @@ class Runner:
             model = self.model
         evaluations = asyncio.run(evaluate(
             run_id, cp, {family.id: []}, policies, model=model, workdir=scratch / "branches",
-            actor=TREASURY, hooks={"delivered": family.deliver_market}))
+            actor=TREASURY, terms=self.terms, hooks={"delivered": family.deliver_market}))
         ctx.checkpoint()
         escalate_to = next((e.escalation for e in cp.snapshot.entities
                             if e.entity_id == TREASURY), None)
