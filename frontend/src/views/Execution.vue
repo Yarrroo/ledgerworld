@@ -41,9 +41,9 @@
         <template v-else>Execution {{ activeId }} is unavailable: the server has no record of it.</template>
       </p>
       <p v-if="pollError" class="lw-note" data-test="poll-error">
-        {{ STATES.error.icon }} {{ STATES.error.word }}: {{ pollError }}
+        {{ STATES.error.icon }} {{ execution ? STATES.error.word : 'Could not read' }}: {{ pollError }}. Reading again.
       </p>
-      <p v-if="!execution && !notFound" class="lw-time" data-test="no-execution">
+      <p v-if="!execution && !notFound && !pollError" class="lw-time" data-test="no-execution">
         Unavailable: no execution to show for this run.
       </p>
       <template v-if="execution">
@@ -224,6 +224,13 @@ async function readExecution (id) {
   return body
 }
 
+/** GET /decisions/:run; an answer with no status is unreadable, never "no decision". */
+async function readDecisions (runId) {
+  const body = await request(`/decisions/${enc(runId)}`)
+  if (!isText(body?.status)) throw unreadable()
+  return body
+}
+
 /** A read that may name nothing yet: 404 is "not there", every other failure is an error. */
 async function optional (reading) {
   try {
@@ -244,7 +251,7 @@ const { state, refresh } = useReading(async () => {
   let executionError = ''
   const [decisions, execution] = await Promise.all([
     // the receipts still read when this fails; only the review needs the decision
-    runId ? optional(request(`/decisions/${enc(runId)}`)).catch((error) => { decisionsError = error.message; return null }) : null,
+    runId ? optional(readDecisions(runId)).catch((error) => { decisionsError = error.message; return null }) : null,
     // and the review still opens when the receipts cannot be read
     executionId ? optional(readExecution(executionId)).catch((error) => { executionError = error.message; return null }) : null
   ])
@@ -462,14 +469,15 @@ const moving = (body) => !body.legs.length ||
   body.legs.some((l) => UNSETTLED.has(l.state) || (!l.reconciled && l.state !== 'failed'))
 
 /**
- * Read again in 5 s while the outcome is open. An execution this tab sent is read until a read
- * shows it finished, whatever the last read returned; one named by the context is read only
- * while a loaded answer shows it moving, so an id the server does not have is not polled.
+ * Read again in 5 s while the outcome is open or the last read failed. An execution this tab sent
+ * is read until a read shows it finished, whatever the last read returned; one named by the
+ * context is read only while a loaded answer shows it moving, so an id the server does not have
+ * (404) is not polled.
  */
 function schedule () {
   clearTimeout(timer)
   const body = execution.value
-  const keep = followed ? (!body || moving(body)) : Boolean(body && moving(body))
+  const keep = Boolean(pollError.value) || (followed ? (!body || moving(body)) : Boolean(body && moving(body)))
   timer = keep ? setTimeout(poll, POLL_MS) : null
 }
 

@@ -796,6 +796,7 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
     await tick()
     expect(text(w, 'poll-error')).toContain('the answer could not be read')
     expect(w.find('[data-test="not-found"]').exists()).toBe(false)
+    expect(w.find('[data-test="no-execution"]').exists()).toBe(false) // a payment just sent
     answer = undefined
     await tick()
     expect(w.find('[data-test="not-found"]').exists()).toBe(true)
@@ -812,6 +813,31 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
     expect(text(w, 'poll-error')).toContain('the answer could not be read')
     expect(w.find('[data-test="not-found"]').exists()).toBe(false)
     expect(disabled(w, 'review-plan')).toBe(false)
+  })
+
+  it('a linked execution whose read failed is read again until it reads, and never said "last loaded"', async () => {
+    fakeTimers()
+    let answer = UNREADABLE
+    const calls = serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': () => answer
+    })
+    const w = await open(Execution, '/execution')
+    expect(text(w, 'poll-error')).toContain('Could not read: the answer could not be read. Reading again.')
+    expect(w.find('[data-test="no-execution"]').exists()).toBe(false)
+    answer = paid()
+    await tick()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
+    expect(text(w, 'leg-status')).toContain('PAID · reconciled as of')
+    expect(w.find('[data-test="poll-error"]').exists()).toBe(false)
+  })
+
+  it('an unreadable decision is said so, not "no decision is available"', async () => {
+    serve({ 'GET /overview': overview(), 'GET /decisions/run-1': UNREADABLE })
+    const w = await open(Execution, '/execution')
+    expect(disabled(w, 'review-plan')).toBe(true)
+    expect(text(w, 'review-why')).toBe('Decision unavailable: the answer could not be read')
   })
 
   it('an RFC 3339 time with a space separator is a readable expiry', async () => {
