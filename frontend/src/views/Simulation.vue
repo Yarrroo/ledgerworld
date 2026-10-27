@@ -247,6 +247,7 @@ const graphData = computed(() => {
  * lender cites that id, never the intent. An id no shown intent minted resolves to nothing.
  */
 function requestOwners (views) {
+  const owners = new Map()
   const minted = new Map()
   for (const v of views) {
     const asked = new Set(v.cleared
@@ -255,13 +256,10 @@ function requestOwners (views) {
     for (const i of v.intents) {
       if (i.type !== 'request_advance' || !asked.has(i.intent_id)) continue
       const base = `req:${i.actor_id}:r${i.round}`
-      const n = (minted.get(base)?.n ?? 0) + 1
-      minted.set(base, { actor: i.actor_id, n })
+      const n = (minted.get(base) ?? 0) + 1
+      minted.set(base, n)
+      owners.set(n === 1 ? base : `${base}-${n}`, i.actor_id)
     }
-  }
-  const owners = new Map()
-  for (const [base, { actor: a, n }] of minted) {
-    for (let k = 1; k <= n; k++) owners.set(k === 1 ? base : `${base}-${k}`, a)
   }
   return owners
 }
