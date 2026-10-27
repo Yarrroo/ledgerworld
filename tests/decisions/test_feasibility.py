@@ -98,6 +98,29 @@ def test_the_escalation_says_the_binding_balance_was_unknown(obligation_minor, u
     assert result.escalation["binding"] == binding
 
 
+@pytest.mark.parametrize(("paid_h", "met"), [(12, True), (20, False)])
+def test_a_committed_obligation_is_met_only_when_its_flow_landed_by_its_due_round(paid_h, met):
+    """Paid through its committed reservation, an obligation has no journal of its own: the flow's
+    settlement journal dates the payment, so one that landed after its due round is unmet even
+    though the ledger marks it met."""
+    from app.finance.ledger import settle_due
+
+    w = world()
+    res = w.store.hold(ACCOUNT, 300_000, now=T0, purpose="payroll")
+    w.store.add_obligation("ob-1", ACCOUNT, 300_000, T0 + timedelta(hours=12), kind="payroll",
+                           reservation_id=res)
+    w.store.commit(res, due_at=T0 + timedelta(hours=paid_h), kind="payroll")
+    for h in range(4, 24, 4):
+        settle_due(w.store, T0 + timedelta(hours=h), round=h // 4)
+    assert w.store.rows("obligations")[0]["state"] == "met"  # the ledger says met either way
+    f = assess(w, ACCOUNT, from_round=0, to_round=5, observability=seen(set()))
+    (ob,) = f.obligations
+    assert (ob.id, ob.due_h, ob.met) == ("ob-1", 12, met)
+    assert f.feasible is met
+    if not met:  # 1,000,000 settled at t=12, nothing else reserved: the cash was there, late
+        assert ob.short_minor == 0
+
+
 def test_a_round_with_no_recorded_observability_is_refused():
     with pytest.raises(ValueError, match=r"rounds \[4, 5\]"):
         assess(world(), ACCOUNT, from_round=0, to_round=5,
