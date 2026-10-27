@@ -24,14 +24,24 @@ unknown outcome's block on its own run and restores it on every load.
   - A run with a POST still unanswered from an earlier screen (a view since left, or the same view
     before a navigation) is not reviewed again until it answers (`inflight`, tab memory like
     `unresolved`), so two screens never race on one run.
-  - A view left while a POST was in flight neither follows nor polls the answer (its read guard
-    is dropped on unmount); the screen that came back shows it at once if it shows that run, and
-    links it otherwise. Forgetting the tab lifts a block already on screen.
-- `frontend/tests/unit/decide-execute.spec.js`: 21 cases under "a POST answered after a query
+  - While this view's own POST is unanswered, no other screen it moves to offers a review: one
+    opened there could be neither confirmed nor cancelled until the old run answered.
+  - A view left while a POST was in flight neither follows nor polls the answer (`disposed`, and
+    its status reads are aborted); the outcome is still held for its run, so the screen that came
+    back shows it at once if it shows that run, and links it otherwise. Forgetting the tab lifts a
+    block already on screen.
+- `frontend/tests/unit/decide-execute.spec.js`: 23 cases under "a POST answered after a query
   navigation stays with its own run", each failing on the code before its fix.
 
+## Third merge with main (item 94)
+Item 94 checks every successful answer before anything is held (`boundApproval`; an execution
+answer must name its approval id) and lets a left view apply nothing to itself (`disposed`). Both
+rules hold under item 97's origin: the answer is checked first, then routed by `moved(from)`; a
+left view still holds the outcome for its run. The two-outcomes case now gives each approval its
+own id, as item 94 requires. Run against main's `Execution.vue`, 19 of this suite's cases fail.
+
 ## Verification
-- Tests: `npx vitest run` (frontend), 168 passed, items 95's and 96's cases included.
+- Tests: `npx vitest run` (frontend), 215 passed, items 94's, 95's and 96's cases included.
 - Build: `vite build` ok. `checks/no_secrets.py` ok, `checks/attribution.py` ok. No Python changed.
 - Browser: Playwright on the dev server with the API intercepted. Execute, hold the POST, open
   run-2, answer: run-2 shows no execution; the link (293x44 px) works from the keyboard and opens
@@ -51,3 +61,26 @@ unknown outcome's block on its own run and restores it on every load.
   place, and it empties `inflight` while a request may still answer; a real reload rebuilds the
   view and drops its requests.
 - `inflight` is kept beside `unresolved` rather than inside it; folding the two is a refactor.
+- An approval created after its screen moved on is named in a message and never held: it binds
+  nothing until executed, is never offered for Execute, and expires unused; the run can be
+  approved again.
+- A message renders beside this screen's block, so an approval answered unknown after moving to
+  the same run reads twice (block and message), both true.
+- Keying the view per run/execution query would make "moved" the same as "unmounted" and remove
+  the screen counter; that is a router change outside this item.
+- `restore()` runs once more when it clears `unseen` (a source of its own watcher); it is
+  idempotent.
+
+## Vet after the third merge
+T3 (concurrency on the execute path), converged in 2 rounds: 4 applied, 11 recorded above or
+dismissed, 0 open. Applied: no review opens on another screen while this view's POST is out
+(two cases, both failing without the guard); `executePlan` releases in one `finally`; a comment
+on where a refusal goes. Dismissed: `forgetTab()` emptying `inflight` (no app code calls it, only
+tests); `screen` not reactive (every bump is followed by `refresh()` or unmount, which recompute
+`reviewWhy`); `review=1` auto-open behind an old POST (no in-view link carries `review=1`).
+
+## Reflect
+- Other POSTs on a reused view: `Simulation.vue` fork and interview already capture their run and
+  drop another run's answer (`Simulation.vue:401`, `:488`); neither moves money. Not a gap.
+- `approval-unknown-*.png` were not retaken after this merge; that path is covered by the unit
+  cases, and the merge did not change its markup.
