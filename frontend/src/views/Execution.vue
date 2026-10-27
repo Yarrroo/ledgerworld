@@ -22,6 +22,10 @@
 
     <p v-if="flow.blocked" class="lw-alert" role="alert" data-test="blocked">{{ flow.blocked }}</p>
     <p v-else-if="flow.message" class="lw-note" role="status" data-test="message">{{ flow.message }}</p>
+    <p v-if="flow.elsewhere" class="lw-actions">
+      <RouterLink class="lw-button lw-button--quiet" data-test="elsewhere"
+                  :to="{ path: route.path, query: flow.elsewhere.query }">Open run {{ flow.elsewhere.run }}</RouterLink>
+    </p>
 
     <section v-if="incidents.length" class="lw-alert" role="alert" aria-labelledby="incident-heading"
              data-test="incident">
@@ -166,7 +170,7 @@ const token = ref('')
 
 <script setup>
 import { computed, nextTick, onUnmounted, reactive, shallowRef, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import {
   ApiError, LABELS, STATES, ScreenShell, formatMoney, formatTime, getOverview, latestOnly, money,
   request, useReading
@@ -235,7 +239,7 @@ const scenarioCost = computed(() => {
 
 const flow = reactive({
   open: false, approval: null, serverAt: 0, receivedAt: 0, submitting: false, executed: false,
-  invalid: '', blocked: '', message: ''
+  invalid: '', blocked: '', message: '', elsewhere: null
 })
 const opener = shallowRef(null)
 const heading = shallowRef(null)
@@ -296,6 +300,18 @@ function refusal (error) {
   return REFUSALS[error.code] || `Refused: ${error.message}`
 }
 
+/** The context this screen shows: the run and execution its query names. */
+const context = () => [route.query.run_id, route.query.execution_id].join('|')
+
+/** Where a POST was sent from, fixed when it is sent: its answer belongs there and nowhere else. */
+function origin () {
+  const query = Object.fromEntries(['run_id', 'execution_id']
+    .filter((k) => route.query[k]).map((k) => [k, route.query[k]]))
+  return { key: context(), run: state.body.run_id, query }
+}
+
+const moved = (from) => from.key !== context()
+
 async function openReview () {
   if (reviewWhy.value) return
   flow.open = true
@@ -317,13 +333,19 @@ async function closeReview () {
 
 async function confirmApproval () {
   if (confirmWhy.value || flow.approval) return
+  const from = origin()
   flow.submitting = true
   flow.message = ''
   try {
     const answer = await request('/approvals', {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
-      body: { run_id: state.body.run_id, policy: policy.value }
+      body: { run_id: from.run, policy: policy.value }
     })
+    if (moved(from)) { // never offered for execution under another run; unused, it expires
+      flow.message = `Approval ${answer.approval.approval_id} for run ${from.run} was created after ` +
+        'this screen moved on; it was not executed and expires unused.'
+      return
+    }
     flow.approval = answer.approval
     flow.serverAt = Date.parse(answer.as_of)
     flow.receivedAt = Date.now()
@@ -332,8 +354,9 @@ async function confirmApproval () {
     await nextTick()
     heading.value?.focus()
   } catch (error) {
-    if (unanswered(error)) flow.blocked = APPROVAL_UNKNOWN
-    else flow.message = refusal(error)
+    const where = moved(from) ? `Run ${from.run}: ` : ''
+    if (unanswered(error)) flow.blocked = where + APPROVAL_UNKNOWN
+    else flow.message = where + refusal(error)
   } finally {
     flow.submitting = false
   }
@@ -342,25 +365,42 @@ async function confirmApproval () {
 async function executePlan () {
   if (executeWhy.value) return
   const id = flow.approval.approval_id
+  const from = origin()
   flow.submitting = true
   flow.executed = true
+  let sentId = id // an unanswered POST is read back by its approval id
+  let unknown = false
   try {
     const answer = await request('/executions', {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { approval_id: id }
     })
-    flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
-    follow(answer.execution_id)
+    sentId = answer.execution_id
   } catch (error) {
     if (!unanswered(error)) {
       flow.submitting = false
-      flow.invalid = refusal(error)
+      if (moved(from)) flow.message = `Run ${from.run}: ${refusal(error)}`
+      else flow.invalid = refusal(error)
       return
     }
-    flow.blocked = `Execution outcome unknown; reading its status by approval id ${id}. Do not send again.`
-    follow(id)
+    unknown = true
   }
   flow.submitting = false
+  sent.set(from.key, sentId)
+  if (moved(from)) { // the screen shows another run now: the outcome waits for its own run
+    flow.elsewhere = { run: from.run, query: from.query }
+    if (unknown) {
+      flow.blocked = `Execution outcome unknown for run ${from.run}; its status is read by approval id ` +
+        `${id} when that run is open. Do not send again.`
+    } else {
+      flow.message = `Execution ${sentId} for run ${from.run} was accepted after this screen moved on; ` +
+        'its provider state is read when that run is open.'
+    }
+    return
+  }
+  if (unknown) flow.blocked = `Execution outcome unknown; reading its status by approval id ${id}. Do not send again.`
+  else flow.message = `Execution ${sentId} accepted; reading its provider state.`
+  follow(sentId)
   await closeReview()
 }
 
@@ -374,6 +414,7 @@ const guard = latestOnly()
 let timer = null
 const followedId = shallowRef(null)
 let followed = false // an execution this tab sent: a refresh re-reads it, never swaps it for another
+const sent = new Map() // context -> the execution this tab sent from it, read again on return
 let autoReviewed = false // review=1 opens the review once, not on every refresh
 
 const execution = computed(() =>
@@ -430,11 +471,15 @@ watch(() => state.body, (body) => {
     poll() // Refresh re-reads the execution this tab sent
     return
   }
+  pollError.value = ''
+  if (sent.has(context())) {
+    follow(sent.get(context())) // this run's own execution, sent from here before a navigation
+    return
+  }
   activeId.value = body.execution_id
   guard.select(body.execution_id)
   live.value = null
   notFound.value = Boolean(body.execution_id && !body.execution)
-  pollError.value = ''
   schedule()
   if (route.query.review === '1' && !autoReviewed && !reviewWhy.value) {
     autoReviewed = true
@@ -442,17 +487,16 @@ watch(() => state.body, (body) => {
   }
 })
 
-// The view is reused across query-only navigation: a new run or execution is a new screen.
-watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
-  if (!flow.submitting) { // an in-flight POST keeps its review until it is answered
-    flow.open = false
-    Object.assign(flow, { approval: null, invalid: '', executed: false, message: '' })
-    followed = false
-    followedId.value = null
-    activeId.value = null
-    live.value = null
-    clearTimeout(timer)
-  }
+// The view is reused across query-only navigation: a new run or execution is a new screen. A
+// POST still in flight answers to the context it was sent from (origin), never to this one.
+watch(context, () => {
+  flow.open = false
+  Object.assign(flow, { approval: null, invalid: '', executed: false, message: '', elsewhere: null })
+  followed = false
+  followedId.value = null
+  activeId.value = null
+  live.value = null
+  clearTimeout(timer)
   refresh()
 })
 
