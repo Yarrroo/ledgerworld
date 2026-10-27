@@ -387,3 +387,17 @@ def test_a_lookup_that_errors_leaves_the_event_retryable(hooked):
         verifier.verify_and_ingest(headers, body, HOOKS["now_ms"])
     assert world.gateway.conn.execute("SELECT handled FROM webhook_events").fetchall() == [(0,)]
     assert verifier.verify_and_ingest(headers, body, HOOKS["now_ms"]) == 200  # 404: nothing moved
+
+
+def test_a_hint_for_our_leg_whose_get_errors_stays_retryable(hooked):
+    world, verifier = hooked
+    world.execute(bind_terms(BASE))
+    payout = world.legs()[1]
+    for _ in range(3):
+        world.fake.respond_next(500, {"code": "internal_error", "message": "down"})
+    headers, body = hint("payout.transfer.paid", {"id": payout.provider_id,
+                                                  "request_id": payout.request_id,
+                                                  "status": "PAID"}, "evt-ours-down")
+    with pytest.raises(Exception, match="internal_error|500"):
+        verifier.verify_and_ingest(headers, body, HOOKS["now_ms"])
+    assert world.gateway.conn.execute("SELECT handled FROM webhook_events").fetchall() == [(0,)]

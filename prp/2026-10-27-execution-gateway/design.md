@@ -23,13 +23,17 @@
 2. **The approval's terms are stored** (`approval_terms`, beside `approvals`): verification
    compares what is presented with what was bound, and a restarted gateway needs a leg's
    facility and target currency, which `execution_legs` does not carry.
-3. **Ledger effects.** At queue (same transaction as the legs and `used_at`): a reservation-funded
-   payout commits its reservation into a pending_out flow named by the leg id; a spendable payout
-   and an fx leg add a pending_out flow; an advance adds a pending_in to the borrower. At settle:
-   advance → `lending.disburse` (`j-<facility>-disburse`); payout → `settle_flow` (reservation
-   settled, obligation met); fx → one journal balanced per currency from the provider's buy amount;
-   repayment → `lending.repay` for the oldest observed, unrepaid period. A failed leg's flow is
-   cancelled by the sweep (a committed reservation returns to held).
+3. **Ledger effects.** At queue (same transaction as the legs and `used_at`) every leg's money
+   is spoken for on its source: a reservation-funded leg commits its reservation into a pending_out
+   flow, any other leg adds one (named by the leg id, `<leg>:out` for an advance), and an advance
+   is also a pending_in to the borrower. At settle: payout → `settle_flow` (reservation settled,
+   obligation met); the others close their flows and post their own journal: advance →
+   `lending.disburse` (`j-<facility>-disburse`), fx → one journal balanced per currency from the
+   provider's buy amount, repayment → `lending.repay` for the oldest observed, unrepaid period,
+   which preflight already required to owe exactly the leg's amount. A failed leg's flows are
+   cancelled (a committed reservation returns to held). A journal the ledger refuses after the
+   provider moved the money is incident `ledger_refused` (added to `schema.sql`); the leg waits,
+   and the next pass that posts it closes the incident.
 4. **Connector adapter.** Connector errors map onto the outbox's: refusal → `Rejected`;
    duplicate id / 409 → `DuplicateRequest` (adopted by lookup); `OutcomeUnknown` → may have sent
    unless the transport says it never left; a retryable refusal (429) → never left. Lookups that

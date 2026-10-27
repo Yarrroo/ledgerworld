@@ -146,7 +146,10 @@ def on_hint(gateway: Gateway, hint: ReconciliationHint) -> None:
         "SELECT leg_id FROM execution_legs WHERE provider_id = ? OR request_id = ?"
         " ORDER BY provider_id IS NULL LIMIT 1", (hint.provider_id, hint.request_id)).fetchone()
     if row is not None:
-        reconcile_leg(gateway, row[0])
+        leg = gateway.outbox.leg(row[0])
+        if leg.provider_id is not None:  # the GET first, raising, so a lost one is retried
+            gateway.provider.get(leg)
+        reconcile_leg(gateway, leg.leg_id)
         return
     path = "/api/v1/transfers" if hint.kind == "transfer" else "/api/v1/conversions"
     try:

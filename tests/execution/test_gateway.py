@@ -521,3 +521,126 @@ def test_an_unreadable_create_answer_is_an_unknown_outcome_never_an_error():
     advance, payout = done.legs
     assert (advance.state, payout.state) == ("unknown", "pending")
     assert world.gateway.incidents(open_only=True)[0]["kind"] == "outcome_unknown"
+
+
+# ------------------------------------------------------------- vet round 2 regressions
+
+
+def repayable(world: World) -> None:
+    """adv-a disbursed and its first week's revenue observed: 3,600.00 owed."""
+    from app.finance.lending import disburse, observe_revenue
+
+    disburse(world.store, "adv-a", now=NOW, journal_id="j-adv-a-disburse")
+    week_end = NOW - timedelta(hours=1)
+    observe_revenue(world.store, "adv-a", week_end, 2_400_000, observed_at=week_end,
+                    source="sales ledger")
+
+
+def legs_of(approval_id: str, *legs: dict):
+    terms = copy.deepcopy(BASE) | {"approval_id": approval_id}
+    terms["legs"] = [{"index": i, "currency": "USD"} | leg for i, leg in enumerate(legs, 1)]
+    return bind_terms(terms)
+
+
+REPAY = {"kind": "repayment", "amount": 360_000, "source": "borrower-a/operating",
+         "counterparty": "lender/operating", "facility_id": "adv-a"}
+
+
+def test_a_journal_the_ledger_refuses_is_an_incident_not_a_crash():
+    world = World()
+    # The provider settles the advance, but by then the pool's balance has gone stale.
+    world.wire.after_create = lambda: world.store.observe("lender/operating", "known",
+                                                          NOW - timedelta(hours=7))
+    done = world.execute(bind_terms(BASE))
+    advance = done.legs[0]
+    assert advance.state == "submitted" and advance.journal_id is None
+    (incident,) = world.gateway.incidents(open_only=True)
+    # A stale pool adds nothing to K_p, so the disbursal is refused beyond capacity.
+    assert incident["kind"] == "ledger_refused" and "beyond_capacity" in incident["detail"]
+    reconcile.sweep(world.gateway)  # the sweep goes on past it
+    world.store.observe("lender/operating", "known", NOW)
+    world.gateway.run(BASE["approval_id"])
+    advance = world.legs()[0]
+    assert advance.state == "settled" and advance.journal_id == "j-adv-a-disburse"
+    assert world.gateway.incidents(open_only=True) == []
+
+
+def test_a_queued_advance_speaks_for_the_pools_cash():
+    from app.finance.ledger import check_outflow
+
+    world = World()
+
+    def lost():
+        for _ in range(3):
+            world.fake.respond_next(500, {"code": "internal_error", "message": "down"})
+        raise TransportTimeout(after_send=True)
+
+    world.wire.after_create = lost
+    world.execute(bind_terms(BASE))
+    assert world.legs()[0].state == "unknown"  # sent, not yet settled
+    # 35,000.00 spendable before; the 10,000.00 in flight is no longer free to spend.
+    refusal = check_outflow(world.store.view("lender/operating"), 3_000_000, NOW)
+    assert refusal is not None and refusal.code == "insufficient_spendable"
+
+
+def test_a_reservation_funded_repayment_settles_its_reservation():
+    world = World()
+    repayable(world)
+    world.store.hold("borrower-a/operating", 360_000, now=NOW, reservation_id="res-repay")
+    approval = legs_of("apr-res-repay", REPAY | {"funded_by": "reservation:res-repay"})
+    (leg,) = world.execute(approval).legs
+    assert leg.state == "settled" and leg.reconciled
+    assert world.store.reservation("res-repay").state == "settled"
+    flows = {f["flow_id"]: f["state"] for f in world.store.rows("expected_flows")}
+    assert flows[leg.leg_id] == "settled"
+
+
+def test_a_reservation_funded_advance_still_needs_an_offered_facility():
+    world = World()
+    repayable(world)  # adv-a is active now
+    approval = legs_of("apr-again", {"kind": "advance", "amount": 1_000_000,
+                                     "source": "lender/operating",
+                                     "counterparty": "borrower-a/operating",
+                                     "facility_id": "adv-a",
+                                     "funded_by": "reservation:res-line-b"})
+    world.gateway.record(approval)
+    verdict = world.gateway.execute(approval, current_snapshot_id=OBSERVED)
+    assert isinstance(verdict, Refusal) and verdict.code == "reservation_mismatch"
+    assert world.posts() == []
+
+
+def test_an_fx_leg_recorded_by_another_process_runs():
+    world = World()
+    world.store.open_account("borrower-a/eur", "borrower-a", "EUR", as_of=NOW)
+    fund(world.store, "borrower-a/operating", 5_000_000)
+    worker = world.boot(hooks=False)  # started before the approval was recorded
+    approval = legs_of("apr-fx-2", {"kind": "fx", "amount": 1_110_000,
+                                    "source": "borrower-a/operating",
+                                    "counterparty": "borrower-a/eur", "to_currency": "EUR"})
+    world.gateway.record(approval)
+    done = worker.execute(approval, current_snapshot_id=OBSERVED)
+    assert isinstance(done, Execution)
+    assert done.legs[0].state == "submitted" and done.legs[0].provider_id is not None
+
+
+def test_a_repayment_shares_spendable_cash_with_the_other_legs():
+    world = World()
+    repayable(world)
+    world.store.hold("borrower-a/operating", 1_000_000, now=NOW)  # S(now) 20,000.00
+    approval = legs_of("apr-both", REPAY, {"kind": "payout", "amount": 1_700_000,
+                                           "source": "borrower-a/operating",
+                                           "counterparty": "ben-payroll-1",
+                                           "funded_by": "spendable"})
+    world.gateway.record(approval)
+    verdict = world.gateway.execute(approval, current_snapshot_id=OBSERVED)
+    assert isinstance(verdict, Refusal) and verdict.code == "insufficient_spendable"
+
+
+def test_a_repayment_pays_exactly_what_the_observed_period_owes():
+    world = World()
+    repayable(world)
+    approval = legs_of("apr-short", REPAY | {"amount": 350_000})
+    world.gateway.record(approval)
+    verdict = world.gateway.execute(approval, current_snapshot_id=OBSERVED)
+    assert isinstance(verdict, Refusal) and verdict.code == "reservation_mismatch"
+    assert world.posts() == []

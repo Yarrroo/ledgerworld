@@ -62,6 +62,10 @@ class _Lost(Exception):
     """Another worker changed the leg between the read and the conditional write."""
 
 
+class _JournalRefused(Exception):
+    """The ledger refused the leg's journal; the settle transaction rolled back whole."""
+
+
 @dataclass(frozen=True)
 class ProviderObject:
     """What the provider holds for a leg, in the leg's own terms: its `request_id` (for a Mode B
@@ -258,13 +262,21 @@ class Outbox:
     ) -> bool:
         """One transition in one transaction, with the journal and incidents it carries; false
         when another worker moved the leg first (then nothing of it is written). With `once`,
-        also false when the leg has ever had the incident, open or closed by the operator."""
+        also false when the leg has ever had the incident, open or closed by the operator.
+
+        A journal the ledger refuses (the provider moved money the ledger will not book as it
+        stands) leaves the leg where it was and opens incident `ledger_refused`; the next pass
+        tries again, and a journal that posts closes the incident."""
         try:
             with self._tx():
                 if once and incident and self._ever(leg, incident[0]):
                     raise _Lost
                 if journal:
-                    fields["journal_id"] = self.post_journal(self.conn, leg)
+                    try:
+                        fields["journal_id"] = self.post_journal(self.conn, leg)
+                    except Exception as refused:
+                        raise _JournalRefused(f"{type(refused).__name__}: {refused}") from refused
+                    close = (*close, "ledger_refused")
                 if not self._write(leg, to, cause, obj, **fields):
                     raise _Lost
                 if incident:
@@ -276,6 +288,8 @@ class Outbox:
                         (self.clock(), leg.leg_id, kind))
         except _Lost:
             return False
+        except _JournalRefused as refused:
+            return self._incident(leg, "ledger_refused", f"the ledger refused the journal: {refused}")
         return True
 
     def _is_open(self, leg: Leg, kind: str) -> bool:

@@ -113,15 +113,16 @@ class ConnectorProvider:
         client: aw.AirwallexClient,
         leg_mode: aw.LegMode,
         *,
+        target: Callable[[ob.Leg], str],
         connected_account: str | None = None,
         global_account_id: str | None = None,
     ) -> None:
         self.client = client
         self.leg_mode = leg_mode
+        self.target = target  # an fx leg's buy currency, from the approval's stored terms
         self.connected_account = connected_account
         self.global_account_id = global_account_id
         self.seen: dict[str, aw.ProviderObject] = {}
-        self.fx_targets: dict[str, str] = {}  # leg id → buy currency
 
     def send(self, leg: ob.Leg) -> ob.ProviderObject:
         amount = Money(minor=leg.amount_minor, currency=leg.currency)
@@ -138,7 +139,7 @@ class ConnectorProvider:
                 case ("repayment", "A"):
                     obj = self.client.charge(rid, amount=amount, source=self._connected())
                 case ("fx", _):
-                    buy = self.fx_targets[leg.leg_id]
+                    buy = self.target(leg)
                     quote = self.client.quote(sell_currency=leg.currency, buy_currency=buy,
                                               amount=amount)
                     obj = self.client.create_conversion(
@@ -263,8 +264,9 @@ class Gateway:
         self.clock = clock
         self.plan = {kind: ob.LegPlan(leg.label, leg.op, leg.op.startswith("none"))
                      for kind, leg in aw.leg_plan(leg_mode).items()}
-        self.provider = ConnectorProvider(client, leg_mode, connected_account=connected_account,
-                                          global_account_id=global_account_id)
+        self.provider = ConnectorProvider(
+            client, leg_mode, target=lambda leg: self.bound(leg).to_currency,
+            connected_account=connected_account, global_account_id=global_account_id)
         proxy = store.engine.raw_connection()  # SQLite's StaticPool: the store's one connection
         self.conn = proxy.driver_connection
         proxy.close()
@@ -274,8 +276,6 @@ class Gateway:
         self.outbox = ob.Outbox(self.conn, self._post_journal,
                                 clock=lambda: self.clock().isoformat(), on_point=on_point,
                                 transaction=self.transaction)
-        for (terms,) in self.conn.execute("SELECT terms FROM approval_terms").fetchall():
-            self._targets(BoundApproval.model_validate_json(terms))
 
     # -------------------------------------------------------------------- transactions
 
@@ -312,12 +312,15 @@ class Gateway:
                  approval.expires_at.isoformat()))
             self.conn.execute("INSERT INTO approval_terms VALUES (?, ?)",
                               (approval.approval_id, approval.model_dump_json()))
-        self._targets(approval)
 
     def stored(self, approval_id: str) -> BoundApproval | None:
         row = self.conn.execute("SELECT terms FROM approval_terms WHERE approval_id = ?",
                                 (approval_id,)).fetchone()
         return None if row is None else BoundApproval.model_validate_json(row[0])
+
+    def bound(self, leg: ob.Leg) -> ApprovalLeg:
+        """The C3 leg an outbox row was queued from."""
+        return next(x for x in self.stored(leg.approval_id).legs if x.index == leg.index)
 
     def execute(
         self, presented: object, *, current_snapshot_id: str
@@ -364,35 +367,37 @@ class Gateway:
         names = [d[0] for d in cursor.description]
         return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
 
-    def _targets(self, approval: BoundApproval) -> None:
-        for leg in approval.legs:
-            if leg.to_currency is not None:
-                rid = ob.request_id(approval.plan_hash, leg.index, leg.kind)
-                self.provider.fx_targets[rid] = leg.to_currency
-
     # ------------------------------------------------------------------------- preflight
 
     def preflight(self, approval: BoundApproval, now: datetime) -> binding.Refusal | None:
         """Every leg against the ledger (and, in sandbox mode, the wallet): the first refusal.
 
-        Discretionary outflows from one account are checked together, so two legs cannot each
-        pass on the same spendable cash."""
+        The legs paid from one account are checked together, so two legs cannot each pass on
+        the same spendable cash: discretionary ones against S(now) and the floor headroom
+        (`check_outflow`), and with the repayments, which are owed, against S(now) alone."""
         spend: dict[str, int] = defaultdict(int)
+        owed: dict[str, int] = defaultdict(int)
         wallet: dict[tuple[str, bool], int] = defaultdict(int)
         for leg in approval.legs:
-            if refusal := self._check_leg(approval.entity, leg, now, spend):
+            if refusal := self._check_leg(approval.entity, leg, now, spend, owed):
                 return refusal
             if (leg.kind, self.leg_mode) in DEBITS_WALLET:
                 on_behalf = self.leg_mode == "A" and leg.kind == "payout"
                 wallet[(leg.amount.currency, on_behalf)] += leg.amount.minor
-        for account_id, amount in sorted(spend.items()):
-            refusal = check_outflow(self.store.view(account_id), amount, now)
-            if refusal is not None:
-                return _from_ledger(refusal, f"{account_id} pays {amount}")
+        for account_id in sorted(spend.keys() | owed.keys()):
+            view = self.store.view(account_id)
+            if spend[account_id]:
+                refusal = check_outflow(view, spend[account_id], now)
+                if refusal is not None:
+                    return _from_ledger(refusal, f"{account_id} pays {spend[account_id]}")
+            total, s_now = spend[account_id] + owed[account_id], spendability(view, now, now).value
+            if total > s_now:
+                return binding.Refusal("insufficient_spendable",
+                                       f"{account_id} pays {total} of {s_now} spendable")
         return self._wallet(wallet) if self.mode == "sandbox" else None
 
     def _check_leg(self, entity: str, leg: ApprovalLeg, now: datetime,
-                   spend: dict[str, int]) -> binding.Refusal | None:
+                   spend: dict[str, int], owed: dict[str, int]) -> binding.Refusal | None:
         source, other = self._view(leg.source), self._view(leg.counterparty)
         owner = source.entity_id if source else None
         other_owner = other.entity_id if other else None
@@ -419,8 +424,6 @@ class Gateway:
         state = state_of(view, now)
         if state != "known":
             return binding.Refusal(f"{state}_balance", f"{leg.source} is {state}")
-        if leg.funded_by and leg.funded_by.startswith("reservation:"):
-            return self._held(leg)
         if leg.kind == "advance":
             if leg.amount.minor != f.limit_minor or f.state != "offered":
                 return binding.Refusal("reservation_mismatch", f"{f.facility_id} disburses its "
@@ -428,11 +431,13 @@ class Gateway:
             refusal = lending.check_draw(self.store, f.pool, leg.amount.minor, now)
             if refusal is not None:
                 return _from_ledger(refusal, f"K_p of {f.pool}")
-        elif leg.kind == "repayment":  # owed, not chosen: within S(now), the floor does not apply
-            if leg.amount.minor > spendability(view, now, now).value:
-                return binding.Refusal("insufficient_spendable", f"{leg.source} cannot repay")
-            return None
-        spend[leg.source] += leg.amount.minor
+        elif leg.kind == "repayment" and self.period(f, leg.amount.minor, now) is None:
+            return binding.Refusal("reservation_mismatch", f"leg {leg.index} pays exactly what "
+                                   f"the oldest observed, unrepaid period of {f.facility_id} owes")
+        if leg.funded_by and leg.funded_by.startswith("reservation:"):
+            return self._held(leg)
+        # A repayment is owed, not chosen: it needs S(now), and the floor does not apply.
+        (owed if leg.kind == "repayment" else spend)[leg.source] += leg.amount.minor
         return None
 
     def _held(self, leg: ApprovalLeg) -> binding.Refusal | None:
@@ -462,6 +467,28 @@ class Gateway:
                                            f"{held.get(currency, 0)} {currency} of {amount}")
         return None
 
+    def period(self, f: Facility, amount: int, now: datetime,
+               conn: Connection | None = None) -> datetime | None:
+        """The facility's oldest observed, unrepaid period, when it owes exactly `amount`."""
+        if f.state != "active":
+            return None
+        with self.store.reading(conn) as c:
+            periods = c.execute(select(revenue_observations.c.period_end).where(
+                revenue_observations.c.facility_id == f.facility_id,
+                revenue_observations.c.observed_at <= now.astimezone(UTC).replace(tzinfo=None))
+                .order_by(revenue_observations.c.period_end)).scalars().all()
+            repaid = set(c.execute(select(journals.c.journal_id).where(
+                journals.c.kind == "advance_repayment")).scalars())
+            for period in periods:
+                end = period.replace(tzinfo=UTC)
+                if contracts.repay_journal_id(f.facility_id, end) in repaid:
+                    continue
+                revenue = lending.observed_revenue(self.store, f.facility_id, end, now, conn=c)
+                due = contracts.repayment_minor(revenue, f.repay_share_bps,
+                                                contracts.outstanding_minor(self.store, f, conn=c))
+                return end if due == amount else None
+        return None
+
     def _view(self, account_id: str) -> AccountView | None:
         try:
             return self.store.view(account_id)
@@ -479,39 +506,40 @@ class Gateway:
     # --------------------------------------------------------------------- ledger effects
 
     def _at_queue(self, leg: ApprovalLeg, row: ob.Leg, now: datetime) -> None:
-        """What the ledger records the moment a leg is queued: its money is spoken for."""
-        c = self.sa
+        """What the ledger records the moment a leg is queued: the money it will spend is
+        spoken for on its source (a committed reservation or a pending_out), and an advance is
+        a pending_in to the borrower until it settles."""
+        c, out = self.sa, out_flow(row.leg_id, leg.kind)
         if leg.funded_by and leg.funded_by.startswith("reservation:"):
             self.store.commit(leg.funded_by.removeprefix("reservation:"), due_at=now,
-                              flow_id=row.leg_id, kind=f"{leg.kind}_leg", conn=c)
-        elif leg.kind == "advance":
+                              flow_id=out, kind=f"{leg.kind}_leg", conn=c)
+        else:
+            self.store.expect(leg.source, "out", leg.amount.minor, now, kind=f"{leg.kind}_leg",
+                              flow_id=out, conn=c)
+        if leg.kind == "advance":
             self.store.expect(leg.counterparty, "in", leg.amount.minor, now,
                               kind="advance_in_flight", flow_id=row.leg_id, conn=c)
-        elif leg.kind in ("payout", "fx"):
-            self.store.expect(leg.source, "out", leg.amount.minor, now, kind=f"{leg.kind}_leg",
-                              flow_id=row.leg_id, conn=c)
 
     def _post_journal(self, _conn: object, leg: ob.Leg) -> str:
         """The leg's journal, inside the settle transaction; returns its id."""
         c, now, mode = self.sa, self.clock(), self._journal_mode()
-        bound = next(x for x in self.stored(leg.approval_id).legs if x.index == leg.index)
+        bound = self.bound(leg)
+        if leg.kind == "payout":  # the committed flow pays out: reservation and obligation close
+            return self.store.settle_flow(
+                leg.leg_id, counterparty=self.store.external_account(leg.currency, conn=c),
+                at=now, journal_id=f"j-{leg.leg_id}", conn=c).journal_id
+        self._flows(leg.leg_id, "settled")  # the journal below carries the cash itself
         if leg.kind == "advance":
-            self._close_flow(leg.leg_id, "settled")
             return lending.disburse(
                 self.store, bound.facility_id, now=now, from_account=leg.source,
                 borrower_account=leg.counterparty, journal_id=f"j-{bound.facility_id}-disburse",
                 mode=mode, source_leg_id=leg.leg_id, conn=c).journal_id
         if leg.kind == "repayment":
             return self._repay(bound, leg, now, mode)
-        if leg.kind == "payout":
-            return self.store.settle_flow(
-                leg.leg_id, counterparty=self.store.external_account(leg.currency, conn=c),
-                at=now, journal_id=f"j-{leg.leg_id}", conn=c).journal_id
         seen = self.provider.seen[leg.leg_id]  # fx: the buy side as the GET showed it
         buy = aw.to_money(seen.raw["buy_amount"], seen.raw["buy_currency"])
         if buy.currency != bound.to_currency:
             raise ValueError(f"{leg.leg_id} bought {buy.currency}, bound {bound.to_currency}")
-        self._close_flow(leg.leg_id, "settled")
         sold_to = self.store.external_account(leg.currency, conn=c)
         bought_from = self.store.external_account(buy.currency, conn=c)
         return self.store.apply(Journal(
@@ -523,53 +551,56 @@ class Gateway:
 
     def _repay(self, bound: ApprovalLeg, leg: ob.Leg, now: datetime, mode: str) -> str:
         """The facility's oldest observed, unrepaid period, repaid in exactly the leg's amount."""
-        c = self.sa
-        periods = c.execute(select(revenue_observations.c.period_end).where(
-            revenue_observations.c.facility_id == bound.facility_id)
-            .order_by(revenue_observations.c.period_end)).scalars().all()
-        for period in periods:
-            end = period.replace(tzinfo=UTC)
-            repaid = contracts.repay_journal_id(bound.facility_id, end)
-            if c.execute(select(journals.c.journal_id)
-                         .where(journals.c.journal_id == repaid)).first():
-                continue
-            paid = lending.repay(self.store, bound.facility_id, end, now=now,
-                                 from_account=leg.source, to_account=leg.counterparty,
-                                 mode=mode, source_leg_id=leg.leg_id, conn=c)
-            if paid.journal is None or paid.amount_minor != leg.amount_minor:
-                raise ValueError(f"{leg.leg_id}: the observed period repays "
-                                 f"{paid.amount_minor}, the leg {leg.amount_minor}")
-            return paid.journal.journal_id
-        raise ValueError(f"{leg.leg_id}: no observed, unrepaid period of {bound.facility_id}")
+        f = contracts.facility(self.store, bound.facility_id, conn=self.sa)
+        end = self.period(f, leg.amount_minor, now, conn=self.sa)
+        if end is None:
+            raise ValueError(f"{leg.leg_id}: no observed, unrepaid period of {f.facility_id} "
+                             f"owes {leg.amount_minor}")
+        paid = lending.repay(self.store, f.facility_id, end, now=now, from_account=leg.source,
+                             to_account=leg.counterparty, mode=mode, source_leg_id=leg.leg_id,
+                             conn=self.sa)
+        return paid.journal.journal_id
 
     def _journal_mode(self) -> str:
         if self.mode == "fake":
             return "fake"
         return "sandbox_simulation" if self.leg_mode == "B" else "sandbox"
 
-    def _close_flow(self, flow_id: str, state: str) -> int:
-        return self.sa.execute(update(expected_flows).where(
-            expected_flows.c.flow_id == flow_id, expected_flows.c.state == "pending")
-            .values(state=state)).rowcount
+    def _flows(self, leg_id: str, state: str) -> int:
+        """Close the leg's pending flows (`settled` or `cancelled`) and the reservation its
+        outflow committed: settled with it, or held again for its obligation when cancelled."""
+        c, ids = self.sa, (leg_id, f"{leg_id}:out")
+        flows = c.execute(select(expected_flows.c.reservation_id).where(
+            expected_flows.c.flow_id.in_(ids), expected_flows.c.state == "pending")).all()
+        c.execute(update(expected_flows).where(expected_flows.c.flow_id.in_(ids),
+                                               expected_flows.c.state == "pending")
+                  .values(state=state))
+        for (reservation_id,) in flows:
+            if reservation_id:
+                c.execute(update(reservations).where(
+                    reservations.c.reservation_id == reservation_id,
+                    reservations.c.state == "committed")
+                    .values(state="settled" if state == "settled" else "held"))
+        return len(flows)
 
     def release_failed(self, execution_id: str | None = None) -> None:
-        """A failed leg moved nothing: its pending flow is cancelled, and a reservation it
+        """A failed leg moved nothing: its pending flows are cancelled, and a reservation it
         committed is held again for the obligation it was made for."""
-        # Only failed legs whose flow is still pending: a released leg is not read again.
-        where = ("state = 'failed' AND leg_id IN"
-                 " (SELECT flow_id FROM expected_flows WHERE state = 'pending')")
+        # Only failed legs with a flow still pending: a released leg is not read again.
+        where = ("state = 'failed' AND (leg_id IN (SELECT flow_id FROM expected_flows"
+                 " WHERE state = 'pending') OR leg_id || ':out' IN (SELECT flow_id FROM"
+                 " expected_flows WHERE state = 'pending'))")
         args: tuple = ()
         if execution_id is not None:
             where, args = f"{where} AND approval_id = ?", (execution_id,)
         for leg in self.outbox._legs(where, args):
             with self.transaction():
-                if not self._close_flow(leg.leg_id, "cancelled"):
-                    continue
-                if leg.funded_by and leg.funded_by.startswith("reservation:"):
-                    self.sa.execute(update(reservations).where(
-                        reservations.c.reservation_id == leg.funded_by.removeprefix(
-                            "reservation:"), reservations.c.state == "committed")
-                        .values(state="held"))
+                self._flows(leg.leg_id, "cancelled")
+
+
+def out_flow(leg_id: str, kind: str) -> str:
+    """The pending_out a leg spends through; an advance's own id names its pending_in."""
+    return f"{leg_id}:out" if kind == "advance" else leg_id
 
 
 def _from_ledger(refusal: LedgerRefusal, where: str) -> binding.Refusal:
