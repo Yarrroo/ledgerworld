@@ -90,7 +90,9 @@
       "tests/simulation/test_actions.py::test_acting_by_data_runs_only_the_social_subset",
       "tests/simulation/test_actions.py::test_a_social_schema_with_a_list_type_refuses_instead_of_raising",
       "tests/simulation/test_actions.py::test_a_response_of_social_calls_only_still_queues_no_action",
-      "tests/simulation/test_actions.py::test_a_tool_outside_the_offer_is_refused_naming_every_offered_tool"
+      "tests/simulation/test_actions.py::test_a_tool_outside_the_offer_is_refused_naming_every_offered_tool",
+      "tests/simulation/test_actions.py::test_an_integral_float_is_not_an_integer_argument",
+      "tests/simulation/test_actions.py::test_a_turn_is_remembered_under_the_agents_id_and_recorded_before_its_posts_run"
     ]},
     {"id": "public_shock_traceable_response", "name": "public shock traceable response", "tests": []},
     {"id": "failed_round_rolls_back", "name": "failed round rolls back", "tests": []},

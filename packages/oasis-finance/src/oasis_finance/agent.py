@@ -157,10 +157,12 @@ class FinanceAgent(SocialAgent):
             social=self._social_schemas,
             system=self.system_message.content if self.system_message else None,
         )
+        # Recorded before the posts run: a platform error leaves this turn, not the last, on view.
+        self.last_turn, self.last_social_results = result, ()
         outcomes = tuple([(call.name, await self._social_tools[call.name].async_call(
             **call.arguments)) for call in result.social])
+        self.last_social_results = outcomes
         self._remember(observation, result, outcomes)
-        self.last_turn, self.last_social_results = result, outcomes
         return result
 
     def _remember(self, observation: Observation, result: TurnResult, outcomes: tuple) -> None:
@@ -173,9 +175,9 @@ class FinanceAgent(SocialAgent):
         # Written as records: update_memory re-counts the whole history's tokens each time.
         self.memory.write_records([
             MemoryRecord(message=BaseMessage.make_user_message("User", observation.to_prompt()),
-                         role_at_backend=OpenAIBackendRole.USER),
+                         role_at_backend=OpenAIBackendRole.USER, agent_id=self.agent_id),
             MemoryRecord(message=BaseMessage.make_assistant_message("Assistant", "; ".join(done)),
-                         role_at_backend=OpenAIBackendRole.ASSISTANT),
+                         role_at_backend=OpenAIBackendRole.ASSISTANT, agent_id=self.agent_id),
         ])
 
     # ----------------------------------------------------------- other dispatch paths (S6)

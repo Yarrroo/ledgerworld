@@ -430,3 +430,34 @@ def test_a_tool_outside_the_offer_is_refused_naming_every_offered_tool():
     assert "'like_post' is not one of your tools ['create_post', 'no_action']" in repair
     assert "amount_minor" not in repair  # no money hint when no money call was refused
     assert result.alert is None and [i.type for i in queue.drain()] == ["no_action"]
+
+
+def test_an_integral_float_is_not_an_integer_argument():
+    schema = {"function": {"name": "like_post", "parameters": {
+        "properties": {"post_id": {"type": "integer"}}, "required": ["post_id"]}}}
+    refused = parse_social_call(RawCall("like_post", {"post_id": 1.0}), schema)
+    assert refused.code == "malformed_tool_args" and "like_post.post_id" in refused.detail
+    assert parse_social_call(RawCall("like_post", '{"post_id": 1}'), schema).arguments == {
+        "post_id": 1}
+
+
+def test_a_turn_is_remembered_under_the_agents_id_and_recorded_before_its_posts_run():
+    queue = IntentQueue("shock")
+    model = ListModel("feed", 3, [[{"name": "create_post", "args": {"content": "news"}}]])
+    feed = build_finance_agent(ACTORS["feed"], 0, queue, model=model)
+
+    async def broken(content):
+        raise ConnectionError("platform gone")
+
+    feed._social_tools["create_post"].func = broken
+    with pytest.raises(ConnectionError):
+        asyncio.run(one_turn(feed, build_observation(ACTORS["feed"], [], 3, 12)))
+    assert feed.last_turn is not None and feed.last_turn.social[0].name == "create_post"
+    assert feed.last_social_results == ()
+
+    feed2 = build_finance_agent(ACTORS["feed"], 1, IntentQueue("shock"), model=ListModel(
+        "feed", 3, [[{"name": "no_action", "args": {}}]]))
+    asyncio.run(one_turn(feed2, build_observation(ACTORS["feed"], [], 3, 12)))
+    written = [r for r in feed2.memory.retrieve() if r.memory_record.message.content
+               and "queued" in r.memory_record.message.content]
+    assert written and all(r.memory_record.agent_id == feed2.agent_id for r in written)

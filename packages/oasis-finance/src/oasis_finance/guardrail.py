@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.finance.schemas import ActionIntent
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, validators
 
 from oasis_finance.actions import (
     FinanceActor,
@@ -105,6 +105,12 @@ def repair_marker(actor_id: str, round: int) -> str:
     return f"repair:{actor_id}:r{round}"
 
 
+# JSON Schema counts 1.0 as an integer; a model's float never reaches a platform action as an id.
+_Validator = validators.extend(Draft202012Validator, type_checker=(
+    Draft202012Validator.TYPE_CHECKER.redefine(
+        "integer", lambda _, v: isinstance(v, int) and not isinstance(v, bool))))
+
+
 def parse_social_call(call: RawCall, schema: dict[str, Any]) -> RawCall | ToolCallError:
     """A social call with its arguments decoded and valid against the tool's JSON schema.
 
@@ -115,7 +121,7 @@ def parse_social_call(call: RawCall, schema: dict[str, Any]) -> RawCall | ToolCa
     if isinstance(args, ToolCallError):
         return args
     params = {**schema["function"].get("parameters", {}), "additionalProperties": False}
-    errors = sorted(Draft202012Validator(params).iter_errors(dict(args)),
+    errors = sorted(_Validator(params).iter_errors(dict(args)),
                     key=lambda e: [str(p) for p in e.path])
     if errors:
         return ToolCallError(call.name, "malformed_tool_args", "; ".join(
