@@ -222,6 +222,12 @@
       "tests/reports/test_provenance.py::test_a_placeholder_in_extra_braces_is_rejected",
       "tests/reports/test_provenance.py::test_ground_refuses_two_results_under_one_evidence_id"
     ]},
-    {"id": "interview_read_only", "name": "interview read-only", "tests": []}
+    {"id": "interview_read_only", "name": "interview read-only", "tests": [
+      "tests/simulation/test_interview.py::test_an_interview_sees_only_the_actors_own_history",
+      "tests/simulation/test_interview.py::test_an_interview_never_sees_a_future_event",
+      "tests/simulation/test_interview.py::test_an_interview_offers_no_tool_and_submits_no_intent",
+      "tests/simulation/test_interview.py::test_an_interview_leaves_the_world_state_hash_unchanged",
+      "tests/simulation/test_interview.py::test_an_interview_reads_only_its_own_branch"
+    ]}
   ]
 }
