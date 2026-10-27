@@ -9,6 +9,7 @@ Two guards (design/modules/decisions/HANDOFF.md, fixture `nonanticipativity.json
 - `paired_history_check`, which runs a policy over every scenario of a tree: two scenarios whose
   observable histories (the hash of the full view each round) are equal through round r must get
   equal decisions at r. It catches a policy that reaches the future without touching the view.
+  `check_pairs` is its comparison; `candidates.evaluate` runs it over each policy's branches too.
 
 A world is a flat mapping from a dotted path (ids in brackets,
 `accounts[borrower-a/operating].pending_in[rcv-1].expected_h`) to a `Leaf`: the values the leaf
@@ -59,9 +60,12 @@ class AnticipationViolation(Exception):
                    read_at_h=read_at_h, available_at_h=available_at_h)
 
     @classmethod
-    def side_channel(cls, round_: int, scenarios: list[str]) -> AnticipationViolation:
-        return cls("decisions differ on identical observable history",
-                   node={"round": round_, "scenarios": scenarios})
+    def side_channel(cls, round_: int, scenarios: list[str],
+                     policy: str | None = None) -> AnticipationViolation:
+        node: dict = {"round": round_, "scenarios": scenarios}
+        if policy is not None:
+            node["policy"] = policy
+        return cls("decisions differ on identical observable history", node=node)
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,12 +239,24 @@ def paired_history_check(policy: Policy, tree: ScenarioTree) -> dict[str, list[D
     seen = observable_histories(tree)
     decisions = {sid: [guarded_decide(policy, world, r) for r in range(tree.rounds)]
                  for sid, world in tree.scenarios.items()}
-    acted = {sid: [canonical(d.actions) for d in ds] for sid, ds in decisions.items()}
-    for r in range(tree.rounds):
-        for a, b in combinations(decisions, 2):
-            if seen[a][: r + 1] == seen[b][: r + 1] and acted[a][r] != acted[b][r]:
-                raise AnticipationViolation.side_channel(r, [a, b])
+    check_pairs(seen, {sid: [d.actions for d in ds] for sid, ds in decisions.items()})
     return decisions
+
+
+def check_pairs(histories: Mapping[str, list[str]], actions: Mapping[str, list[list]],
+                rounds: list[int] | None = None, *, policy: str | None = None) -> None:
+    """Raise `AnticipationViolation` at the first round (rising, then scenario pairs in order)
+    where two scenarios' observable histories are equal through it and one policy's decisions
+    at it differ. ``histories[sid][i]`` is the view's hash at the i-th decision, taken before
+    the policy saw it; ``rounds[i]`` names that decision's round (``i`` by default)."""
+    acted = {sid: [canonical(a) for a in ds] for sid, ds in actions.items()}
+    for i in range(max((len(h) for h in histories.values()), default=0)):
+        for a, b in combinations(histories, 2):
+            if i < min(len(acted[a]), len(acted[b])) \
+                    and histories[a][: i + 1] == histories[b][: i + 1] \
+                    and acted[a][i] != acted[b][i]:
+                raise AnticipationViolation.side_channel(
+                    rounds[i] if rounds is not None else i, [a, b], policy=policy)
 
 
 # ----------------------------------------------------------------------- the C5 snapshot as a world
