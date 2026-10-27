@@ -20,11 +20,12 @@ Built on [MiroFish](https://github.com/666ghj/MiroFish) (AGPL-3.0); see `UPSTREA
   proposes and the ledger decides.
 - **Plans compared on the same shock.** No action, a fixed reserve and an integrated plan (draw an
   advance, defer, convert just in time) each run in a fresh branch on the same seed. They are
-  ranked by obligations met, then reserve floor kept, then funding cost.
+  ranked by unmet obligations, then branches that breach the reserve floor, then the largest
+  short, then funding cost. Nothing is averaged.
 - **Execution only outside the simulation.** The chosen plan is decided again on the observed
-  snapshot and bound into an approval. Only then does it cross the execution gateway to Airwallex,
-  and every leg is reconciled against the ledger by a `GET`. The simulation process never holds an
-  Airwallex credential.
+  snapshot and bound into an approval. Only then does it cross the execution gateway to Airwallex.
+  Each transfer and conversion leg is reconciled against the ledger by a `GET`. The simulation
+  process never holds an Airwallex credential.
 
 ![Overview in fake mode](docs/screenshots/overview-fake.png)
 
@@ -47,7 +48,7 @@ To see the screens in fake mode:
 ```bash
 npm --prefix frontend ci
 npm --prefix frontend run build     # the build calls the API at http://localhost:5001 by default
-AIRWALLEX_MODE=fake LEDGERWORLD_ROLE=api LEDGERWORLD_DEMO_TOKEN=local-demo \
+AIRWALLEX_MODE=fake LEDGERWORLD_ROLE=api LEDGERWORLD_DEMO_TOKEN="$(openssl rand -hex 16)" \
   uv run bash deploy/entrypoint.sh
 # open http://localhost:5001/overview  (also /treasury, /lending, /simulation?run_id=<run>)
 ```
@@ -113,10 +114,13 @@ are in [docs/schema.md](docs/schema.md).
   money moves. When connected accounts are not enabled (Mode B), the advance is a sandbox deposit
   simulation labelled "advance inflow (sandbox simulation)", and it is never described as a
   lender disbursement through Airwallex. The repayment is ledger-only and labelled simulated. The
-  receipt says which mode ran. No sandbox receipt is committed in this repository yet.
+  connector has no deposit lookup, so a Mode B deposit whose outcome is unknown stays unknown for
+  the operator rather than being resolved by a `GET`. The receipt says which mode ran. No sandbox
+  receipt is committed in this repository yet.
 - **Scripted vs live model:** in fake mode, the actors' choices come from a `ScriptedModel` plan.
-  That proves the wiring, not an independent model's judgement. Health reports `model: scripted`
-  or `live`.
+  That proves the wiring, not an independent model's judgement. The demo receipt records
+  `model: scripted` or `live`. The deployed worker runs scripted families only, and
+  `/api/v1/health` reports `model: scripted`.
 - **Replay:** a branch re-run from transcripts is labelled replay. The demo simulates its branches
   afresh on every run.
 - **Not built yet:** there are no Decisions or Execution screens; the demo shows those beats in
@@ -133,12 +137,16 @@ this project's.
 - `ATTRIBUTION.md` lists every file this project added and every upstream file it changed, with
   the reason. `checks/attribution.py` fails the merge gate when a changed upstream file is not
   listed.
-- `UPSTREAM.md` explains how to diff against upstream (`git diff upstream-7657031`).
+- To see every change against upstream, run
+  `git diff --name-status dcc88f9b1da4145a06769a7f979d50d77e1dba25`. That is the upstream tree
+  hash, which needs no tag. `UPSTREAM.md` shows how to tag the import commit as
+  `upstream-7657031` in your clone.
 - `NOTICE` names the Apache-2.0 dependencies (`camel-oasis`, `camel-ai`). They are extended in
   `packages/oasis-finance` and never edited.
 
 ## Licence
 
 AGPL-3.0, the licence of the upstream engine and of the combined work. See `LICENSE` and `NOTICE`.
-A deployment builds the frontend with `VITE_SOURCE_URL` set to its source repository, so that
-every page footer links the source (AGPL §13).
+Building the frontend with `VITE_SOURCE_URL=<repository URL>` adds a source link to every page
+footer (AGPL §13). The image in `deploy/` does not set it yet, so a public deployment must pass
+it at build time.

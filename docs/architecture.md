@@ -102,6 +102,10 @@ clocks, RNG, event cursor and queues. A rejected intent becomes `no_action` and 
    success in the leg's own amount and currency. A webhook is a verified hint that triggers that
    `GET`.
 
+The exception is the Mode B deposit. It carries no `request_id` (its reference carries the leg id)
+and the connector has no deposit lookup, so an unknown deposit stays unknown for the operator.
+The orphan sweep skips deposits for the same reason.
+
 | Leg | Mode A · connected accounts | Mode B · fallback |
 |---|---|---|
 | Advance | connected-account transfer | sandbox deposit simulation, labelled as such |

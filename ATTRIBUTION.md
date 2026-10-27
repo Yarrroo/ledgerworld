@@ -34,10 +34,9 @@ an upstream path is modified or deleted and not listed in the second table.
 | `deploy/` | one-machine deployment: compose file, image, role entrypoint, host settings, their tests |
 | `scripts/demo.sh` | the one-command demo |
 | `refmodel/` | reference models and findings used to check the simulation design |
-| `tests/` (except the upstream `test_local_star_*` files) | the offline test suite by area |
+| `tests/` (except the upstream `test_local_star_*` files) | the offline test suite by area, and the tests of the merge gate (`tests/test_skeleton.py`) |
 | `docs/` | architecture, schema and screenshots |
 | `checks/` | the merge gate and its checks |
-| `tests/test_skeleton.py` | tests of the merge gate and its checks |
 | `.github/workflows/ci.yml` | CI: merge gate, PostgreSQL tests |
 | `prp/` | system brief, design and task briefs |
 
