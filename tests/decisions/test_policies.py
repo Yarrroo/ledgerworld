@@ -526,10 +526,10 @@ def test_a_side_channel_policy_is_caught_by_evaluate_before_any_ranking(tmp_path
                                  "policy": "call-order"}
 
 
-def test_an_honest_policy_on_the_same_pair_passes_evaluate(tmp_path):
-    _, evaluations = asyncio.run(compare(tmp_path, world_snapshot(), lf1_s1_s2(),
-                                         policies=[Integrated()]))
-    s1, s2 = (e.decisions for e in evaluations)
+def test_an_honest_policy_on_the_same_pair_passes_evaluate(comparison):
+    _, evals, _ = comparison  # evaluate returned: every honest policy passed the paired check
+    assert len(evals) == 9
+    s1, s2 = evals["s1", "integrated"].decisions, evals["s2", "integrated"].decisions
     assert s1[0]["obs_hash"] == s2[0]["obs_hash"] and s1[0]["actions"] == s2[0]["actions"] != []
 
 

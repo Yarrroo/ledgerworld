@@ -507,12 +507,9 @@ async def evaluate(run_id: str, cp: Checkpoint, scenarios: Mapping[str, Sequence
                     decisions=driver.decisions, capacity=capacity_by_round,
                     schedule_hash=digest, seed=world.seed,
                     treasury_model_calls=len(silent.calls), replay=branch.replay))
-            # the paired-history guard: equal observable history → equal decision, per policy
-            paired = histories.setdefault(policy.id, {})
-            paired[sid] = driver.decisions
-            check_pairs({s: [d["obs_hash"] for d in ds] for s, ds in paired.items()},
-                        {s: [d["actions"] for d in ds] for s, ds in paired.items()},
-                        [d["round"] for d in driver.decisions], policy=policy.id)
+            histories.setdefault(policy.id, {})[sid] = driver.decisions
+    for pid, by_scenario in histories.items():  # equal observable history → equal decision
+        check_pairs(by_scenario, policy=pid)
     return out
 
 

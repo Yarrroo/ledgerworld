@@ -239,24 +239,25 @@ def paired_history_check(policy: Policy, tree: ScenarioTree) -> dict[str, list[D
     seen = observable_histories(tree)
     decisions = {sid: [guarded_decide(policy, world, r) for r in range(tree.rounds)]
                  for sid, world in tree.scenarios.items()}
-    check_pairs(seen, {sid: [d.actions for d in ds] for sid, ds in decisions.items()})
+    check_pairs({sid: [{"round": r, "obs_hash": seen[sid][r], "actions": d.actions}
+                       for r, d in enumerate(ds)] for sid, ds in decisions.items()})
     return decisions
 
 
-def check_pairs(histories: Mapping[str, list[str]], actions: Mapping[str, list[list]],
-                rounds: list[int] | None = None, *, policy: str | None = None) -> None:
-    """Raise `AnticipationViolation` at the first round (rising, then scenario pairs in order)
-    where two scenarios' observable histories are equal through it and one policy's decisions
-    at it differ. ``histories[sid][i]`` is the view's hash at the i-th decision, taken before
-    the policy saw it; ``rounds[i]`` names that decision's round (``i`` by default)."""
-    acted = {sid: [canonical(a) for a in ds] for sid, ds in actions.items()}
-    for i in range(max((len(h) for h in histories.values()), default=0)):
-        for a, b in combinations(histories, 2):
-            if i < min(len(acted[a]), len(acted[b])) \
-                    and histories[a][: i + 1] == histories[b][: i + 1] \
+def check_pairs(decisions: Mapping[str, list[Mapping[str, Any]]], *,
+                policy: str | None = None) -> None:
+    """Raise `AnticipationViolation` at the first decision (rising, then scenario pairs in
+    order) where two scenarios' observable histories are equal through it and one policy's
+    actions at it differ. Each scenario's decisions are ``{round, obs_hash, actions}`` in
+    rising rounds, ``obs_hash`` the view's hash taken before the policy saw it."""
+    seen = {sid: [d["obs_hash"] for d in ds] for sid, ds in decisions.items()}
+    acted = {sid: [canonical(d["actions"]) for d in ds] for sid, ds in decisions.items()}
+    for i in range(max(map(len, seen.values()), default=0)):
+        for a, b in combinations(decisions, 2):
+            if i < min(len(seen[a]), len(seen[b])) and seen[a][: i + 1] == seen[b][: i + 1] \
                     and acted[a][i] != acted[b][i]:
-                raise AnticipationViolation.side_channel(
-                    rounds[i] if rounds is not None else i, [a, b], policy=policy)
+                raise AnticipationViolation.side_channel(decisions[a][i]["round"], [a, b],
+                                                         policy=policy)
 
 
 # ----------------------------------------------------------------------- the C5 snapshot as a world
