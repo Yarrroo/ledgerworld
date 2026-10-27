@@ -201,6 +201,8 @@ obligations = Table(
     CheckConstraint("amount_minor > 0"),
     CheckConstraint("state IN ('open', 'met', 'missed', 'deferred')"),
     Index("obligations_open", "account_id", "state", "due_at"),
+    # One reservation backs at most one obligation, so one payment never meets two. Null repeats.
+    Index("obligations_one_per_reservation", "reservation_id", unique=True),
 )
 
 reservations = Table(
