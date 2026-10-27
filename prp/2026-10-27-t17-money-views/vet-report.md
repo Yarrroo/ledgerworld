@@ -51,7 +51,7 @@ Round 2 tests: all four failed against the round 1 code (4 of 30 red) and pass w
 (30 of 30). Accept command exit 0; contract tests 71 passed; `attribution` and `no_secrets` ok.
 The loop stopped at the cap of 2 rounds with nothing open.
 
-**vet: T2, round 2, 28 applied (12 proven, 0 unproven), 8 recorded**
+**vet: T2, round 2, 27 applied (12 proven, 0 unproven), 8 recorded**
 Coverage: read every frontend file in the diff, including its deletions (one brace), and the
 backend `views.py`, `store.py` and `spendability.py` to check P's rule. The security review read
 v1.js, the three views, the router and the package diff. The prose under `prp/` and the recorded

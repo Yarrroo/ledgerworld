@@ -22,7 +22,7 @@
 - The item's check (`npm ci`, then `build`, then `test:unit` on the spec): exit 0, 30 passed.
 - `uv run pytest -q tests/contracts tests/api`: 126 passed. `no_secrets` and `attribution`: ok.
   The full gate is the landing train's job.
-- Vet: T2, 2 rounds, 28 applied (12 proven by tests that fail before the fix, 0 unproven),
+- Vet: T2, 2 rounds, 27 applied (12 proven by tests that fail before the fix, 0 unproven),
   8 recorded, 0 open. Details in `vet-report.md`.
 - UX: Playwright sweep at 390, 768 and 1440 px, light and dark, in `ux-sweep.md`. It found no
   horizontal scroll, no control under 44 px and no clipped figure; the mode label stays in view
