@@ -18,7 +18,7 @@
    "mode_B": {"op": "POST /api/v1/simulation/deposit/create", "fields": ["amount", "global_account_id", "reference"], "label": "advance inflow (sandbox simulation)", "needs": "a Global Account in the advance currency (GET /api/v1/global_accounts, or AIRWALLEX_GLOBAL_ACCOUNT_ID)"}},
   {"kind": "repayment", "mode_A": {"op": "POST /api/v1/charges/create", "fields": ["amount", "currency", "source", "request_id"], "header": "x-on-behalf-of not used: the platform charges the connected account", "label": "repayment (charge)"},
    "mode_B": {"op": "none (ledger only)", "label": "repayment (simulated)"}},
-  {"kind": "fx", "mode_A": {"op": "POST /api/v1/fx/quotes/create then POST /api/v1/conversions/create", "label": "FX conversion"},
+  {"kind": "fx", "mode_A": {"op": "POST /api/v1/fx/quotes/create then POST /api/v1/fx/conversions/create", "label": "FX conversion"},
    "mode_B": {"op": "same as A", "label": "FX conversion"}},
   {"kind": "payout", "mode_A": {"op": "POST /api/v1/transfers/create", "header": "x-on-behalf-of: <borrower-a connected account>", "label": "payout on behalf of borrower-a"},
    "mode_B": {"op": "POST /api/v1/transfers/create", "label": "payout from the operator account"}}

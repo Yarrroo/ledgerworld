@@ -40,6 +40,7 @@ from typing import Any
 from app.connectors.airwallex.client import (
     LOGIN_PATH,
     AirwallexClient,
+    active_account,
     client_from_env,
     connected_setting,
 )
@@ -283,9 +284,7 @@ class ContractPass:
             self._observe()
         listed = None
         if self.mode == "A" and self._shape is not None:
-            items = self.recorder.last().json
-            items = items.get("items") if isinstance(items, dict) else items
-            listed = next((i.get("id") for i in items or [] if isinstance(i, dict)), None)
+            listed = active_account(self.recorder.last().json)
         account = self.connected_account_id or listed
         if account:
             self.state["connected_account"] = account

@@ -75,7 +75,7 @@ bash checks/merge.sh         # lint, secrets, attribution, offline tests, fronte
 
 | Purpose | Variables |
 |---|---|
-| Airwallex sandbox | `AIRWALLEX_MODE=sandbox`, `AIRWALLEX_CLIENT_ID`, `AIRWALLEX_API_KEY`, `AIRWALLEX_API_VERSION` (≥ 2024-06-30), `AIRWALLEX_CONNECTED` (auto · on · off), `AIRWALLEX_WEBHOOK_SECRET`, optional `AIRWALLEX_GLOBAL_ACCOUNT_ID` |
+| Airwallex sandbox | `AIRWALLEX_MODE=sandbox`, `AIRWALLEX_CLIENT_ID`, `AIRWALLEX_API_KEY`, `AIRWALLEX_API_VERSION` (≥ 2024-09-27), `AIRWALLEX_CONNECTED` (auto · on · off), `AIRWALLEX_WEBHOOK_SECRET`, optional `AIRWALLEX_GLOBAL_ACCOUNT_ID` |
 | Model (OpenAI-compatible) | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL_NAME`, optional `LLM_BOOST_*` |
 | Graph memory | `ZEP_API_KEY` |
 | Storage and queue | `LEDGER_DATABASE_URL` (SQLite in memory when unset), `REDIS_URL` |

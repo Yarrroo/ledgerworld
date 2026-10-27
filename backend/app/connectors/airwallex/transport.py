@@ -26,8 +26,10 @@ from .errors import ConfigError, HostRefused
 
 SANDBOX_HOST = "api.sandbox.airwallex.com"
 SANDBOX_BASE_URL = f"https://{SANDBOX_HOST}"
-DEFAULT_API_VERSION = "2024-06-30"
-MIN_API_VERSION = "2024-06-30"  # conversion.settled and the PAID transition need it
+# Payouts on `/api/v1/transfers` (create, list, the PAID transition) start at 2024-09-27; before
+# it that path is the connected-account transfer and the sandbox refuses our payouts.
+DEFAULT_API_VERSION = "2024-09-27"
+MIN_API_VERSION = "2024-09-27"
 BANNERS = {"fake": "Simulated provider", "sandbox": "Airwallex sandbox"}
 CREDENTIAL_VARS = ("AIRWALLEX_API_KEY", "AIRWALLEX_CLIENT_ID")
 
@@ -140,7 +142,7 @@ def check_base_url(base_url: str) -> str:
 
 
 def api_version_from(env: Mapping[str, str] | None = None) -> str:
-    """`AIRWALLEX_API_VERSION`, pinned: a date no earlier than 2024-06-30."""
+    """`AIRWALLEX_API_VERSION`, pinned: a date no earlier than `MIN_API_VERSION`."""
     env = os.environ if env is None else env
     version = env.get("AIRWALLEX_API_VERSION", "").strip() or DEFAULT_API_VERSION
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", version) or version < MIN_API_VERSION:

@@ -67,7 +67,7 @@ class Sleeps(list):
 def make(scenario: str = "happy", *, times: int | None = 1, connected: bool = False):
     clock = FakeClock()
     transport = FakeTransport(scenario, clock=clock, connected=connected, times=times)
-    client = AirwallexClient(transport, clock, api_version="2024-06-30", sleep=Sleeps())
+    client = AirwallexClient(transport, clock, api_version="2024-09-27", sleep=Sleeps())
     return transport, client
 
 
@@ -142,7 +142,7 @@ def test_headers_on_every_call_and_login_only():
     assert len(calls) == 2
     for call in calls:
         assert call.headers["authorization"].startswith("Bearer ")
-        assert call.headers["x-api-version"] == "2024-06-30"
+        assert call.headers["x-api-version"] == "2024-09-27"
         assert call.headers["content-type"] == "application/json"
         assert not {"x-client-id", "x-api-key"} & set(call.headers)
 
@@ -288,7 +288,7 @@ def test_conversion_paths():
     assert quote["client_rate"] == Decimal(q["fake_rate"])
     conv = client.create_conversion(cover["create"]["request_id"], sell_currency="USD",
                                     buy_currency="EUR", amount=buy, quote_id=quote["quote_id"])
-    body = posts(transport, "/api/v1/conversions/create")[0].body
+    body = posts(transport, "/api/v1/fx/conversions/create")[0].body
     assert body["buy_amount"] == cover["create"]["buy_amount"] and "sell_amount" not in body
     assert conv.amount == cover["create"]["sell_amount_expected"] and conv.currency == "USD"
     created, settled = cover["steps"]
@@ -305,7 +305,7 @@ def test_conversion_paths():
     conv = client.create_conversion(
         spec["request_id"], sell_currency=spec["sell_currency"],
         buy_currency=spec["buy_currency"], amount=usd(100000))
-    assert posts(transport, "/api/v1/conversions/create")[0].body["sell_amount"] == "1000.00"
+    assert posts(transport, "/api/v1/fx/conversions/create")[0].body["sell_amount"] == "1000.00"
     assert conv.status == cancel["steps"][0]["status"]
     transport.cancel_conversion(conv.provider_id)
     assert client.find_conversion(spec["request_id"])[0].status == cancel["steps"][1]["status"]
@@ -695,7 +695,7 @@ def test_a_conversion_on_behalf_of_a_connected_account_settles_and_refunds_there
     transport.balances[CONNECTED_ACCOUNT]["USD"] = 100000
     body = {"request_id": "leg-c-1", "sell_currency": "USD", "buy_currency": "EUR",
             "sell_amount": "1000.00"}
-    conv = client._request("POST", "/api/v1/conversions/create", body, request_id="leg-c-1",
+    conv = client._request("POST", "/api/v1/fx/conversions/create", body, request_id="leg-c-1",
                            headers={"x-on-behalf-of": CONNECTED_ACCOUNT})
     transport.cancel_conversion(conv["id"])
     assert transport.available("USD", CONNECTED_ACCOUNT) == 100000

@@ -298,7 +298,7 @@ def test_dedupe_survives_verifier_and_store_restart(tmp_path):
 def test_signed_failed_hint_reads_the_actual_provider_instead_of_changing_state(store):
     clock = FakeClock()
     transport = FakeTransport(clock=clock)
-    client = AirwallexClient(transport, clock, api_version="2024-06-30")
+    client = AirwallexClient(transport, clock, api_version="2024-09-27")
     created = client.create_transfer(
         "a1b2c3d4e5f6-1-payout", beneficiary_id="ben-payroll-1",
         amount=Money(minor=100_000, currency="USD"),

@@ -64,10 +64,19 @@ USD_PER_UNIT = {
     "JPY": Decimal("0.0066"), "AUD": Decimal("0.6600"), "HKD": Decimal("0.1280"),
     "SGD": Decimal("0.7400"), "CNY": Decimal("0.1400"),
 }
-MONEY_CREATES = (
-    "/api/v1/transfers/create", "/api/v1/conversions/create",
-    "/api/v1/connected_account_transfers/create", "/api/v1/charges/create",
-)
+# Where each collection lives; conversions sit under `fx/`.
+COLLECTION_PATHS = {
+    "transfers": "/api/v1/transfers", "conversions": "/api/v1/fx/conversions",
+    "connected_account_transfers": "/api/v1/connected_account_transfers",
+    "charges": "/api/v1/charges",
+}
+MONEY_CREATES = {f"{path}/create": collection for collection, path in COLLECTION_PATHS.items()}
+# How long a quote lasts, in seconds, by the `validity` it was asked for.
+QUOTE_VALIDITIES = {"MIN_1": 60, "MIN_15": 900, "MIN_30": 1800, "HR_1": 3600, "HR_4": 14400,
+                    "HR_8": 28800, "HR_24": 86400}
+# Before this version `/api/v1/transfers` is the connected-account transfer: a payout body is
+# refused for its missing `currency`, and the list answers `incorrect_version`.
+TRANSFERS_SINCE = "2024-09-27"
 LOGIN = "/api/v1/authentication/login"
 DECIMAL_STRING = re.compile(r"[0-9]+(\.[0-9]+)?")
 
@@ -261,6 +270,10 @@ class FakeTransport:
         if route == LOGIN and method == "POST":
             return self._login(headers)
         self._authenticate(headers)
+        if route.startswith("/api/v1/transfers") and headers["x-api-version"] < TRANSFERS_SINCE:
+            if route == "/api/v1/transfers/create":
+                raise _Refuse(400, "field_required", "currency is required", "currency")
+            raise _Refuse(400, "incorrect_version", "not served on this API version")
         query = {k: v[0] for k, v in parse_qs(urlsplit(path).query).items()}
         account = self._account(headers)
         if method == "GET":
@@ -272,8 +285,12 @@ class FakeTransport:
                 self._need_connected()
                 return 200, {"items": [{"id": CONNECTED_ACCOUNT, "status": "ACTIVE"}],
                              "has_more": False}
-            collection, _, object_id = route.removeprefix("/api/v1/").partition("/")
-            if collection in self.objects and collection != "deposits":
+            for collection, base in COLLECTION_PATHS.items():
+                if route != base and not route.startswith(f"{base}/"):
+                    continue
+                object_id = route.removeprefix(base).removeprefix("/")
+                if "/" in object_id:
+                    break
                 if object_id:
                     return 200, self._public(self._get(collection, object_id))
                 return 200, self._list(collection, query.get("request_id"))
@@ -281,8 +298,7 @@ class FakeTransport:
             if route == "/api/v1/fx/quotes/create":
                 return 201, self._quote(body)
             if route in MONEY_CREATES:
-                collection = route.removeprefix("/api/v1/").removesuffix("/create")
-                return 201, self._create(collection, body, account)
+                return 201, self._create(MONEY_CREATES[route], body, account)
             if route == "/api/v1/simulation/deposit/create":
                 return 201, self._deposit(body)
             match = re.fullmatch(r"/api/v1/simulation/transfers/([^/]+)/transition", route)
@@ -331,13 +347,16 @@ class FakeTransport:
         ]
 
     def _quote(self, body: Mapping) -> dict:
+        if body.get("validity") not in QUOTE_VALIDITIES:
+            raise _Refuse(400, "field_required", "validity is required", "validity")
         sell, buy = _currency(body, "sell_currency"), _currency(body, "buy_currency")
         sell_minor, buy_minor, rate = self._price(sell, buy, body)
         self._serial += 1
         quote = {"quote_id": f"quote-{self._serial}", "client_rate": rate,
                  "sell_currency": sell, "buy_currency": buy,
                  "sell_amount": _string(sell_minor, sell), "buy_amount": _string(buy_minor, buy),
-                 "valid_to": _iso(self.clock() + 60)}
+                 "validity": body["validity"],
+                 "valid_to": _iso(self.clock() + QUOTE_VALIDITIES[body["validity"]])}
         self.quotes[quote["quote_id"]] = quote
         return dict(quote)
 
@@ -387,6 +406,9 @@ class FakeTransport:
         beneficiary = self.beneficiaries.get(body.get("beneficiary_id"))
         if beneficiary is None:
             raise _Refuse(400, "invalid_argument", "unknown beneficiary", "beneficiary_id")
+        for key in ("reason", "reference"):
+            if not isinstance(body.get(key), str) or not body[key]:
+                raise _Refuse(400, "field_required", f"{key} is required", key)
         currency = _currency(body, "transfer_currency")
         if body.get("source_currency", currency) != currency:
             raise _Refuse(400, "invalid_argument", "the fake pays out in the source currency",
@@ -398,7 +420,8 @@ class FakeTransport:
                 "transfer_amount": _number(minor, currency),
                 "source_amount": _number(minor, currency),
                 "transfer_method": body.get("transfer_method", "LOCAL"),
-                "reference": body.get("reference"), "_account": account, "_minor": minor}
+                "reason": body["reason"], "reference": body["reference"],
+                "_account": account, "_minor": minor}
 
     def _new_conversions(self, body: Mapping, account: str) -> dict:
         sell, buy = _currency(body, "sell_currency"), _currency(body, "buy_currency")

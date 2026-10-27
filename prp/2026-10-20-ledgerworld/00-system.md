@@ -217,8 +217,9 @@ In a policy branch the policy drives the treasury and the treasury model is not 
   refused by code. Auth `POST /api/v1/authentication/login` with headers `x-client-id`,
   `x-api-key`; the token lasts 30 minutes; renew at expiry minus 60 s.
 - [FACT] Read cash: `GET /api/v1/balances/current`.
-- [FACT] FX: `POST /api/v1/fx/quotes/create`, `POST /api/v1/conversions/create`.
-- [FACT] Payout: `POST /api/v1/beneficiaries/create`, `POST /api/v1/transfers/create`.
+- [FACT] FX: `POST /api/v1/fx/quotes/create` (`validity` required), `POST /api/v1/fx/conversions/create`.
+- [FACT] Payout: `POST /api/v1/beneficiaries/create`, `POST /api/v1/transfers/create` (`reason`
+  and `reference` required).
 - [FACT] Connected accounts: `POST /api/v1/connected_account_transfers/create` (`amount`,
   `currency`, `destination`, `request_id`) funds a connected account from the platform balance;
   `POST /api/v1/charges/create` (`amount`, `currency`, `source`, `request_id`) charges a connected
@@ -232,8 +233,8 @@ In a policy branch the policy drives the treasury and the treasury model is not 
 - [FACT] Transfer status simulation: `POST /api/v1/simulation/transfers/{id}/transition`
   `{next_status: "PAID"}`, or `"FAILED"` with a `failure_type`; this is how T15 settles one transfer.
 - [FACT] The API version is sent on every call in `x-api-version`. Amounts on transfers and conversions are decimal strings; the deposit simulation documents
-  `amount` as a number (T15 confirms). Pin the API version to 2024-06-30 or later (needed for
-  `conversion.settled` and the `PAID` transition).
+  `amount` as a number (T15 confirms). Pin the API version to 2024-09-27 or later: before it
+  `/api/v1/transfers` is the connected-account transfer and the sandbox refuses a payout there.
 - [FACT] Airwallex's lending API is a partner API for lender apps; it is not used.
 - Every request carries a deterministic `request_id` (leg id); a replay with the same id must not
   move money twice. [FACT] The provider **rejects** a duplicate id (`duplicate_request_id`, or
@@ -297,7 +298,7 @@ decision, because plain treasury and lending decisions alone are common in this 
 
 `AIRWALLEX_CLIENT_ID` · `AIRWALLEX_API_KEY` · `AIRWALLEX_BASE_URL` (default sandbox) ·
 `AIRWALLEX_MODE` (fake|sandbox) · `AIRWALLEX_CONNECTED` (auto|on|off) · `AIRWALLEX_WEBHOOK_SECRET` ·
-`AIRWALLEX_API_VERSION` (pinned, ≥ 2024-06-30) · `AIRWALLEX_GLOBAL_ACCOUNT_ID` (Mode B advance leg; probed if unset) ·
+`AIRWALLEX_API_VERSION` (pinned, ≥ 2024-09-27) · `AIRWALLEX_GLOBAL_ACCOUNT_ID` (Mode B advance leg; probed if unset) ·
 `LLM_API_KEY` · `LLM_BASE_URL` · `LLM_MODEL_NAME` · `LLM_BOOST_API_KEY` · `LLM_BOOST_BASE_URL` ·
 `LLM_BOOST_MODEL_NAME` · `ZEP_API_KEY` · `LEDGER_DATABASE_URL` · `REDIS_URL` ·
 `LEDGERWORLD_ROLE` (api|worker|sim) · `LEDGERWORLD_DEMO_TOKEN` · `LEDGERWORLD_URL` ·

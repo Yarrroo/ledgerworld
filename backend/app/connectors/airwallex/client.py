@@ -43,6 +43,11 @@ RENEW_BEFORE_S = 60
 MAX_ATTEMPTS = 3
 BACKOFF_BASE_S = 0.5
 DUPLICATE_CODES = frozenset({"duplicate_request_id", "request_id_duplicate"})
+# A quote is refused without its validity (`field_required`); the conversion follows at once.
+QUOTE_VALIDITY = "MIN_15"
+# `reason` and `reference` are required on a payout; the reason is one of the provider's own.
+TRANSFER_REASON = "business_expenses"
+CONVERSIONS_PATH = "/api/v1/fx/conversions"
 
 LegMode = Literal["A", "B"]
 ConnectedSetting = Literal["auto", "on", "off"]
@@ -60,7 +65,7 @@ class Leg:
     on_behalf_of: bool = False
 
 
-FX_OP = "POST /api/v1/fx/quotes/create then POST /api/v1/conversions/create"
+FX_OP = "POST /api/v1/fx/quotes/create then POST /api/v1/fx/conversions/create"
 LEG_PLAN: dict[str, dict[str, Leg]] = {
     "A": {
         "advance": Leg("POST /api/v1/connected_account_transfers/create",
@@ -365,7 +370,8 @@ class AirwallexClient:
         return self._items(self._request("GET", "/api/v1/global_accounts"))
 
     def probe_connected(self, setting: ConnectedSetting | None = None) -> LegMode:
-        """Mode A only on a clear 200 from the connected-accounts list; `on` without it fails."""
+        """Mode A only when the connected-accounts list answers 200 with an `ACTIVE` account;
+        an account with no status, or none, is not enabled. `on` without one fails."""
         setting = setting or connected_setting()
         if setting == "off":
             return "B"
@@ -375,8 +381,9 @@ class AirwallexClient:
             if refused.code == "auth_fail":
                 raise  # bad credentials fail the start; they are not an unclear probe
         try:
-            self._request("GET", CONNECTED_PROBE_PATH)
-            return "A"
+            if active_account(self._items(self._request("GET", CONNECTED_PROBE_PATH))):
+                return "A"
+            answer = "200 with no active connected account"
         except (ProviderError, OutcomeUnknown) as unclear:
             answer = f"{getattr(unclear, 'http', None)} {getattr(unclear, 'code', '')}".strip()
         if setting == "on":
@@ -386,7 +393,7 @@ class AirwallexClient:
     def quote(self, *, sell_currency: str, buy_currency: str, amount: Money) -> dict:
         """An FX quote for `amount`, given in either the sell or the buy currency."""
         body = {"sell_currency": sell_currency, "buy_currency": buy_currency,
-                **_side(amount, sell_currency, buy_currency)}
+                **_side(amount, sell_currency, buy_currency), "validity": QUOTE_VALIDITY}
         return self._request("POST", "/api/v1/fx/quotes/create", body)
 
     def create_conversion(
@@ -402,14 +409,14 @@ class AirwallexClient:
                 "buy_currency": buy_currency, **_side(amount, sell_currency, buy_currency)}
         if quote_id is not None:
             body["quote_id"] = quote_id
-        return self._create("conversion", "/api/v1/conversions/create", body, request_id)
+        return self._create("conversion", f"{CONVERSIONS_PATH}/create", body, request_id)
 
     def get_conversion(self, conversion_id: str) -> ProviderObject:
-        path = f"/api/v1/conversions/{urlquote(conversion_id, safe='')}"
+        path = f"{CONVERSIONS_PATH}/{urlquote(conversion_id, safe='')}"
         return ProviderObject.parse("conversion", self._request("GET", path))
 
     def find_conversion(self, request_id: str) -> list[ProviderObject]:
-        return self._find("conversion", "/api/v1/conversions", request_id)
+        return self._find("conversion", CONVERSIONS_PATH, request_id)
 
     def create_transfer(
         self,
@@ -420,13 +427,14 @@ class AirwallexClient:
         reference: str | None = None,
         transfer_method: str = "LOCAL",
         on_behalf_of: str | None = None,
+        reason: str = TRANSFER_REASON,
     ) -> ProviderObject:
-        """A payout; Mode A sends it on behalf of the connected account."""
+        """A payout; Mode A sends it on behalf of the connected account. The provider requires a
+        reference, so one not given (or empty) is the `request_id`."""
         body = {"request_id": request_id, "beneficiary_id": beneficiary_id,
                 "source_currency": amount.currency, "transfer_currency": amount.currency,
-                "transfer_amount": to_provider_decimal(amount), "transfer_method": transfer_method}
-        if reference is not None:
-            body["reference"] = reference
+                "transfer_amount": to_provider_decimal(amount), "transfer_method": transfer_method,
+                "reason": reason, "reference": reference or request_id}
         headers = {"x-on-behalf-of": on_behalf_of} if on_behalf_of else None
         return self._create("transfer", "/api/v1/transfers/create", body, request_id, headers)
 
@@ -497,6 +505,18 @@ class AirwallexClient:
     def _find(self, kind: str, path: str, request_id: str) -> list[ProviderObject]:
         answer = self._request("GET", f"{path}?request_id={urlquote(request_id, safe='')}")
         return [ProviderObject.parse(kind, item) for item in self._items(answer)]
+
+
+def active_account(answer: Any) -> str | None:
+    """The id of the first `ACTIVE` account in a connected-accounts list (its items, or the
+    answer holding them), or None."""
+    items = answer.get("items") if isinstance(answer, dict) else answer
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict) and item.get("status") == "ACTIVE":
+            account = item.get("id")
+            if isinstance(account, str) and account:
+                return account
+    return None
 
 
 def _text(envelope: Mapping[str, Any], key: str) -> str | None:
