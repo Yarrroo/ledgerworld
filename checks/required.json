@@ -32,8 +32,23 @@
       "tests/finance/test_ledger.py::test_unknown_is_not_zero_and_lowers_authority",
       "tests/finance/test_ledger.py::test_stale_means_strictly_older_than_six_hours"
     ]},
-    {"id": "lf2_reproduction", "name": "LF-2 reproduction", "tests": []},
-    {"id": "draw_beyond_kp_rejected", "name": "draw beyond K_p rejected", "tests": []},
+    {"id": "lf2_reproduction", "name": "LF-2 reproduction", "tests": [
+      "tests/finance/test_lending.py::test_the_repo_fixture_carries_the_design_expectations_unchanged",
+      "tests/finance/test_lending.py::test_lf2_capacity_before_stress",
+      "tests/finance/test_lending.py::test_lf2_capacity_under_venue_freeze[snapshot]",
+      "tests/finance/test_lending.py::test_lf2_capacity_under_venue_freeze[observed]",
+      "tests/finance/test_lending.py::test_lf2_draw_within_capacity_is_accepted",
+      "tests/finance/test_lending.py::test_lf2_committed_line_draw_leaves_capacity_unchanged",
+      "tests/finance/test_lending.py::test_lf2_advance_disbursal_journal",
+      "tests/finance/test_lending.py::test_lf2_week_1_repayment_journal",
+      "tests/finance/test_lending.py::test_lf2_repayment_weeks_1_to_4",
+      "tests/finance/test_lending.py::test_revenue_observed_later_is_not_read_before_it_is_observed",
+      "tests/finance/test_lending.py::test_a_redemption_spike_lowers_capacity_by_its_increase"
+    ]},
+    {"id": "draw_beyond_kp_rejected", "name": "draw beyond K_p rejected", "tests": [
+      "tests/finance/test_lending.py::test_lf2_draw_beyond_capacity_is_rejected_with_the_binding_constraint",
+      "tests/finance/test_lending.py::test_a_partial_line_draw_keeps_the_rest_held_and_refuses_beyond_it"
+    ]},
     {"id": "no_duplicate_movement", "name": "no duplicate movement", "tests": []},
     {"id": "no_movement_from_unowned_funds", "name": "no movement from unowned funds", "tests": []},
     {"id": "altered_approval_refused", "name": "altered approval refused", "tests": []},
