@@ -7,8 +7,9 @@ with it · 2. deliver the scheduled events due now, land due inflows (an advance
 transit included) and mark ``overdue`` every pending_in promised by now that did not land ·
 3. publish the scheduled posts · 4. build each actor's scoped observation · 5. ``env.step``:
 every agent answers at once and its tool calls queue C1 intents; the step's own advance of the
-OASIS clock is taken back, so it still reads this round (``Clock.settle_step``) · 6. validate the drained intents (C1 schema, the tool's argument schema, branch,
-round, mandate, an id used once and fitting the ledger) · 7. clear them in
+OASIS clock is taken back, so it still reads this round (``Clock.settle_step``) · 6. validate
+the drained intents (C1 schema, the tool's argument schema, branch, round, mandate, an id used
+once and fitting the ledger) · 7. clear them in
 ``(priority class, minute, actor, call)`` order against the ledger · 8. run the mandatory
 settlements · 9. keep the C2 results for delivery next round · 10. record the transcript and
 commit the ledger, the durable point.
