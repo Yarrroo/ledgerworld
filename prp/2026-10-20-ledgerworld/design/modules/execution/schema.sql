@@ -63,7 +63,8 @@ CREATE INDEX leg_events_by_leg ON leg_events (leg_id, event_seq);
 CREATE TABLE incidents (
     incident_id      VARCHAR(64) PRIMARY KEY,
     kind             VARCHAR(32) NOT NULL CHECK (kind IN ('outcome_unknown', 'paid_then_failed', 'amount_mismatch',
-                                                         'currency_mismatch', 'unknown_provider_object', 'lookup_ambiguous')),
+                                                         'currency_mismatch', 'unknown_provider_object', 'lookup_ambiguous',
+                                                         'ledger_refused')),
     leg_id           VARCHAR(96) REFERENCES execution_legs (leg_id),
     provider_id      VARCHAR(96),
     detail           TEXT NOT NULL,
