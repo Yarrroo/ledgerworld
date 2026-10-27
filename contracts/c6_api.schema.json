@@ -2883,9 +2883,38 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "observability": {
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "observability"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authority": {
+                "const": "reduced"
+              },
+              "spendable": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "unknown",
+                      "unassessed"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       ],
-      "description": "A C5 account with S (spendable now) and P (projected cash) as separate measures.",
+      "description": "A C5 account with S (spendable now) and P (projected cash) as separate measures.\n\nAn unknown account has reduced authority and no known spendable value.",
       "properties": {
         "id": {
           "maxLength": 128,
@@ -2943,7 +2972,7 @@
         "floor": {
           "anyOf": [
             {
-              "$ref": "#/$defs/NonNegativeMoney"
+              "$ref": "#/$defs/Metric"
             },
             {
               "type": "null"

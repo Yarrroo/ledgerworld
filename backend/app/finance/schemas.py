@@ -302,7 +302,7 @@ class ProviderOp(_Shape):
             raise ValueError("only a settled or failed leg is reconciled")
         if self.leg_id != self.request_id:
             raise ValueError("the request id is the leg id")
-        if not self.request_id.endswith(f"-{self.kind}"):
+        if self.request_id.rsplit("-", 1)[1] != self.kind:
             raise ValueError("the request id names its kind")
         if self.receipt and (
             self.receipt.request_id != self.request_id or self.receipt.kind != self.kind
@@ -436,8 +436,6 @@ class CollateralFacility(_Contract):
 SnapshotContract = Annotated[
     CommittedLine | RevenueAdvance | CollateralFacility, Field(discriminator="kind")
 ]
-assert {c.model_fields["kind"].annotation.__args__[0] for c in get_args(
-    get_args(SnapshotContract)[0])} == set(get_args(ContractKind))
 
 
 class Exposure(_Shape):
@@ -485,8 +483,10 @@ class Snapshot(_Shape):
         accounts = _unique([a.id for a in self.accounts], "account")
         _unique([o.obligation_id for o in self.obligations], "obligation")
         _unique([c.contract_id for c in self.contracts], "contract")
-        flows = {f.flow_id for a in self.accounts
-                 for f in a.buckets.pending_in + a.buckets.pending_out}
+        _unique([x.exposure_id for x in self.exposures], "exposure")
+        _unique([p.entity for p in self.pools], "pool")
+        flows = _unique([f.flow_id for a in self.accounts
+                         for f in a.buckets.pending_in + a.buckets.pending_out], "flow")
         refs = [("entity", a.entity, entities) for a in self.accounts]
         refs += [("entity", o.entity, entities) for o in self.obligations]
         refs += [("account", o.account, accounts) for o in self.obligations]
@@ -500,10 +500,19 @@ class Snapshot(_Shape):
         for what, ref, known in refs:
             if ref not in known:
                 raise ValueError(f"unknown {what} {ref!r}")
-        currency = {a.id: a.currency for a in self.accounts}
+        by_id = {a.id: a for a in self.accounts}
         for o in self.obligations:
-            if o.amount.currency != currency[o.account]:
-                raise ValueError(f"account {o.account} holds {currency[o.account]} only")
+            account = by_id[o.account]
+            if account.entity != o.entity:
+                raise ValueError(f"obligation {o.obligation_id} is on an account not owned by "
+                                 f"{o.entity}")
+            if o.amount.currency != account.currency:
+                raise ValueError(f"account {o.account} holds {account.currency} only")
+        for c in self.contracts:
+            held = by_id.get(getattr(c, "reserved_on", None) or "")
+            if held and (held.entity != c.lender or held.currency != c.limit.currency):
+                raise ValueError(f"line {c.contract_id} is reserved on the lender's account, "
+                                 "in its currency")
         return self
 
 
@@ -611,11 +620,31 @@ class CashPoint(_Shape):
 
 
 class TreasuryAccount(Account):
-    """A C5 account with S (spendable now) and P (projected cash) as separate measures."""
+    """A C5 account with S (spendable now) and P (projected cash) as separate measures.
 
+    An unknown account has reduced authority and no known spendable value.
+    """
+
+    model_config = _rules(
+        _when("observability", "known", _props(buckets=_props(settled=IS_OBJECT)),
+              _props(buckets=_props(settled=IS_NULL))),
+        _when("observability", "unknown", _props(
+            authority={"const": "reduced"},
+            spendable=_props(status={"enum": ["unknown", "unassessed"]}))),
+    )
+
+    floor: Metric | None = None
     spendable: Metric
     authority: Authority
     projected: list[CashPoint]
+
+    @model_validator(mode="after")
+    def _unknown_is_reduced(self) -> TreasuryAccount:
+        if self.observability == "unknown" and (
+            self.authority != "reduced" or self.spendable.status in ("known", "stale")
+        ):
+            raise ValueError("an unknown account has reduced authority and no spendable value")
+        return self
 
 
 class TreasuryResponse(Response):
@@ -790,8 +819,11 @@ class DecisionsResponse(Response):
         if self.status == "selected":
             if self.selected is None or self.escalation is not None:
                 raise ValueError("a selected decision names its policy and escalates nothing")
-            if self.selected not in {r.policy for r in self.results}:
+            mine = [r for r in self.results if r.policy == self.selected]
+            if not mine:
                 raise ValueError("a selected policy was evaluated")
+            if not all(r.feasible for r in mine):
+                raise ValueError("a selected policy is feasible on every scenario")
         elif self.selected is not None:
             raise ValueError("a pending or infeasible decision selects nothing")
         elif (self.status == "all_infeasible") != (self.escalation is not None):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from functools import cache
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from app.finance import schemas
@@ -179,6 +180,8 @@ MODEL_ONLY = [
     ("c4_provider_op", "valid-settled-advance", {"receipt.kind": "payout"}, "another leg"),
     ("c4_provider_op", "valid-settled-advance", {"kind": "payout", "receipt.kind": "payout"},
      "names its kind"),
+    ("c5_snapshot", "valid-lf1", {"accounts.0.buckets.pending_in.1.flow_id": "rcv-1"},
+     "flow id repeats"),
 ]
 
 
@@ -218,3 +221,86 @@ def test_a_selected_policy_was_evaluated():
     assert schema_errors(validator("c6_api", "DecisionsResponse"), decisions) == set()
     with pytest.raises(ValidationError, match="was evaluated"):
         schemas.DecisionsResponse.model_validate(decisions)
+
+
+
+def test_an_obligation_is_on_its_own_entitys_account():
+    snapshot = example("c5_snapshot", "valid-lf1")
+    snapshot["entities"].append({"entity_id": "borrower-b", "name": "Juniper Freight (synthetic)",
+                                 "kind": "borrower"})
+    snapshot["obligations"][0]["entity"] = "borrower-b"
+    with pytest.raises(ValidationError, match="not owned by borrower-b"):
+        schemas.Snapshot.model_validate(snapshot)
+
+
+def test_a_line_is_reserved_on_its_lenders_account():
+    snapshot = example("c5_snapshot", "valid-lf2")
+    snapshot["accounts"].append({
+        "id": "borrower-a/operating", "entity": "borrower-a", "currency": "USD",
+        "observability": "known", "as_of": "2026-01-05T00:00:00Z",
+        "buckets": {"settled": {"minor": 1, "currency": "USD"},
+                    "reserved": {"minor": 0, "currency": "USD"},
+                    "pledged": {"minor": 0, "currency": "USD"}, "pending_in": [],
+                    "pending_out": []}})
+    snapshot["contracts"][0]["reserved_on"] = "borrower-a/operating"
+    with pytest.raises(ValidationError, match="the lender's account"):
+        schemas.Snapshot.model_validate(snapshot)
+
+
+def test_pool_entities_are_unique():
+    snapshot = example("c5_snapshot", "valid-lf2")
+    snapshot["pools"].append(snapshot["pools"][0])
+    with pytest.raises(ValidationError, match="pool id repeats"):
+        schemas.Snapshot.model_validate(snapshot)
+
+
+def treasury_account(**change):
+    account = {
+        "id": "lender/venue", "entity": "lender", "currency": "USD",
+        "observability": "unknown", "as_of": "2026-01-05T00:00:00Z",
+        "buckets": {"settled": None, "reserved": {"minor": 0, "currency": "USD"},
+                    "pledged": {"minor": 0, "currency": "USD"}, "pending_in": [],
+                    "pending_out": []},
+        "floor": {"minor": None, "currency": "USD", "status": "unassessed"},
+        "spendable": {"minor": None, "currency": "USD", "status": "unknown"},
+        "authority": "reduced", "projected": [],
+    }
+    return account | change
+
+
+def test_treasury_floor_is_a_metric():
+    schemas.TreasuryAccount.model_validate(treasury_account())
+
+
+def test_an_unknown_account_has_reduced_authority():
+    check = validator("c6_api", "TreasuryAccount")
+    for bad in (treasury_account(authority="full"),
+                treasury_account(spendable={"minor": 5000, "currency": "USD",
+                                            "status": "known"})):
+        assert schema_errors(check, bad)
+        with pytest.raises(ValidationError, match="reduced authority"):
+            schemas.TreasuryAccount.model_validate(bad)
+
+
+def test_a_selected_policy_is_feasible_on_every_scenario():
+    result = {"policy": "no-action", "scenario_id": "s1", "branch_id": "run-1-s1-no-action",
+              "replay": False, "obligations_unmet": 0, "floor_kept": False,
+              "min_cash": {"minor": 2000000, "currency": "USD", "status": "known"},
+              "funding_cost": {"minor": 0, "currency": "USD"}, "feasible": False}
+    decisions = {
+        "as_of": "2026-11-05T10:00:00Z", "mode": "fake", "run_id": "run-1",
+        "snapshot_id": "lf1", "checkpoint_round": 3, "cohort": "s1",
+        "weight_kind": "unweighted scenario set", "status": "selected", "results": [result],
+        "selected": "no-action", "escalation": None,
+    }
+    with pytest.raises(ValidationError, match="feasible on every scenario"):
+        schemas.DecisionsResponse.model_validate(decisions)
+    schemas.DecisionsResponse.model_validate(
+        decisions | {"results": [result | {"feasible": True, "floor_kept": True}]})
+
+
+def test_contract_kinds_match_the_snapshot_union():
+    kinds = {model.model_fields["kind"].annotation.__args__[0]
+             for model in (schemas.CommittedLine, schemas.RevenueAdvance,
+                           schemas.CollateralFacility)}
+    assert kinds == set(get_args(schemas.ContractKind))
