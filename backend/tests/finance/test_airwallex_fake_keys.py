@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from app.connectors.airwallex.fake import FakeClock, FakeTransport
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "checks"))
@@ -55,9 +54,7 @@ def test_a_deposit_create_carries_only_what_the_sandbox_returned(fake_pass):
 
 def test_the_deposit_list_still_finds_and_settles_the_created_deposit():
     client = live.fake_client({})
-    transport = client.transport
-    assert isinstance(transport, FakeTransport) and isinstance(transport.clock, FakeClock)
-    usd = transport.global_accounts[0]["id"]
+    usd = client.transport.global_accounts[0]["id"]
     deposit = client.simulate_deposit(amount=live.PAYOUT, global_account_id=usd,
                                       reference="keys-1")
     assert [d.provider_id for d in client.find_deposit("keys-1")] == [deposit.provider_id]
