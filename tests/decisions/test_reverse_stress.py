@@ -147,7 +147,7 @@ def families() -> list[SearchFamily]:
 
 def baseline(bid: str, branch: FreshBranch | None = None, **kw) -> Baseline:
     return Baseline(bid, SNAPSHOT, SNAPSHOT.as_of, "lender", shock=SHOCKS[bid], terms=TERMS,
-                    horizon_h=72, branch=branch, **kw)
+                    branch=branch, **{"horizon_h": 72, **kw})
 
 
 def plan_model(plan: ScriptedPlan):
@@ -327,3 +327,84 @@ def test_a_shock_the_round_world_cannot_stage_is_not_staged_differently():
 def test_confirming_needs_a_fresh_branch():
     with pytest.raises(ValueError, match="fresh branch"):
         asyncio.run(reverse_stress(Integrated(), baseline("no-shock"), families()))
+
+
+def test_a_confirming_branch_id_fits_the_ledgers_branch_column():
+    from app.decisions.reverse_stress import _confirm_run_id
+    from app.finance.models import branch_meta
+
+    width = branch_meta.c.branch_id.type.length
+    family = lender_redemption("lender/operating", announce_round=2, due_h=24,
+                               range_=(0, 1), scale=1)
+    for bid in ("demo-shock", "a-baseline-whose-name-runs-long-on-purpose"):
+        run_id = _confirm_run_id(Baseline(bid, SNAPSHOT, SNAPSHOT.as_of, "lender"), family,
+                                 Integrated())
+        assert run_id.startswith(COHORT)
+        assert len(f"{run_id}-confirm-{Integrated().id}") <= width
+    short = _confirm_run_id(baseline("demo-shock"), family, Integrated())
+    assert short == f"{COHORT}-demo-shock-lender-redemption"
+
+
+# ------------------------------------------------------------------------ vet round 1
+
+def test_a_descending_familys_bps_grow_with_its_severity():
+    early = SearchFamily("silence-like", (1, 18), 18, descending=True,
+                         events=banded(lambda s: True).events)
+    assert early.size_bps(1) > early.size_bps(17) and early.size_bps(18) == 0
+    got = search(SearchFamily("silence-like", (1, 18), 18, descending=True,
+                              events=lambda r: banded(lambda s: True).events(1) if r <= 4
+                              else []))
+    assert (got["breaking_size"], got["size_bps"]) == (4, 14 * 10_000 // 18)
+
+
+class Asks:
+    """A policy that asks for ``amount`` on adv-a once, at round 1."""
+
+    id = "asks"
+
+    def __init__(self, amount: int):
+        self.amount = amount
+
+    def decide(self, view):
+        if view.round != 1:
+            return []
+        view.get("facilities[adv-a]")
+        return [{"type": "request_advance", "facility": "adv-a", "amount_minor": self.amount}]
+
+
+def test_a_draw_that_differs_from_the_offer_is_rejected_as_the_round_world_does():
+    path = replay_world(Asks(600_000), baseline("no-shock"))
+    assert path.settled[8] == 7_000_000  # nothing arrived
+    assert any("rejected, amount_differs_from_offer" in e["text"] for e in path.events)
+    assert replay_world(Asks(1_000_000), baseline("no-shock")).settled[8] == 8_000_000
+
+
+def test_a_facility_of_another_lender_is_refused_rather_than_cleared_on_this_pool():
+    snap = SNAPSHOT.model_dump(mode="json")
+    snap["entities"].append({"entity_id": "lender-2", "name": "Lender 2 (synthetic)",
+                             "kind": "lender pool"})
+    snap["contracts"][1]["lender"] = "lender-2"
+    snap["pools"].append({"entity": "lender-2", "floor": usd(0)})
+    snap["accounts"].append(account("lender-2/operating", 5_000_000))
+    b = Baseline("other", Snapshot.model_validate(snap), SNAPSHOT.as_of, "lender",
+                 terms=TERMS)
+    with pytest.raises(ValueError, match="K_p of lender only; adv-a is lent by lender-2"):
+        replay_world(Asks(1_000_000), b)
+
+
+def test_a_flow_already_overdue_at_the_snapshot_is_still_shocked():
+    snap = SNAPSHOT.model_dump(mode="json")
+    snap["as_of"] = snap["accounts"][0]["as_of"] = iso_utc(12)
+    b = Baseline("late", Snapshot.model_validate(snap), SNAPSHOT.as_of, "lender", terms=TERMS)
+    path = replay_world(Integrated(), b, delayed_receipt(
+        "rcv-1", range_=(0, 2_000_000), scale=2_000_000).events(2_000_000))
+    assert any("slips past the horizon" in e["text"] for e in path.events)
+    assert path.settled[16] == 7_000_000  # rcv-1 never landed
+
+
+def test_an_obligation_due_after_the_last_round_is_not_counted_unmet():
+    late = SearchFamily("late", (0, 1), 1, events=lambda size: [
+        {"round": 2, "kind": "obligation", "obligation_id": "late-1",
+         "account": "treasury/operating", "amount_minor": 1, "due_h": 73}])
+    path = replay_world(Integrated(), baseline("no-shock", horizon_h=74), late.events(1))
+    assert path.obligations_unmet == 0 and not path.breaks

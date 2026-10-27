@@ -22,13 +22,15 @@ branch of the coupled world (``evaluate`` with the selected policy only) then co
 found point on its realised ledger; a shock the round world cannot stage (a partial delay, a
 depeg loss, a silent borrower) is reported unconfirmed rather than staged differently.
 
-``size_bps = floor(size × 10000 / scale)``; the smallest shock of a baseline is the breaking
+``size_bps = floor(size × 10000 / scale)`` (a descending family measures its size from the
+mildest end of its range, so its bps grow with the shock); the smallest shock of a baseline is the breaking
 family with the lowest ``size_bps``, ties kept in the order the families were given.
 """
 
 from __future__ import annotations
 
 import copy
+import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -37,7 +39,7 @@ from typing import Any
 
 from ..finance.ledger import from_snapshot
 from ..finance.lending import capacity
-from ..finance.models import HORIZON
+from ..finance.models import HORIZON, branch_meta
 from ..finance.schemas import Snapshot
 from ..finance.spendability import grouped
 from ..finance.store import LedgerStore
@@ -57,6 +59,7 @@ COHORT = "reverse_stress"
 GRID_POINTS = 8
 BPS = 10_000
 POOL_HORIZON_H = HORIZON // timedelta(hours=1)  # K_p counts pool obligations due within it
+BRANCH_ID_MAX = branch_meta.c.branch_id.type.length
 
 
 # ------------------------------------------------------------------------------- baseline
@@ -64,7 +67,9 @@ POOL_HORIZON_H = HORIZON // timedelta(hours=1)  # K_p counts pool obligations du
 @dataclass(frozen=True)
 class Reaction:
     """One other actor's money reaction, recorded on the selected policy's branch: what it did
-    to the pool's capacity and to the treasury's cash, and the event ids it had observed."""
+    to the pool's capacity and to the treasury's cash, and the scheduled event ids (messages to
+    it, public posts, a silence notice) it had observed by then. ``seen`` is matched against
+    exactly those in the replay; anything else the actor saw is not part of the match."""
 
     round: int
     actor_id: str
@@ -121,7 +126,7 @@ class SearchFamily:
     descending: bool = False
 
     def size_bps(self, size: int) -> int:
-        return size * BPS // self.scale
+        return (self.range[1] - size if self.descending else size) * BPS // self.scale
 
 
 def delayed_receipt(flow_id: str, *, range_: tuple[int, int], scale: int) -> SearchFamily:
@@ -257,11 +262,12 @@ def resolve(b: Baseline, events: Sequence[Mapping[str, Any]]) -> list[dict]:
     """``events`` with what the baseline knows filled in: a flow event's round (the flow's
     promised round), a grown obligation's account, due hour and kind."""
     flows = _flow_hours(b)
+    first = hours_of(b.snapshot.as_of, b.epoch) // HOURS_PER_ROUND + 1
     out = []
     for e in events:
         e = dict(e)
-        if e["round"] is None:
-            e["round"] = -(-flows[e["flow_id"]] // HOURS_PER_ROUND)
+        if e["round"] is None:  # a flow already overdue at the snapshot is shocked at once
+            e["round"] = max(-(-flows[e["flow_id"]] // HOURS_PER_ROUND), first)
         if "grows" in e:
             o = next(o for o in b.snapshot.obligations if o.obligation_id == e["grows"])
             e |= {"account": o.account, "due_h": hours_of(o.due_at, b.epoch),
@@ -418,10 +424,15 @@ def replay_world(selected: Any, b: Baseline, events: Sequence[Mapping[str, Any]]
             actions.append({"round": r, **a})
             if a["type"] == "request_advance":
                 f = next(f for f in facilities if f["id"] == a["facility"])
+                if f["lender"] != b.pool:
+                    raise ValueError(f"the replay world holds the K_p of {b.pool} only; "
+                                     f"{f['id']} is lent by {f['lender']}")
                 c2["facility"] = f["id"]
                 amount = a["amount_minor"]
-                if f["state"] != "offered":
-                    c2 |= {"status": "rejected", "reason": "not_offered"}
+                if f["state"] != "offered":  # the round world's reasons, as it clears them
+                    c2 |= {"status": "rejected", "reason": "no_offered_facility"}
+                elif amount != f["principal"]:
+                    c2 |= {"status": "rejected", "reason": "amount_differs_from_offer"}
                 elif amount > k_p:
                     c2 |= {"status": "rejected", "reason": "beyond_capacity",
                            "binding": f"K_p = {grouped(k_p, f['currency'])}"}
@@ -473,9 +484,11 @@ def replay_world(selected: Any, b: Baseline, events: Sequence[Mapping[str, Any]]
     if first is not None:
         breach = (first, next((h for h, v in series if h > first and v >= floor),
                               end * HOURS_PER_ROUND))
-    unmet = sum(1 for o in obligations if start * HOURS_PER_ROUND < o["due_h"] <= b.horizon_h
-                and (o["paid_round"] is None
-                     or o["paid_round"] > -(-o["due_h"] // HOURS_PER_ROUND)))
+    unmet = 0
+    for o in obligations:  # as assess counts them: due in a round this run reached
+        due_round = -(-o["due_h"] // HOURS_PER_ROUND)
+        if start < due_round <= end and (o["paid_round"] is None or o["paid_round"] > due_round):
+            unmet += 1
     return ReplayPath(by_h, FloorResult(low, next(h for h, v in series if v == low),
                                         max(0, floor - low), breach),
                       unmet, log, actions, frozen, floor)
@@ -554,6 +567,18 @@ def _staged(b: Baseline, events: Sequence[Mapping[str, Any]]) -> tuple[list, lis
     return world, market
 
 
+def _confirm_run_id(b: Baseline, family: SearchFamily, selected: Any) -> str:
+    """``reverse_stress-<baseline>-<family>``, or a digest of it when the branch id it makes
+    (``<run>-confirm-<policy>``) would not fit the ledger's branch column."""
+    run_id = f"{COHORT}-{b.id}-{family.id}"
+    tail = f"-confirm-{selected.id}"
+    if len(run_id + tail) > BRANCH_ID_MAX:
+        run_id = f"{COHORT}-{hashlib.sha256(run_id.encode()).hexdigest()[:16]}"
+    if len(run_id + tail) > BRANCH_ID_MAX:
+        raise ValueError(f"policy id {selected.id!r} leaves no room for a branch id")
+    return run_id
+
+
 async def _confirm(selected: Any, b: Baseline, family: SearchFamily, size: int,
                    path: ReplayPath) -> dict:
     """One fresh branch at the found point, judged on its realised ledger."""
@@ -571,7 +596,7 @@ async def _confirm(selected: Any, b: Baseline, family: SearchFamily, size: int,
                     world.clock.epoch + timedelta(hours=e["due_h"]), kind=e["kind_of"],
                     conn=ctx.conn)
 
-    (ev,) = await evaluate(f"{COHORT}-{b.id}-{family.id}", fresh.cp, {"confirm": world_events},
+    (ev,) = await evaluate(_confirm_run_id(b, family, selected), fresh.cp, {"confirm": world_events},
                            [selected], model=fresh.model, workdir=fresh.workdir,
                            actor=fresh.actor, terms=b.terms, horizon_h=b.horizon_h,
                            hooks={"delivered": deliver})

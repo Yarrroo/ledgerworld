@@ -10,7 +10,8 @@ module, no route serves it and no leg kind names it. A draw against it is a chec
 The concentration limits are one pass, both measured on the pre-limit total: each obligor is
 cut to ``per_obligor_bps`` of it first, then each limited asset type to ``per_type_bps`` of it,
 on what of that type the obligor cuts left (an obligor's cut is shared across its types in
-proportion, rounded down, so a type is never credited with more than it kept). A lot of an
+proportion, the units the rounding leaves going to the largest fractions, ties in lot order, so
+its types keep exactly what it kept). A lot of an
 ineligible type, one already pledged to another facility, one whose value is unknown and one
 older than ``STALE_AFTER`` add nothing; unknown and stale also set ``authority = reduced``.
 Every number is an integer in minor units; every rounding is down.
@@ -115,9 +116,12 @@ def borrowing_base(lots: Iterable[Mapping[str, Any]], limits: Mapping[str, Any],
         cut = max(0, held - obligor_cap)
         if cut:
             obligor_cut[obligor] = cut
+        shares = {kind: cut * amount // held for kind, amount in types.items()} if held else {}
+        for kind in sorted(shares, key=lambda k: -(cut * types[k] % held))[
+                :cut - sum(shares.values())]:
+            shares[kind] += 1
         for kind, amount in types.items():
-            kept_by_type[kind] = kept_by_type.get(kind, 0) + amount - (
-                cut * amount // held if held else 0)
+            kept_by_type[kind] = kept_by_type.get(kind, 0) + amount - shares.get(kind, 0)
 
     type_cut: dict[str, int] = {}
     for kind, bps in (limits.get("per_type_bps") or {}).items():
@@ -133,21 +137,27 @@ def borrowing_base(lots: Iterable[Mapping[str, Any]], limits: Mapping[str, Any],
 
 def draw(base: BorrowingBase, amount_minor: int, *, drawn_minor: int = 0) -> dict:
     """A simulated draw of ``amount_minor`` on top of ``drawn_minor`` already outstanding:
-    accepted within the borrowing base, else rejected naming it. Never a leg."""
+    accepted within the borrowing base, else rejected naming it. A base resting on unknown or
+    stale lots says ``authority: reduced`` beside the answer. Never a leg."""
     amount = _minor(amount_minor, "a draw")
     if amount == 0:
         raise ValueError("a draw moves a positive amount")
     headroom = base.borrowing_base - _minor(drawn_minor, "drawn")
     if amount > headroom:
-        return {"status": "rejected", "reason": "beyond_borrowing_base",
-                "binding": f"borrowing base = {grouped(base.borrowing_base, base.currency)}"}
-    return {"status": "accepted", "headroom_after": headroom - amount}
+        out = {"status": "rejected", "reason": "beyond_borrowing_base",
+               "binding": f"borrowing base = {grouped(base.borrowing_base, base.currency)}"}
+    else:
+        out = {"status": "accepted", "headroom_after": headroom - amount}
+    return out if base.authority == "full" else {**out, "authority": base.authority}
 
 
 def pledge_lot(store: LedgerStore, account_id: str, lot: Mapping[str, Any],
                facility_id: str) -> dict:
     """Pledge ``lot`` to ``facility_id`` in the ledger. The ledger's one-active-pledge-per-ref
-    index refuses the same lot twice, whatever the facility."""
+    index refuses the same lot twice, whatever the facility. A lot of unknown value is refused
+    (``unknown``): nothing observed says what would be pledged."""
+    if lot.get("value") is None:
+        return {"status": "rejected", "reason": "unknown"}
     try:
         pledge_id = store.pledge(account_id, _minor(lot["value"], f"{lot['lot_id']} value"),
                                  lot["lot_id"], facility_id=facility_id)

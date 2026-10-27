@@ -133,3 +133,32 @@ def test_collateral_is_not_wired_to_execution():
     assert len(leg_kinds) == expect["leg_kinds_with_collateral"]
     # the scanner resolves relative imports: it sees the decisions module's own lending import
     assert "app.finance.lending" in imports_of(BACKEND / "decisions/candidates.py")
+
+
+# ------------------------------------------------------------------------ vet round 1
+
+def test_an_obligors_cut_is_shared_across_its_types_exactly():
+    """X holds three types of 10 and is cut by 2; the cut is shared 1, 1, 0 in lot order, so
+    type a keeps 9 and sits exactly at its 9 % limit: no second cut."""
+    def lot(lot_id, kind, obligor, value):
+        return {"lot_id": lot_id, "type": kind, "obligor": obligor, "value": value,
+                "haircut_bps": 0, "as_of": FIXTURE["now"]}
+    lots = [lot("a1", "a", "x", 10), lot("b1", "b", "x", 10), lot("c1", "c", "x", 10),
+            lot("d1", "d", "y1", 23), lot("d2", "d", "y2", 23), lot("d3", "d", "y3", 24)]
+    base = borrowing_base(lots, {"per_obligor_bps": 2800, "per_type_bps": {"a": 900}},
+                          FIXTURE["now"], eligible_types=("a", "b", "c", "d"))
+    assert (base.pre_limit, base.obligor_cut, base.type_cut) == (100, {"x": 2}, {})
+    assert base.borrowing_base == 98
+
+
+def test_a_lot_of_unknown_value_is_refused_a_pledge_not_raised():
+    store = LedgerStore("sqlite://")
+    lot = dict(FIXTURE["lots"][2], value=None)  # L3 under the venue freeze
+    assert pledge_lot(store, "borrower-b/operating", lot, "col-1") == {
+        "status": "rejected", "reason": "unknown"}
+
+
+def test_a_draw_on_a_reduced_base_says_so():
+    frozen = base_of(CASES["venue-freeze"])
+    assert draw(frozen, 1)["authority"] == "reduced"
+    assert "authority" not in draw(base_of(CASES["base"]), 1)
