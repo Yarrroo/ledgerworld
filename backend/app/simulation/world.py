@@ -321,9 +321,15 @@ class World:
                           "facility_kind": f["kind"], "state": f["state"],
                           "limit_minor": f["limit_minor"], "currency": f["currency"]})
         items += self.state.items  # read, never written, by the observation builder
-        items += [{"id": f"c2:{c['intent_id']}", "kind": "message", "to": c["actor_id"],
-                   "visible_from_h": t, **{k: v for k, v in c.items() if k != "actor_id"}}
-                  for c in self.state.pending_c2]
+        # A verdict's id is its place among its actor's verdicts, not its intent id: an intent
+        # id at the 128-character limit, or one repeated in the round, would make the id too
+        # long or shared and fail the actor's observation. The intent id stays as data.
+        n: dict[str, int] = {}
+        for c in self.state.pending_c2:
+            n[c["actor_id"]] = n.get(c["actor_id"], 0) + 1
+            items.append({"id": f"c2:r{c['round']}-{n[c['actor_id']]}", "kind": "message",
+                          "to": c["actor_id"], "visible_from_h": t,
+                          **{k: v for k, v in c.items() if k != "actor_id"}})
         return items
 
     def observe_all(self, conn: Connection) -> dict[str, Observation]:
