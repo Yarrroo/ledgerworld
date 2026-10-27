@@ -1,0 +1,8 @@
+design: T08 coupled round coordinator
+size: brief
+source: prp/2026-10-20-ledgerworld/briefs/T08.md
+module_design: prp/2026-10-20-ledgerworld/design/modules/agent-world/HANDOFF.md (this design fixes the clearing and abort rules it leaves open)
+consumers: design.md#consumers
+review:
+  design_pass: feasibility, failure modes, simplicity; findings folded into design.md "Abort" and "Out of this task"
+published: no (the design lives in this directory only)
