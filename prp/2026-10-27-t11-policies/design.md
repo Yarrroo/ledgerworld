@@ -1,7 +1,7 @@
 # T11 · policy comparison — build design
 
-> Design output (dev-build stage 2). Source: briefs/T11.md and design/modules/decisions/HANDOFF.md
-> (the approved module design; this note only records the build's choices). Next: implement.
+> Source: briefs/T11.md and design/modules/decisions/HANDOFF.md (the approved module design);
+> this note records only the build's choices.
 
 ## Consumers (who reads what this builds)
 
@@ -40,8 +40,3 @@
   so that one component is a max; the others are sums. Never an average.
 - **Payout legs** in `plan_for_now` need a beneficiary the snapshot does not carry:
   `beneficiaries={obligation_id: beneficiary}`; a protected obligation without one is refused.
-
----
-Run footer: ARCHITECT · tier=Sketch — the module's design is the approved
-`design/modules/decisions/HANDOFF.md`; this run records only the build's choices and its consumers.
-No reviewer pack, nothing published (unattended pane).

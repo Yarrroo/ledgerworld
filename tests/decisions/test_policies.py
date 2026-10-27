@@ -492,3 +492,76 @@ def test_a_policy_that_peeks_inside_a_branch_is_rejected_with_the_path(tmp_path)
     assert caught.value.path == "scenario.params"
     assert caught.value.available_at_h == "never"
     assert caught.value.read_at_h == 12
+
+
+# ------------------------------------------------------------------------ vet round 1
+
+def test_an_unpriced_conversion_is_refused_rather_than_sold_in_the_wrong_currency():
+    from app.decisions.candidates import to_intent
+
+    class Stub:
+        branch_id, actors = "b", {"treasury": {"priority_class": 1}}
+        clock = type("C", (), {"sim_minute": 0})()
+
+    action = {"type": "convert", "buy": {"minor": 500_000, "currency": "EUR"},
+              "sell_currency": "USD", "for_obligation": "eur-inv-1"}
+    with pytest.raises(ValueError, match="EUR/USD"):
+        to_intent(action, policy_id="integrated", world=Stub(), actor="treasury", round_=8,
+                  n=1, obs={"currency": "USD", "prices": {}}, evidence_ids=[],
+                  obs_hash="0" * 64)
+
+
+def test_a_committed_outflow_is_counted_once_on_the_observed_snapshot():
+    """Payroll committed to a pending_out flow is that flow, not a second outflow beside it."""
+    from app.decisions.candidates import project, snapshot_observation
+
+    snap = observed_lf1_at_t12().model_dump(mode="json")
+    acct = snap["accounts"][0]
+    acct["buckets"]["reserved"] = usd(0)
+    acct["buckets"]["pending_out"] = [{"flow_id": "out:payroll-1", "amount": usd(5_000_000),
+                                       "expected_at": "2026-01-06T16:00:00Z", "kind": "payroll",
+                                       "reservation_id": "res-payroll-1"}]
+    obs = snapshot_observation(Snapshot.model_validate(snap), epoch=LF1.as_of)
+    assert [f["due_h"] for f in obs["pending_out"]] == [40]
+    assert obs["obligations"] == []
+    assert project(obs).min_minor == 7_000_000 - 5_000_000
+
+
+def test_a_second_advance_is_projected_with_the_first_and_no_fee_leaves_cash():
+    view = apply_change(RULES["base_view"], {"facilities[adv-a].principal": 600_000,
+                                             "facilities[+]": {
+                                                 "id": "adv-b", "state": "offered",
+                                                 "principal": 600_000, "fee_minor": 90_000,
+                                                 "arrive_by_h": 18}})
+    del view["reserved"]
+    proposal = Integrated().propose(PolicyView(view_world(view), 3))
+    assert [a["facility"] for a in proposal.actions] == ["adv-a", "adv-b"]
+    assert proposal.projected_after.as_dict() == {"min": 3_200_000, "at_h": 40,
+                                                  "short_minor": 0}
+    assert proposal.funding_cost_minor == 80_000 + 90_000
+
+
+def test_integrated_does_not_propose_a_conversion_it_cannot_price():
+    case = next(c for c in RULES["cases"] if c["id"] == "integrated-converts-just-in-time")
+    view = rules_view(case)
+    del view["prices"]
+    assert Integrated().decide(PolicyView(view_world(view), view["t_h"] // 4)) == []
+
+
+def test_the_binding_names_the_facility_whose_draw_was_refused():
+    from app.decisions.feasibility import Feasibility, FloorResult
+    from app.decisions.objective import Evaluation
+
+    f = Feasibility("treasury/operating", {40: 2_000_000}, (),
+                    FloorResult(2_000_000, 40, 1_000_000, (40, 72)), 80_000)
+    draws = [{"round": 3, "type": "request_advance", "facility": "adv-a", "amount_minor": 600},
+             {"round": 3, "type": "request_advance", "facility": "adv-b", "amount_minor": 700}]
+    intents = [{"intent_id": f"i-r3-treasury-p{n}",
+                "params": {"facility_id": d["facility"], "amount": usd(d["amount_minor"])}}
+               for n, d in enumerate(draws, 1)]
+    c2 = [{"round": 3, "intent_id": "i-r3-treasury-p1", "status": "accepted"},
+          {"round": 3, "intent_id": "i-r3-treasury-p2", "status": "rejected",
+           "reason": "beyond_capacity", "binding": "K_p = 5.00"}]
+    e = Evaluation("s1", "integrated", "b", f, actions=draws, c2=c2, intents=intents)
+    result = rank([e], escalate_to="treasury operator")
+    assert result.escalation["binding"] == "K_p = 5.00 < adv-b principal 7.00"

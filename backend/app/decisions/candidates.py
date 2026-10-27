@@ -43,7 +43,7 @@ from typing import Any
 from sqlalchemy import Connection
 
 from ..execution.approval import is_observed_snapshot
-from ..finance.contracts import pool_facilities
+from ..finance.contracts import fee_minor, pool_facilities
 from ..finance.lending import capacity
 from ..finance.schemas import Snapshot
 from ..simulation.branches import BranchMismatch, Checkpoint, fork
@@ -244,12 +244,15 @@ class Integrated(_Policy):
         actions: list[dict] = []
         for o in obs["obligations"]:
             currency = o.get("currency", obs["currency"])
-            if currency != obs["currency"] and t < o["due_h"] <= t + CONVERT_LEAD_H:
+            if currency != obs["currency"] and t < o["due_h"] <= t + CONVERT_LEAD_H \
+                    and value_in(o["amount"], currency, obs) is not None:  # priced, or not now
                 actions.append({"type": "convert", "buy": {"minor": o["amount"],
                                                            "currency": currency},
                                 "sell_currency": obs["currency"], "for_obligation": o["id"]})
         deferred: dict[str, int] = {}
         after, cost = _defer(obs, before, actions, deferred)
+        paid_now = cost  # deferral fees leave cash; an advance's fee is owed, not paid
+        drawn: list[tuple[int, int]] = []
         reason = detail = None
         if after.short_minor:
             arrival = t + HOURS_PER_ROUND
@@ -261,11 +264,12 @@ class Integrated(_Policy):
                 if why is not None:
                     excluded.append(why)
                     continue
-                trial = project(obs, deferred=deferred, advances=[(arrival, f["principal"])],
-                                fees=cost)
+                trial = project(obs, deferred=deferred, fees=paid_now,
+                                advances=[*drawn, (arrival, f["principal"])])
                 if trial.min_minor > after.min_minor:  # all or nothing: drawn whole or not
                     actions.append({"type": "request_advance", "facility": f["id"],
                                     "amount_minor": f["principal"]})
+                    drawn.append((arrival, f["principal"]))
                     cost += f.get("fee_minor", 0)
                     after = trial
                     if not after.short_minor:
@@ -364,7 +368,10 @@ def to_intent(action: Mapping[str, Any], *, policy_id: str, world: World, actor:
         params = {"obligation_id": action["flow"], "reason": f"defer to t={action['to_h']} h"}
     elif kind == "convert":
         buy = action["buy"]
-        sell = value_in(buy["minor"], buy["currency"], obs) or buy["minor"]
+        sell = value_in(buy["minor"], buy["currency"], obs)
+        if sell is None:
+            raise ValueError(f"no observed {buy['currency']}/{obs['currency']} price to convert "
+                             f"for {action['for_obligation']}")
         params = {"amount": {"minor": sell, "currency": action["sell_currency"]},
                   "to_currency": buy["currency"], "reason": f"for {action['for_obligation']}"}
     elif kind == "pay":
@@ -525,6 +532,7 @@ def snapshot_observation(snapshot: Snapshot, *, epoch: datetime, account: str | 
     acct = next(a for a in snapshot.accounts if a.id == account)
     b = acct.buckets
     terms = terms or {}
+    committed = {f.reservation_id for f in b.pending_out if f.reservation_id}  # paid as flows
     pending_in = []
     for f in b.pending_in:
         expected_h = due_hour(f.expected_at, epoch)
@@ -538,17 +546,18 @@ def snapshot_observation(snapshot: Snapshot, *, epoch: datetime, account: str | 
         "floor_minor": acct.floor.minor if acct.floor else 0,
         "pending_in": pending_in,
         "pending_out": [{"flow_id": f.flow_id, "amount": f.amount.minor,
-                         "due_h": hours_of(f.due_at, epoch)} for f in b.pending_out],
+                         "due_h": hours_of(f.expected_at, epoch)} for f in b.pending_out],
         "obligations": [{"id": o.obligation_id, "amount": o.amount.minor,
                          "currency": o.amount.currency, "due_h": hours_of(o.due_at, epoch),
                          "reserved": o.reservation_id is not None,
                          "reservation_id": o.reservation_id}
                         for o in snapshot.obligations
-                        if o.account == account and o.state in ("open", "missed")],
+                        if o.account == account and o.state in ("open", "missed")
+                        and (o.reservation_id is None or o.reservation_id not in committed)],
         "outflows": [],
         "facilities": [{"id": c.contract_id, "state": c.state, "lender": c.lender,
                         "principal": c.principal.minor, "currency": c.principal.currency,
-                        "fee_minor": c.principal.minor * c.fee_bps // 10000,
+                        "fee_minor": fee_minor(c.principal.minor, c.fee_bps),
                         "arrive_by_h": terms.get(c.contract_id, {}).get("arrive_by_h")}
                        for c in snapshot.contracts
                        if c.kind == "revenue_advance" and c.borrower == acct.entity],
