@@ -39,3 +39,8 @@ shows the operator-resolution block with Confirm disabled, and no refusal text (
 `ux/unreadable-approval-phone.png`). The execution shows "outcome unknown … Do not send again",
 reads `apr-1` by its approval id, and shows its receipt (`ux/unreadable-execution-{phone,tablet,desktop}.png`).
 At all three widths there is no horizontal scroll and no control under 44 px.
+
+**Spot-check after merging main:** a linked execution answering 200 with an HTML page. The receipts
+section reads "! Could not read: the answer could not be read. Reading again." and shows no
+"no record" or "no execution" note (`ux/unreadable-linked-read-{phone,desktop}.png`). At 390 and
+1440 there is no horizontal scroll, and at 390 no control is under 44 px.
