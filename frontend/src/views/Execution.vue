@@ -24,7 +24,9 @@
     <p v-else-if="flow.message" class="lw-note" role="status" data-test="message">{{ flow.message }}</p>
     <p v-if="flow.elsewhere" class="lw-actions">
       <RouterLink class="lw-button lw-button--quiet" data-test="elsewhere"
-                  :to="{ path: route.path, query: flow.elsewhere.query }">Open run {{ flow.elsewhere.run }}</RouterLink>
+                  :to="{ path: route.path, query: { run_id: flow.elsewhere.run, execution_id: flow.elsewhere.id } }">
+        Read execution {{ flow.elsewhere.id }} of run {{ flow.elsewhere.run }}
+      </RouterLink>
     </p>
 
     <section v-if="incidents.length" class="lw-alert" role="alert" aria-labelledby="incident-heading"
@@ -300,17 +302,12 @@ function refusal (error) {
   return REFUSALS[error.code] || `Refused: ${error.message}`
 }
 
-/** The context this screen shows: the run and execution its query names. */
-const context = () => [route.query.run_id, route.query.execution_id].join('|')
+let screen = 0 // bumped by every navigation to another run or execution: the flow on it is reset
 
-/** Where a POST was sent from, fixed when it is sent: its answer belongs there and nowhere else. */
-function origin () {
-  const query = Object.fromEntries(['run_id', 'execution_id']
-    .filter((k) => route.query[k]).map((k) => [k, route.query[k]]))
-  return { key: context(), run: state.body.run_id, query }
-}
-
-const moved = (from) => from.key !== context()
+/** Where a POST was sent from, fixed when it is sent: the run, and the screen it was asked on. */
+const origin = () => ({ run: state.body.run_id, screen })
+/** The screen a POST was asked on is gone: its answer is never shown in that review again. */
+const moved = (from) => from.screen !== screen
 
 async function openReview () {
   if (reviewWhy.value) return
@@ -341,7 +338,7 @@ async function confirmApproval () {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { run_id: from.run, policy: policy.value }
     })
-    if (moved(from)) { // never offered for execution under another run; unused, it expires
+    if (moved(from)) { // never offered outside the review it was asked in; unused, it expires
       flow.message = `Approval ${answer.approval.approval_id} for run ${from.run} was created after ` +
         'this screen moved on; it was not executed and expires unused.'
       return
@@ -386,22 +383,39 @@ async function executePlan () {
     unknown = true
   }
   flow.submitting = false
-  sent.set(from.key, sentId)
-  if (moved(from)) { // the screen shows another run now: the outcome waits for its own run
-    flow.elsewhere = { run: from.run, query: from.query }
-    if (unknown) {
-      flow.blocked = `Execution outcome unknown for run ${from.run}; its status is read by approval id ` +
-        `${id} when that run is open. Do not send again.`
-    } else {
-      flow.message = `Execution ${sentId} for run ${from.run} was accepted after this screen moved on; ` +
-        'its provider state is read when that run is open.'
-    }
+  if (!moved(from)) {
+    announce({ id: sentId, unknown })
+    follow(sentId)
+    await closeReview()
     return
   }
+  // the screen moved on: the outcome waits for its own run's screen, and is shown there only
+  pending.set(from.run, { id: sentId, unknown })
+  if (state.status === 'loaded' && deliver(state.body)) return
+  flow.elsewhere = { run: from.run, id: sentId }
+  if (unknown) {
+    flow.blocked = `Execution outcome unknown for run ${from.run}; its status is read by approval id ` +
+      `${id} on that run's screen. Do not send again.`
+  } else {
+    flow.message = `Execution ${sentId} for run ${from.run} was accepted after this screen moved on.`
+  }
+}
+
+function announce ({ id, unknown }) {
   if (unknown) flow.blocked = `Execution outcome unknown; reading its status by approval id ${id}. Do not send again.`
-  else flow.message = `Execution ${sentId} accepted; reading its provider state.`
-  follow(sentId)
-  await closeReview()
+  else flow.message = `Execution ${id} accepted; reading its provider state.`
+}
+
+/** Show an outcome that answered after its screen moved on, once its own run is on screen. */
+function deliver (body) {
+  const sent = pending.get(body.run_id)
+  const asked = route.query.execution_id
+  if (!sent || (asked && asked !== sent.id)) return false
+  pending.delete(body.run_id)
+  if (flow.elsewhere?.run === body.run_id) flow.elsewhere = null
+  announce(sent)
+  follow(sent.id)
+  return true
 }
 
 // ----------------------------------------------------------------- provider state, polled
@@ -414,7 +428,7 @@ const guard = latestOnly()
 let timer = null
 const followedId = shallowRef(null)
 let followed = false // an execution this tab sent: a refresh re-reads it, never swaps it for another
-const sent = new Map() // context -> the execution this tab sent from it, read again on return
+const pending = new Map() // run id -> an execution this tab sent that answered after its screen moved on
 let autoReviewed = false // review=1 opens the review once, not on every refresh
 
 const execution = computed(() =>
@@ -472,10 +486,7 @@ watch(() => state.body, (body) => {
     return
   }
   pollError.value = ''
-  if (sent.has(context())) {
-    follow(sent.get(context())) // this run's own execution, sent from here before a navigation
-    return
-  }
+  if (deliver(body)) return
   activeId.value = body.execution_id
   guard.select(body.execution_id)
   live.value = null
@@ -488,10 +499,11 @@ watch(() => state.body, (body) => {
 })
 
 // The view is reused across query-only navigation: a new run or execution is a new screen. A
-// POST still in flight answers to the context it was sent from (origin), never to this one.
-watch(context, () => {
+// POST still in flight answers to the screen it was sent from (origin), never to this one.
+watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
+  screen += 1
   flow.open = false
-  Object.assign(flow, { approval: null, invalid: '', executed: false, message: '', elsewhere: null })
+  Object.assign(flow, { approval: null, invalid: '', executed: false, message: '' })
   followed = false
   followedId.value = null
   activeId.value = null
