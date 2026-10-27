@@ -336,9 +336,12 @@ const reviewWhy = computed(() => {
   if (held?.unseen === 'execution') {
     return `Execution ${held.followedId} of this run answered while you were away: read it first`
   }
-  if (inflight.has(state.body.run_id) && !(flow.submitting && sentFrom === screen)) {
+  const sendingHere = flow.submitting && sentFrom === screen
+  if (inflight.has(state.body.run_id) && !sendingHere) {
     return 'A request for this run, sent from a screen since left, is not answered yet'
   }
+  // a review opened now could be neither confirmed nor closed while that request is out
+  if (flow.submitting && !sendingHere) return 'A request sent from the last screen is not answered yet'
   return ''
 })
 
@@ -497,9 +500,7 @@ async function executePlan () {
       if (!disposed) flow.message = `Execution ${id} for run ${runId} was accepted after this screen moved on.`
     }
   } catch (error) {
-    if (!unanswered(error)) {
-      flow.submitting = false
-      inflight.delete(runId) // released even once left: a returned screen may send again
+    if (!unanswered(error)) { // refused: shown in the review it was asked in, which stays open
       if (disposed) return
       if (moved(from)) flow.message = `Run ${runId}: ${refusal(error)}`
       else flow.invalid = refusal(error)
@@ -517,9 +518,10 @@ async function executePlan () {
           `${id} on that run's screen. Do not send again.`
       }
     }
+  } finally {
+    flow.submitting = false
+    inflight.delete(runId) // released even once left: a returned screen may send again
   }
-  flow.submitting = false
-  inflight.delete(runId)
   if (!moved(from)) await closeReview()
 }
 
