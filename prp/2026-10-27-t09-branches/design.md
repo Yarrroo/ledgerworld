@@ -61,7 +61,7 @@ parent World ──checkpoint()──► Checkpoint (frozen)
 
 - Ledger copy is a row copy in foreign-key order; on PostgreSQL the posting id sequence is moved
   past the copied rows. Only SQLite is exercised offline.
-- Each world owns its RNG (board item 76): OASIS's and camel's module-level draws are routed to
+- Each world owns its RNG (`prp/2026-10-27-xreview-t09-rng/`): OASIS's and camel's draws are routed to
   the running world's by a context variable (`oasis_finance.draws`), so no branch moves another's.
 - No `memory.py` / `transcripts.py` change was needed: commit b14e2cd already built namespaces,
   snapshots, transcripts and `ReplayModel`; this task composes them.

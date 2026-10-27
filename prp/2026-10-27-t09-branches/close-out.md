@@ -35,7 +35,7 @@
   snapshots and `ReplayModel`.
 
 ## Follow-ups / known gaps
-- ~~The RNG is per process, not per world.~~ Fixed by board item 76: each `World` owns its RNG,
+- ~~The RNG is per process, not per world.~~ Fixed (`prp/2026-10-27-xreview-t09-rng/`): each `World` owns its RNG,
   and OASIS's and camel's draws are routed to the running world's (`oasis_finance.draws`).
 - **A checkpoint shares one SQLite connection** across the forks made from it. Forking one
   checkpoint from several threads at once needs a lock or per-fork bytes. `World.capture` copies

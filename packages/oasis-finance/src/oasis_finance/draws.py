@@ -30,9 +30,15 @@ class _RunningWorldRandom:
 
 
 def route_draws() -> None:
-    """Point every module-level draw a round makes at the running world's RNG; idempotent."""
+    """Point every module-level draw a round makes at the running world's RNG; idempotent.
+
+    Call it once ``oasis`` is imported (``app.simulation.world.import_oasis`` does): importing
+    ``oasis`` writes ``./log`` in the working directory.
+    """
     from camel.models import model_manager
     from oasis.social_platform import platform, recsys
 
-    platform.random = recsys.random = _RunningWorldRandom()
+    for module in (platform, recsys):
+        if not isinstance(module.random, _RunningWorldRandom):
+            module.random = _RunningWorldRandom()
     model_manager.choice = lambda seq: _running_rng().choice(seq)
