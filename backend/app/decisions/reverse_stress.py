@@ -49,7 +49,7 @@ from .nonanticipativity import HOURS_PER_ROUND, guarded_decide
 
 __all__ = ["COHORT", "LABEL", "Baseline", "FreshBranch", "Reaction", "ReplayPath",
            "SearchFamily", "borrower_silence", "confidence_rumour", "delayed_receipt",
-           "fx_gap", "lender_redemption", "obligation_growth", "replay_world",
+           "fx_gap", "lender_redemption", "obligation_growth", "replay_world", "resolve",
            "reverse_stress", "stablecoin_depeg"]
 
 LABEL = "search result, not a forecast"
@@ -275,9 +275,11 @@ def _n(minor: int) -> str:
 
 
 def replay_world(selected: Any, b: Baseline, events: Sequence[Mapping[str, Any]] = (),
-                 *, actor: str = "treasury") -> ReplayPath:
+                 *, actor: str = "treasury",
+                 pool_state: tuple[int, dict[str, int]] | None = None) -> ReplayPath:
     """Run the rules-replay world of ``b`` with ``events`` added to its shock, the selected
-    policy driving the treasury, to the horizon."""
+    policy driving the treasury, to the horizon. ``pool_state`` is ``b``'s K_p and known pool
+    balances when the caller already read them (a search reads them once)."""
     events = resolve(b, [*b.shock, *events])
     obs0 = snapshot_observation(b.snapshot, epoch=b.epoch, account=_account(b).id,
                                 terms=b.terms, horizon_h=b.horizon_h)
@@ -291,7 +293,8 @@ def replay_world(selected: Any, b: Baseline, events: Sequence[Mapping[str, Any]]
     outs = [dict(f, paid=False) for f in obs0["pending_out"]]
     obligations = [dict(o, paid_round=None, missed=False) for o in obs0["obligations"]]
     facilities = copy.deepcopy(obs0["facilities"])
-    k_p, pool_known = _pool_state(b)
+    k_p, pool_known = pool_state if pool_state is not None else _pool_state(b)
+    pool_known = dict(pool_known)
     pool_due: list[tuple[int, int]] = []  # (due hour, amount) announced so far
     seen: dict[str, set[str]] = {}
     public: set[str] = set()
@@ -487,13 +490,15 @@ def _search(selected: Any, b: Baseline, family: SearchFamily,
     lo, hi = family.range
     span = hi - lo
     paths: dict[int, ReplayPath] = {}
+    pool = _pool_state(b)  # the snapshot loaded into a ledger once, not once per probe
 
     def size(k: int) -> int:  # severity k = 0 is the mildest shock of the range
         return hi - k if family.descending else lo + k
 
     def probe(k: int) -> ReplayPath:
         if k not in paths:
-            paths[k] = replay_world(selected, b, family.events(size(k)), actor=actor)
+            paths[k] = replay_world(selected, b, family.events(size(k)), actor=actor,
+                                    pool_state=pool)
         return paths[k]
 
     grid = sorted({span * n // (GRID_POINTS - 1) for n in range(GRID_POINTS)})
