@@ -190,6 +190,7 @@ def test_each_family_on_each_baseline(results, bid, fid):
     if got["breaks"]:
         assert got["confirmed"] is True and got["matches_replay"] is True
         assert got["branch_id"].startswith(COHORT) and got["replay"] is False
+        assert len(got["branch_id"]) <= 64  # the ledger's branch column, on PostgreSQL too
         assert got["non_monotone"] is False and got["reactions_frozen"] is False
 
 
@@ -402,9 +403,8 @@ def test_a_flow_already_overdue_at_the_snapshot_is_still_shocked():
     assert path.settled[16] == 7_000_000  # rcv-1 never landed
 
 
-def test_an_obligation_due_after_the_last_round_is_not_counted_unmet():
-    late = SearchFamily("late", (0, 1), 1, events=lambda size: [
-        {"round": 2, "kind": "obligation", "obligation_id": "late-1",
-         "account": "treasury/operating", "amount_minor": 1, "due_h": 73}])
-    path = replay_world(Integrated(), baseline("no-shock", horizon_h=74), late.events(1))
-    assert path.obligations_unmet == 0 and not path.breaks
+def test_a_horizon_between_round_boundaries_is_refused():
+    """No round reaches t = 73 on a 74 h horizon: an obligation due then could be neither paid
+    nor fairly counted unmet, so the horizon itself is refused."""
+    with pytest.raises(ValueError, match="round boundary"):
+        replay_world(Integrated(), baseline("no-shock", horizon_h=74))

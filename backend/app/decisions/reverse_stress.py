@@ -20,7 +20,9 @@ reaction replays only while its actor has observed exactly the events it had obs
 acted; otherwise it becomes ``no_action`` and the result says ``reactions_frozen``. One fresh
 branch of the coupled world (``evaluate`` with the selected policy only) then confirms each
 found point on its realised ledger; a shock the round world cannot stage (a partial delay, a
-depeg loss, a silent borrower) is reported unconfirmed rather than staged differently.
+depeg loss, a silent borrower) is reported unconfirmed rather than staged differently. The
+replay holds one pool's K_p and whole-round horizons; a draw on another lender's facility, or a
+horizon between round boundaries, is refused rather than replayed approximately.
 
 ``size_bps = floor(size × 10000 / scale)`` (a descending family measures its size from the
 mildest end of its range, so its bps grow with the shock); the smallest shock of a baseline is the breaking
@@ -30,7 +32,6 @@ family with the lowest ``size_bps``, ties kept in the order the families were gi
 from __future__ import annotations
 
 import copy
-import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -39,7 +40,7 @@ from typing import Any
 
 from ..finance.ledger import from_snapshot
 from ..finance.lending import capacity
-from ..finance.models import HORIZON, branch_meta
+from ..finance.models import HORIZON, bounded_id, branch_meta
 from ..finance.schemas import Snapshot
 from ..finance.spendability import grouped
 from ..finance.store import LedgerStore
@@ -59,7 +60,6 @@ COHORT = "reverse_stress"
 GRID_POINTS = 8
 BPS = 10_000
 POOL_HORIZON_H = HORIZON // timedelta(hours=1)  # K_p counts pool obligations due within it
-BRANCH_ID_MAX = branch_meta.c.branch_id.type.length
 
 
 # ------------------------------------------------------------------------------- baseline
@@ -291,6 +291,8 @@ def replay_world(selected: Any, b: Baseline, events: Sequence[Mapping[str, Any]]
                                 terms=b.terms, horizon_h=b.horizon_h)
     t0 = obs0["t_h"]
     start, end = t0 // HOURS_PER_ROUND, b.horizon_h // HOURS_PER_ROUND
+    if b.horizon_h % HOURS_PER_ROUND:
+        raise ValueError(f"the horizon t={b.horizon_h} h is not a round boundary")
     if end <= start:
         raise ValueError(f"the horizon t={b.horizon_h} h is not after the snapshot")
     settled, floor = obs0["settled"], obs0["floor_minor"]
@@ -568,15 +570,10 @@ def _staged(b: Baseline, events: Sequence[Mapping[str, Any]]) -> tuple[list, lis
 
 
 def _confirm_run_id(b: Baseline, family: SearchFamily, selected: Any) -> str:
-    """``reverse_stress-<baseline>-<family>``, or a digest of it when the branch id it makes
-    (``<run>-confirm-<policy>``) would not fit the ledger's branch column."""
-    run_id = f"{COHORT}-{b.id}-{family.id}"
-    tail = f"-confirm-{selected.id}"
-    if len(run_id + tail) > BRANCH_ID_MAX:
-        run_id = f"{COHORT}-{hashlib.sha256(run_id.encode()).hexdigest()[:16]}"
-    if len(run_id + tail) > BRANCH_ID_MAX:
-        raise ValueError(f"policy id {selected.id!r} leaves no room for a branch id")
-    return run_id
+    """``reverse_stress-<baseline>-<family>``, shortened by the ledger's own rule so the branch
+    id ``evaluate`` makes of it (``<run>-confirm-<policy>``) fits the branch column."""
+    return bounded_id(branch_meta.c.branch_id, f"{COHORT}-{b.id}-{family.id}",
+                      room=len(f"-confirm-{selected.id}"))
 
 
 async def _confirm(selected: Any, b: Baseline, family: SearchFamily, size: int,
