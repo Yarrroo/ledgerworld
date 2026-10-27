@@ -49,7 +49,7 @@ from app.finance.models import (
     revenue_observations,
 )
 from app.finance.schemas import EXPONENT, ApprovalLeg, BoundApproval, Mode, Money
-from app.finance.spendability import spendability, state_of
+from app.finance.spendability import AccountView, spendability, state_of
 from app.finance.store import LedgerStore
 from sqlalchemy import Connection, select, update
 
@@ -160,7 +160,10 @@ class ConnectorProvider:
             if refused.retryable:  # throttled or unreachable: the request was not taken
                 raise ob.OutcomeUnknown(False, refused.code) from None
             raise ob.Rejected(refused.code) from None
-        return self._ours(leg, obj)
+        try:
+            return self._ours(leg, obj)
+        except ob.LookupFailed as unreadable:  # accepted, but unreadable: it may have moved
+            raise ob.OutcomeUnknown(True, str(unreadable)) from None
 
     def find(self, leg: ob.Leg) -> list[ob.ProviderObject]:
         kind, path = collection(leg.kind, self.leg_mode)
@@ -390,14 +393,16 @@ class Gateway:
 
     def _check_leg(self, entity: str, leg: ApprovalLeg, now: datetime,
                    spend: dict[str, int]) -> binding.Refusal | None:
-        owner = self._account(leg.source, "entity_id")
+        source, other = self._view(leg.source), self._view(leg.counterparty)
+        owner = source.entity_id if source else None
+        other_owner = other.entity_id if other else None
         f = self._facility(leg.facility_id)
         if leg.kind in ("advance", "repayment"):
             if f is None or f.borrower != entity or f.currency != leg.amount.currency:
                 return binding.Refusal("unowned_funds",
                                        f"leg {leg.index} names no facility of {entity}")
             payer, payee = (f.pool, entity) if leg.kind == "advance" else (entity, f.pool)
-            if (owner, self._account(leg.counterparty, "entity_id")) != (payer, payee):
+            if (owner, other_owner) != (payer, payee):
                 return binding.Refusal("unowned_funds",
                                        f"leg {leg.index} does not move {payer}'s money to {payee}")
         elif owner != entity:
@@ -405,13 +410,12 @@ class Gateway:
         if leg.kind == "payout" and leg.counterparty not in self.beneficiaries:
             return binding.Refusal("beneficiary_not_allowed",
                                    f"{leg.counterparty} is not on the beneficiary allowlist")
-        if leg.kind == "fx" and (self._account(leg.counterparty, "entity_id") != entity
-                                 or self._account(leg.counterparty, "currency") != leg.to_currency):
+        if leg.kind == "fx" and (other_owner != entity or other.currency != leg.to_currency):
             return binding.Refusal("unowned_funds",
                                    f"{leg.counterparty} is not {entity}'s {leg.to_currency} account")
-        if self._account(leg.source, "currency") != leg.amount.currency:
+        if source.currency != leg.amount.currency:
             return binding.Refusal("unowned_funds", f"{leg.source} holds no {leg.amount.currency}")
-        view = self.store.view(leg.source)
+        view = source
         state = state_of(view, now)
         if state != "known":
             return binding.Refusal(f"{state}_balance", f"{leg.source} is {state}")
@@ -458,9 +462,9 @@ class Gateway:
                                            f"{held.get(currency, 0)} {currency} of {amount}")
         return None
 
-    def _account(self, account_id: str, field: str) -> str | None:
+    def _view(self, account_id: str) -> AccountView | None:
         try:
-            return getattr(self.store.view(account_id), field)
+            return self.store.view(account_id)
         except LookupError:
             return None
 
@@ -551,9 +555,12 @@ class Gateway:
     def release_failed(self, execution_id: str | None = None) -> None:
         """A failed leg moved nothing: its pending flow is cancelled, and a reservation it
         committed is held again for the obligation it was made for."""
-        where, args = "state = 'failed'", ()
+        # Only failed legs whose flow is still pending: a released leg is not read again.
+        where = ("state = 'failed' AND leg_id IN"
+                 " (SELECT flow_id FROM expected_flows WHERE state = 'pending')")
+        args: tuple = ()
         if execution_id is not None:
-            where, args = "state = 'failed' AND approval_id = ?", (execution_id,)
+            where, args = f"{where} AND approval_id = ?", (execution_id,)
         for leg in self.outbox._legs(where, args):
             with self.transaction():
                 if not self._close_flow(leg.leg_id, "cancelled"):

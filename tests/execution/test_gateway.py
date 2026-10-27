@@ -508,3 +508,16 @@ def test_mode_b_advance_is_a_labelled_deposit_and_an_unknown_one_waits_for_the_o
     assert (advance.state, payout.state) == ("unknown", "pending")
     assert other.gateway.incidents(open_only=True)[0]["kind"] == "outcome_unknown"
     assert len(other.posts(advance.request_id)) == 1
+
+
+def test_an_unreadable_create_answer_is_an_unknown_outcome_never_an_error():
+    world = World()
+    approval = bind_terms(BASE)
+    advance_id = f"{approval.plan_hash[:12]}-1-advance"
+    # The create is answered 201 with no amount: the request may have moved money.
+    world.fake.respond_next(201, {"id": "cat-x", "request_id": advance_id, "status": "SETTLED"})
+    done = world.execute(approval)
+    assert isinstance(done, Execution)
+    advance, payout = done.legs
+    assert (advance.state, payout.state) == ("unknown", "pending")
+    assert world.gateway.incidents(open_only=True)[0]["kind"] == "outcome_unknown"
