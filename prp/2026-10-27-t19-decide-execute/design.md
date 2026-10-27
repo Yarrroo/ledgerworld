@@ -65,7 +65,10 @@
    updates text in place and never moves focus. The screen's own read (initial and Refresh) draws
    its generation from the same guard, so an older poll never overwrites it and it never
    overwrites a newer poll. A 404 is an answer; any other failure is not, so it discards no
-   earlier-issued read, and its error clears only on an answer issued after it.
+   earlier-issued read, and its error clears only on an answer issued after it. Leaving the
+   screen ends it: a read or POST answered after unmount writes nothing to the screen and
+   schedules nothing; an unknown outcome is still held in tab memory, so returning restores its
+   block.
 
 ## Contract gaps (recorded, not hard-coded)
 

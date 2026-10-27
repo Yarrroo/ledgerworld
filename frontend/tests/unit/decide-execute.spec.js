@@ -107,7 +107,7 @@ function serve (answers) {
   vi.stubGlobal('fetch', vi.fn(async (url, init = {}) => {
     const method = init.method || 'GET'
     const path = new URL(url).pathname.replace('/api/v1', '')
-    calls.push({ method, path, headers: init.headers, body: init.body && JSON.parse(init.body) })
+    calls.push({ method, path, headers: init.headers, signal: init.signal, body: init.body && JSON.parse(init.body) })
     let answer = answers[`${method} ${path}`]
     if (typeof answer === 'function') answer = await answer()
     if (answer instanceof Error) throw answer
@@ -1074,6 +1074,146 @@ describe('vet round 2: an answer belongs to the run it was sent for (board item 
     await flushPromises()
     expect(text(w, 'context')).toContain('Run run-1')
     expect(text(w, 'blocked')).toBe(APPROVAL_UNKNOWN)
+  })
+})
+
+describe('unmount with a request pending', () => {
+  const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  const gets = (calls, path) => calls.filter((x) => x.method === 'GET' && x.path === path)
+  const held = () => { let release; const promise = new Promise((resolve) => { release = resolve }); return { promise, release } }
+
+  /** Leave the screen with the token still held, as navigating away does; afterEach forgets the tab. */
+  async function leave (w) {
+    mounted.splice(mounted.indexOf(w), 1)
+    w.unmount()
+  }
+
+  /** What the gone screen still holds: a late answer must have written none of it. */
+  const flowOf = (w) => {
+    const { approval, message, blocked, invalid, submitting } = w.vm.flow
+    return { approval: approval?.approval_id ?? null, message, blocked, invalid, submitting }
+  }
+
+  it('a status read answered after the screen is gone schedules no further read', async () => {
+    fakeTimers()
+    let answer = executionBody({ legs: [sentPayout()] })
+    const calls = serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': () => answer
+    })
+    const w = await open(Execution, '/execution')
+    const pending = held()
+    answer = pending.promise
+    vi.advanceTimersByTime(5000)
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
+    expect(gets(calls, '/executions/apr-1')[1].signal.aborted).toBe(false)
+    await leave(w)
+    expect(gets(calls, '/executions/apr-1')[1].signal.aborted).toBe(true) // the outstanding read is cancelled
+    pending.release(executionBody({ legs: [sentPayout()] }))
+    await flushPromises()
+    vi.advanceTimersByTime(30000)
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('an execution POST answered after the screen is gone starts no status reads', async () => {
+    fakeTimers()
+    const pending = held()
+    const { w, calls } = await reviewReady({
+      'POST /executions': () => pending.promise,
+      'GET /executions/apr-1': executionBody({ legs: [sentPayout()] })
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await leave(w)
+    pending.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    await flushPromises()
+    vi.advanceTimersByTime(30000)
+    await flushPromises()
+    expect(posts(calls, '/executions')).toHaveLength(1)
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(flowOf(w).message).toBe('')
+  })
+
+  it('an unanswered execution POST failing after the screen is gone starts no status reads', async () => {
+    fakeTimers()
+    const pending = held()
+    const { w, calls } = await reviewReady({ 'POST /executions': () => pending.promise })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await leave(w)
+    pending.release(refuse(503, 'unavailable'))
+    await flushPromises()
+    vi.advanceTimersByTime(30000)
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(flowOf(w).blocked).toBe('')
+  })
+
+  it('a refused execution POST after the screen is gone applies no refusal', async () => {
+    const pending = held()
+    const { w } = await reviewReady({ 'POST /executions': () => pending.promise })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await leave(w)
+    pending.release(refuse(409, 'snapshot_moved'))
+    await flushPromises()
+    expect(flowOf(w).invalid).toBe('')
+  })
+
+  it('an approval POST answered after the screen is gone starts no expiry clock', async () => {
+    fakeTimers()
+    const pending = held()
+    const { w } = await reviewReady({ 'POST /approvals': () => pending.promise })
+    await w.get('[data-test="confirm"]').trigger('click')
+    await leave(w)
+    pending.release(approvalBody())
+    await flushPromises()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(flowOf(w).approval).toBe(null)
+  })
+
+  it('an approval POST failing after the screen is gone blocks nothing', async () => {
+    const pending = held()
+    const { w } = await reviewReady({ 'POST /approvals': () => pending.promise })
+    await w.get('[data-test="confirm"]').trigger('click')
+    await leave(w)
+    pending.release(refuse(503, 'unavailable'))
+    await flushPromises()
+    expect(flowOf(w)).toMatchObject({ approval: null, blocked: '', message: '' })
+  })
+
+  it('an unknown execution outcome answered after the screen is gone is still held on return', async () => {
+    const pending = held()
+    const { w, calls } = await reviewReady({ 'POST /executions': () => pending.promise })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await leave(w)
+    pending.release(refuse(503, 'unavailable'))
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(0) // nothing read while away
+    const back = await open(Execution, '/execution')
+    expect(text(back, 'blocked')).toContain('Do not send again')
+    expect(disabled(back, 'review-plan')).toBe(true)
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(1) // the lookup resumes on return
+    expect(posts(calls, '/executions')).toHaveLength(1)
+  })
+
+  it('an unknown approval outcome answered after the screen is gone blocks on return', async () => {
+    const pending = held()
+    const { w } = await reviewReady({ 'POST /approvals': () => pending.promise })
+    await w.get('[data-test="confirm"]').trigger('click')
+    await leave(w)
+    pending.release(refuse(503, 'unavailable'))
+    await flushPromises()
+    const back = await open(Execution, '/execution')
+    expect(text(back, 'blocked')).toBe(kase('approval-post-timeout').expect.message)
+    expect(disabled(back, 'review-plan')).toBe(true)
   })
 })
 
