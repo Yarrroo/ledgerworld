@@ -241,8 +241,9 @@ const opener = shallowRef(null)
 const heading = shallowRef(null)
 const now = shallowRef(Date.now())
 let clock = null
-// The screen is gone: a late answer applies nothing and starts no timer. A POST is never
-// aborted (its effect stands either way); a status read is, since nothing will show it.
+// The screen is gone: a late answer, success or failure, applies nothing and starts no timer.
+// A POST is never aborted (its effect stands either way); the polled status read is, since
+// nothing will show it.
 let disposed = false
 const reads = new AbortController()
 
@@ -337,6 +338,7 @@ async function confirmApproval () {
     await nextTick()
     heading.value?.focus()
   } catch (error) {
+    if (disposed) return
     if (unanswered(error)) flow.blocked = APPROVAL_UNKNOWN
     else flow.message = refusal(error)
   } finally {
@@ -354,9 +356,11 @@ async function executePlan () {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { approval_id: id }
     })
+    if (disposed) return
     flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
     follow(answer.execution_id)
   } catch (error) {
+    if (disposed) return
     if (!unanswered(error)) {
       flow.submitting = false
       flow.invalid = refusal(error)
@@ -421,7 +425,6 @@ async function poll () {
 }
 
 function follow (id) {
-  if (disposed) return
   followed = true
   followedId.value = id
   activeId.value = id

@@ -699,6 +699,12 @@ describe('unmount with a request pending', () => {
     w.unmount()
   }
 
+  /** What the gone screen still holds: a late answer must have written none of it. */
+  const flowOf = (w) => {
+    const { approval, message, blocked, invalid, submitting } = w.vm.flow
+    return { approval: approval?.approval_id ?? null, message, blocked, invalid, submitting }
+  }
+
   it('a status read answered after the screen is gone schedules no further read', async () => {
     fakeTimers()
     let answer = executionBody({ legs: [sentPayout()] })
@@ -739,6 +745,7 @@ describe('unmount with a request pending', () => {
     expect(posts(calls, '/executions')).toHaveLength(1)
     expect(gets(calls, '/executions/apr-1')).toHaveLength(0)
     expect(vi.getTimerCount()).toBe(0)
+    expect(flowOf(w).message).toBe('')
   })
 
   it('an unanswered execution POST failing after the screen is gone starts no status reads', async () => {
@@ -754,6 +761,18 @@ describe('unmount with a request pending', () => {
     await flushPromises()
     expect(gets(calls, '/executions/apr-1')).toHaveLength(0)
     expect(vi.getTimerCount()).toBe(0)
+    expect(flowOf(w).blocked).toBe('')
+  })
+
+  it('a refused execution POST after the screen is gone applies no refusal', async () => {
+    const pending = held()
+    const { w } = await reviewReady({ 'POST /executions': () => pending.promise })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await leave(w)
+    pending.release(refuse(409, 'snapshot_moved'))
+    await flushPromises()
+    expect(flowOf(w).invalid).toBe('')
   })
 
   it('an approval POST answered after the screen is gone starts no expiry clock', async () => {
@@ -765,5 +784,16 @@ describe('unmount with a request pending', () => {
     pending.release(approvalBody())
     await flushPromises()
     expect(vi.getTimerCount()).toBe(0)
+    expect(flowOf(w).approval).toBe(null)
+  })
+
+  it('an approval POST failing after the screen is gone blocks nothing', async () => {
+    const pending = held()
+    const { w } = await reviewReady({ 'POST /approvals': () => pending.promise })
+    await w.get('[data-test="confirm"]').trigger('click')
+    await leave(w)
+    pending.release(refuse(503, 'unavailable'))
+    await flushPromises()
+    expect(flowOf(w)).toMatchObject({ approval: null, blocked: '', message: '' })
   })
 })
