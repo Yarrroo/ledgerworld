@@ -203,6 +203,7 @@ def _fits_its_tool(intent: ActionIntent) -> bool:
     """An intent's params validate against its tool's argument schema, whoever queued it (a
     tool already did; an injected or policy-made intent is held to the same shape)."""
     args = intent.params.model_dump(mode="json", exclude_none=True)
+    args.pop("source", None)  # a policy's provenance (`policy:<id>`), not a tool argument
     amount = args.pop("amount", None)
     if amount is not None:
         args.update(amount_minor=amount["minor"], currency=amount["currency"])
