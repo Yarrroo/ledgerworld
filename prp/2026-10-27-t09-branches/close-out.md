@@ -35,11 +35,8 @@
   snapshots and `ReplayModel`.
 
 ## Follow-ups / known gaps
-- **The RNG is per process, not per world** (`world.py`, outside this task). After a fork has run,
-  a parent that continues draws from where the fork left the RNG, and interleaved branches share
-  one RNG.
-  - Effect: OASIS's random recommender, so only the social feed.
-  - Fix: each `World` keeps its own RNG state and swaps it in around a round.
+- ~~The RNG is per process, not per world.~~ Fixed (`prp/2026-10-27-xreview-t09-rng/`): each `World` owns its RNG,
+  and OASIS's and camel's draws are routed to the running world's (`oasis_finance.draws`).
 - **A checkpoint shares one SQLite connection** across the forks made from it. Forking one
   checkpoint from several threads at once needs a lock or per-fork bytes. `World.capture` copies
   the platform once more than needed. Both belong to `world.py`.

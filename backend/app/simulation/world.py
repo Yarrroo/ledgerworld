@@ -17,6 +17,10 @@ that branch. Graph memory is not in the round loop (HANDOFF); an actor's memory 
 back and ``fingerprint()`` digests each, so a restoration is checked rather than trusted.
 Importing ``oasis`` writes ``./log`` in the working directory (oasis-seam.md S13), so it is
 imported on first use from a temporary directory.
+
+Each world has its own RNG, so one branch's draws never move another's: ``import_oasis`` routes
+OASIS's and camel's module-level draws (``oasis_finance.draws``) to the RNG of the world whose
+platform task or ``env.step`` is running.
 """
 
 from __future__ import annotations
@@ -39,6 +43,7 @@ from types import SimpleNamespace
 from typing import Any, Self
 
 from oasis_finance.actions import decode_args
+from oasis_finance.draws import WORLD_RNG, route_draws
 from oasis_finance.observation import DEFAULT_EPOCH
 from sqlalchemy import Connection, select
 
@@ -73,6 +78,7 @@ def import_oasis() -> SimpleNamespace:
             import oasis  # noqa: F401
         finally:
             os.chdir(cwd)
+    route_draws()  # oasis may have been imported elsewhere first
     from oasis import AgentGraph, LLMAction, Platform
     from oasis.environment.env import OasisEnv
     from oasis.social_platform.typing import ActionType
@@ -199,6 +205,7 @@ class World:
                              key=lambda e: e["round"])
         self.clock = Clock(epoch=epoch)
         self.seed = seed
+        self.rng = random.Random(seed)  # this branch's alone
         self.store = store or LedgerStore("sqlite://")
         ledger.from_snapshot(self.store, self.snapshot)
         self.queue = IntentQueue(branch_id)
@@ -235,11 +242,26 @@ class World:
             graph.add_agent(agent)
         platform = self.oasis.Platform(db_path=str(self.db_path), recsys_type="random")
         self.env = self.oasis.OasisEnv(graph, platform, database_path=str(self.db_path))
+        # The platform task and every step (its agents' tasks too) draw from this world's RNG.
+        self._own_draws(platform, "running")
+        self._own_draws(self.env, "step")
         await self.env.reset()
         platform.sandbox_clock.time_step = self.clock.round
-        # OASIS's random recommender draws from the module RNG: seed it, and capture it.
-        random.seed(self.seed)
+        self.rng.seed(self.seed)  # a started world draws from its seed, whatever reset drew
         return self
+
+    def _own_draws(self, obj: Any, name: str) -> None:
+        """Run the coroutine method ``obj.name`` with this world's RNG as the running one."""
+        method = getattr(obj, name)
+
+        async def owned(*args: Any, **kwargs: Any) -> Any:
+            token = WORLD_RNG.set(self.rng)
+            try:
+                return await method(*args, **kwargs)
+            finally:
+                WORLD_RNG.reset(token)
+
+        setattr(obj, name, owned)
 
     async def close(self) -> None:
         if self.env is not None and not self.env.platform_task.done():
@@ -452,7 +474,7 @@ class World:
         return _fingerprint(
             ledger=_digest(self.store.dump()), sqlite_dump=self.sqlite_dump(),
             memory=self.memory_records(), round_=self.clock.round, time_step=self._time_step(),
-            rng=random.getstate(), state=self.state, queued=len(self.queue),
+            rng=self.rng.getstate(), state=self.state, queued=len(self.queue),
             transcript=self.transcript)
 
     def capture(self) -> Capture:
@@ -476,7 +498,7 @@ class World:
             models={a: [(set(m._used), set(m._pending)) for m in self._scripted(agent)]
                     for a, agent in self.agents.items()},
             oasis_time_step=self._time_step(),
-            rng=random.getstate(),
+            rng=self.rng.getstate(),
             state=copy.deepcopy(self.state),
             transcript=self.transcript.calls(),
         )
@@ -500,7 +522,7 @@ class World:
                 with model._lock:
                     model._used, model._pending = set(used), set(pending)
         self.clock.round = capture.round
-        random.setstate(capture.rng)
+        self.rng.setstate(capture.rng)
         self.state = copy.deepcopy(capture.state)
         self.queue.drain()
         self.transcript = Transcript(self.world_id, self.branch_id, calls=capture.transcript)
