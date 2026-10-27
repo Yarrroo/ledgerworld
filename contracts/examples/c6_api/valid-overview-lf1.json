@@ -53,7 +53,8 @@
   },
   "completeness": {
    "status": "complete",
-   "missing": []
+   "missing": [],
+   "accounts": []
   },
   "demo": {
    "run_id": "run-1",

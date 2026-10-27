@@ -43,7 +43,7 @@
    (C6 Lending carries no per-account list); a context mismatch between the two reads is an error,
    never a merge. Contract gap named for T16: LendingResponse has no pool account list.
    *Superseded (prp/2026-10-27-x86-lending-coherent):* the gap is closed. `capacity.unobserved`
-   lists the uncounted pool accounts, read together with the authority. The overview is read only
+   lists the uncounted pool accounts, each stale or unknown, read together with the authority. The overview is read only
    for the demo run, because two reads on either side of the six-hour boundary disagreed.
 8. **Tooling**: vitest 4 + happy-dom + @vue/test-utils (Node 20 on the build box; vitest 5 and
    jsdom 30 need Node 22).

@@ -11,7 +11,7 @@ import Overview from '../../src/views/Overview.vue'
 import Treasury from '../../src/views/Treasury.vue'
 import Lending from '../../src/views/Lending.vue'
 import {
-  contextKey, formatMoney, formatTime, latestOnly, metricText, useReading
+  contextKey, formatMoney, formatTime, freshness, latestOnly, metricText, useReading
 } from '../../src/api/v1.js'
 
 import moneyViews from '../../../prp/2026-10-20-ledgerworld/design/modules/ui/fixtures/money-views.json'
@@ -21,6 +21,8 @@ import overviewFreeze from '../../../contracts/examples/c6_api/valid-overview-lf
 import treasuryDelayed from '../../../contracts/examples/c6_api/valid-treasury-lf1-delayed.json'
 import lendingLf2 from '../../../contracts/examples/c6_api/valid-lending-lf2.json'
 import lendingFreeze from '../../../contracts/examples/c6_api/valid-lending-lf2-venue-freeze.json'
+import overviewStale from '../../../contracts/examples/c6_api/valid-overview-lf-stale.json'
+import lendingStale from '../../../contracts/examples/c6_api/valid-lending-lf-stale.json'
 
 const record = (view, kase) => moneyViews.records.find((r) => r.view === view && r.case === kase)
 const stateCase = (id) => dataStates.cases.find((c) => c.id === id)
@@ -198,8 +200,8 @@ describe('money-views fixture', () => {
     const w = await open(Lending, '/lending')
     const { expect: want } = record('Lending', 'lf2-venue-freeze')
     expect(text(w, 'capacity-value')).toBe(want.capacity)
-    expect(text(w, 'unobserved')).toContain(`lender/venue · ? ${want.venue}`)
-    expect(text(w, 'unobserved')).not.toMatch(/USD 0\.00/)
+    expect(text(w, 'not-current')).toContain(`lender/venue · ? ${want.venue}`)
+    expect(text(w, 'not-current')).not.toMatch(/USD 0\.00/)
     expect(disabled(w, 'fund')).toBe(!want.funding_enabled)
     expect(text(w, 'fund-why')).toBe(want.reason)
     expect(text(w, 'authority')).toContain('reduced')
@@ -207,21 +209,17 @@ describe('money-views fixture', () => {
 
   it('Lending shows one moment across the six-hour freshness boundary, not two', async () => {
     // Lending read at t0 + 6 h (pool fresh, full authority); the overview of the same snapshot
-    // read a second later, past the boundary, already lists the pool accounts as stale.
-    const later = clone(overviewLf1.instance)
-    later.completeness = { status: 'partial', missing: ['lender/operating', 'lender/venue'] }
-    serveLending(lendingLf2.instance, later)
+    // read later, past the boundary, already lists the pool accounts as not current.
+    serveLending(lendingLf2.instance, overviewStale.instance)
     let w = await open(Lending, '/lending')
     expect(text(w, 'authority')).toContain('full')
-    expect(w.find('[data-test="unobserved"]').exists()).toBe(false)
-    // and the other way: Lending past the boundary, the overview still before it
-    const stale = clone(lendingFreeze.instance)
-    stale.capacity.unobserved = ['lender/operating', 'lender/venue']
-    serveLending(stale)
+    expect(w.find('[data-test="not-current"]').exists()).toBe(false)
+    // and the other way: Lending past the boundary, the overview still before it (complete)
+    serveLending(lendingStale.instance)
     w = await open(Lending, '/lending')
     expect(text(w, 'authority')).toContain('reduced')
-    expect(text(w, 'unobserved')).toContain('lender/operating')
-    expect(text(w, 'unobserved')).toContain('lender/venue')
+    expect(text(w, 'not-current')).toContain('lender/operating · ◷ Stale')
+    expect(text(w, 'not-current')).toContain('lender/venue · ? Unknown')
     expect(disabled(w, 'fund')).toBe(true)
   })
 
@@ -230,6 +228,47 @@ describe('money-views fixture', () => {
     const w = await open(Lending, '/lending')
     expect(text(w, 'error')).toContain('different snapshots or modes')
     expect(w.find('[data-test="capacity"]').exists()).toBe(false)
+  })
+})
+
+// Recorded 7 h after the observation under the venue freeze: two accounts stale (observed, not
+// current), the venue unknown. completeness.missing names all three; each keeps its own reason.
+describe('a stale account is not current, and it is not unknown', () => {
+  it('Overview names each account with its own reason', async () => {
+    serve({ '/overview': overviewStale.instance })
+    const w = await open(Overview, '/overview')
+    const partial = text(w, 'partial')
+    expect(partial).toContain('borrower-a/operating · ◷ Stale, as of 2026-01-05 12:00 UTC')
+    expect(partial).toContain('lender/operating · ◷ Stale, as of 2026-01-05 12:00 UTC')
+    expect(partial).toContain('lender/venue · ? Unknown')
+    expect(partial).not.toMatch(/operating · \? Unknown/)
+    expect(partial).not.toContain('not observed')
+    // Cash and S include a stale value and say Stale; K_p counts known balances only.
+    expect(partial).toContain('the figures that include it say Stale')
+    expect(partial).toContain('Lender capacity counts known balances only')
+    expect(text(w, 'settled')).toContain('USD 70,000.00 · stale') // its last value, kept
+  })
+
+  it('Lending marks the stale pool account stale and only the venue unknown', async () => {
+    serve({ '/lending': lendingStale.instance, '/overview': overviewStale.instance })
+    const w = await open(Lending, '/lending')
+    const shown = text(w, 'not-current')
+    expect(shown).toContain('lender/operating · ◷ Stale')
+    const asOf = w.get('[data-test="not-current"]').findAll('.lw-time').map((t) => t.text())
+    expect(asOf).toEqual(['as of 2026-01-05 12:00 UTC']) // the stale one only; unknown has no time
+    expect(shown).toContain('lender/venue · ? Unknown')
+    expect(shown).not.toContain('lender/operating · ? Unknown')
+    expect(shown).not.toContain('borrower-a/operating') // not the pool's
+    expect(shown).not.toMatch(/not observed/i)
+    expect(disabled(w, 'fund')).toBe(true)
+  })
+
+  it('only a stale account shows a time, whatever the response carries', () => {
+    const at = '2026-01-05T12:00:00Z'
+    expect(freshness({ account_id: 'lender/venue', status: 'unknown', as_of: at }).text)
+      .toBe('lender/venue · ? Unknown')
+    expect(freshness({ account_id: 'lender/operating', status: 'stale', as_of: at }).at)
+      .toBe('2026-01-05 12:00 UTC')
   })
 })
 

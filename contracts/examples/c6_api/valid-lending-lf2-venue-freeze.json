@@ -45,7 +45,11 @@
     }
    },
    "unobserved": [
-    "lender/venue"
+    {
+     "account_id": "lender/venue",
+     "as_of": null,
+     "status": "unknown"
+    }
    ]
   },
   "facilities": [

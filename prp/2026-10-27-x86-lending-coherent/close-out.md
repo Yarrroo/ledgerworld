@@ -11,16 +11,19 @@ showed full-authority K_p next to a "Not observed" tile, with funding enabled. R
 against the API with an injected clock (see the API regression test).
 
 ## What shipped
-- `backend/app/finance/lending.py`: `capacity()` records `unobserved` (pool-currency cash
-  accounts not known at `now`) and `stale` from the same read. `authority` is now derived from
-  `unobserved`.
+- `backend/app/finance/lending.py`: `capacity()` records `unobserved` (the pool-currency cash
+  accounts not known at `now`, each `Uncounted`: stale with its `as_of`, or unknown) in the same
+  read. `authority` and `stale` are derived from it.
 - `backend/app/api/v1/views.py`: Lending returns `capacity.unobserved`. K_p's status comes from
   `cap.stale` and no longer from a second read over every currency.
 - `backend/app/finance/schemas.py` and `contracts/c6_api.schema.json` (regenerated): `Capacity`
-  gains a required `unobserved`. Both pydantic and JSON Schema enforce that authority is full
+  gains a required `unobserved`, a list of `NotCurrent` (the same shape as
+  `completeness.accounts`, from board item 87). Both pydantic and JSON Schema enforce that authority is full
   exactly when `unobserved` is empty.
-- `contracts/examples/c6_api/valid-lending-*.json`: the field has been added to both examples.
-- `frontend/src/views/Lending.vue`: the tile reads `capacity.unobserved`. The overview is read
+- `contracts/examples/c6_api/valid-lending-*.json`: the field has been added to all three examples
+  (`lf-stale` is checked byte-for-byte against the API).
+- `frontend/src/views/Lending.vue`: the "Not current, not counted" tile maps `capacity.unobserved`
+  through `freshness`. The overview is read
   only for the demo run, with the same context check as before.
 - `prp/2026-10-27-t17-money-views/design.md` item 7 is marked superseded.
 

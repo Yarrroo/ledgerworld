@@ -1,0 +1,119 @@
+<template>
+  <section class="lw-live-panel" aria-labelledby="feed-title" data-test="feed">
+    <h2 id="feed-title">
+      Action feed · round {{ round ?? '–' }}
+      <span v-if="replay" class="lw-live-tag" data-test="feed-replay">Replay</span>
+    </h2>
+    <p v-if="!loaded" class="lw-live-empty" data-test="feed-unloaded">Round not loaded</p>
+    <p v-else-if="!items.length" class="lw-live-empty">No posts or intents in this round</p>
+    <ol v-else class="lw-feed">
+      <li v-for="item in items" :key="item.id" class="lw-feed__item"
+          :class="{ 'is-highlight': item.actor === highlight }" :data-id="item.id">
+        <div class="lw-feed__head">
+          <span class="lw-feed__kind">{{ item.kind }}</span>
+          <strong>{{ item.actor }}</strong>
+          <code class="lw-feed__id">{{ item.id }}</code>
+        </div>
+        <p v-if="item.text" class="lw-feed__text">{{ item.text }}</p>
+        <p v-if="item.status" class="lw-feed__status" :class="`is-${item.status.tone}`">
+          {{ item.status.icon }} {{ item.status.word }}<template v-if="item.reason"> · {{ item.reason }}</template>
+          <template v-if="item.journal"> · journal {{ item.journal }}</template>
+        </p>
+        <p v-if="item.evidence.length" class="lw-feed__evidence">
+          evidence: {{ item.evidence.join(', ') }}
+        </p>
+      </li>
+    </ol>
+  </section>
+</template>
+
+<script setup>
+/**
+ * One round's public posts and actor intents, each intent with the coordinator's verdict (C2).
+ * Only the round handed in is shown; an unloaded round says so and lists nothing.
+ */
+import { computed } from 'vue'
+import { formatMoney } from '../api/v1.js'
+
+const props = defineProps({
+  round: { type: Number, default: null },
+  loaded: { type: Boolean, default: false },
+  posts: { type: Array, default: () => [] },
+  intents: { type: Array, default: () => [] },
+  cleared: { type: Array, default: () => [] },
+  replay: { type: Boolean, default: false },
+  highlight: { type: String, default: null }
+})
+
+const VERDICT = {
+  accepted: { icon: '✓', word: 'Accepted', tone: 'ok' },
+  rejected: { icon: '✕', word: 'Rejected', tone: 'bad' },
+  pending: { icon: '◷', word: 'Pending', tone: 'warn' }
+}
+
+const items = computed(() => {
+  const verdicts = new Map(props.cleared.map((c) => [c.intent_id, c]))
+  const posts = props.posts.map((p) => ({
+    id: p.post_id, kind: 'Post', actor: p.author, text: p.text, status: null, evidence: []
+  }))
+  const intents = props.intents.map((i) => {
+    const c = verdicts.get(i.intent_id)
+    const amount = i.params?.amount
+    return {
+      id: i.intent_id,
+      kind: 'Intent',
+      actor: i.actor_id,
+      text: `${i.type.replace(/_/g, ' ')}${amount ? ` ${formatMoney(amount.minor, amount.currency)}` : ''}`,
+      status: c ? VERDICT[c.status] : { icon: '–', word: 'No verdict recorded', tone: 'muted' },
+      reason: c?.reason ?? null,
+      journal: c?.journal_id ?? null,
+      evidence: i.evidence_ids ?? []
+    }
+  })
+  return [...posts, ...intents]
+})
+</script>
+
+<style scoped>
+.lw-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--lw-space-2);
+}
+
+.lw-feed__item {
+  padding: var(--lw-space-2) var(--lw-space-3);
+  border-left: 3px solid var(--live-rule);
+  background: var(--live-raised);
+}
+
+.lw-feed__item.is-highlight { border-left-color: var(--live-brand); }
+
+.lw-feed__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lw-space-2);
+  align-items: baseline;
+}
+
+.lw-feed__kind,
+.lw-feed__id,
+.lw-feed__evidence {
+  color: var(--live-muted);
+  font-size: 12px;
+}
+
+.lw-feed__id,
+.lw-feed__evidence { font-family: var(--lw-font-figure); word-break: break-all; }
+
+.lw-feed__text,
+.lw-feed__status,
+.lw-feed__evidence { margin: var(--lw-space-1) 0 0; }
+
+.lw-feed__status.is-ok { color: var(--live-ok); }
+.lw-feed__status.is-bad { color: var(--live-bad); }
+.lw-feed__status.is-warn { color: var(--live-warn); }
+.lw-feed__status.is-muted { color: var(--live-muted); }
+</style>

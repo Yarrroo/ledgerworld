@@ -174,7 +174,7 @@ def test_overview_on_lf1_lf2_after_the_delay():
         "amount": {"minor": 5_000_000, "currency": "USD"},
         "due_at": iso(T0 + timedelta(hours=40))}]
     assert body["lender_capacity"]["minor"] == 4_200_000  # LF-2: K_p = 42,000.00
-    assert body["completeness"] == {"status": "complete", "missing": []}
+    assert body["completeness"] == {"status": "complete", "missing": [], "accounts": []}
     assert body["demo"] == {"run_id": None, "execution_id": None}  # nothing prepared: null
 
 
@@ -183,7 +183,8 @@ def test_venue_freeze_is_partial_and_unknown_is_never_zero():
     http = client(services)
     body = check(http.get("/api/v1/overview"), "OverviewResponse")
     assert body["lender_capacity"]["minor"] == 2_700_000  # LF-2 stressed: K_p = 27,000.00
-    assert body["completeness"] == {"status": "partial", "missing": ["lender/venue"]}
+    assert body["completeness"] == {"status": "partial", "missing": ["lender/venue"], "accounts": [
+        {"account_id": "lender/venue", "status": "unknown", "as_of": None}]}  # no value, no time
     lending = check(http.get("/api/v1/lending"), "LendingResponse")
     assert lending["capacity"]["authority"] == "reduced"
     assert lending["capacity"]["parts"]["settled_known"]["minor"] == 4_500_000
@@ -198,20 +199,22 @@ def test_lending_carries_its_own_completeness_across_the_freshness_boundary():
     assert (fresh["authority"], fresh["unobserved"]) == ("full", [])
     now[0] += timedelta(seconds=1)
     later = check(http.get("/api/v1/lending"), "LendingResponse")["capacity"]
-    assert (later["authority"], later["unobserved"]) == (
-        "reduced", ["lender/operating", "lender/venue"])
-    assert later["K_p"]["status"] == "stale"
-    missing = check(http.get("/api/v1/overview"), "OverviewResponse")["completeness"]["missing"]
-    assert set(later["unobserved"]) <= set(missing)
+    assert later["authority"] == "reduced" and later["K_p"]["status"] == "stale"
+    assert [(u["account_id"], u["status"]) for u in later["unobserved"]] == [
+        ("lender/operating", "stale"), ("lender/venue", "stale")]
+    accounts = check(http.get("/api/v1/overview"), "OverviewResponse")["completeness"]["accounts"]
+    assert all(u in accounts for u in later["unobserved"])  # the same reason and time
     stressed = check(client(build(observed(stressed=True))).get("/api/v1/lending"),
                      "LendingResponse")["capacity"]
-    assert (stressed["authority"], stressed["unobserved"]) == ("reduced", ["lender/venue"])
+    assert (stressed["authority"], stressed["unobserved"]) == (
+        "reduced", [{"account_id": "lender/venue", "status": "unknown", "as_of": None}])
 
 
 def test_lending_capacity_full_authority_means_nothing_unobserved():
     body = check(client(build()).get("/api/v1/lending"), "LendingResponse")
     schema = {"$schema": C6["$schema"], "$defs": C6["$defs"], "$ref": "#/$defs/LendingResponse"}
-    for authority, unobserved in (("full", ["lender/venue"]), ("reduced", [])):
+    venue = {"account_id": "lender/venue", "status": "unknown", "as_of": None}
+    for authority, unobserved in (("full", [venue]), ("reduced", [])):
         wrong = body | {"capacity": body["capacity"] | {"authority": authority,
                                                          "unobserved": unobserved}}
         with pytest.raises(ValueError, match="authority is full exactly when"):
@@ -265,6 +268,38 @@ def test_treasury_shows_s_and_p_apart_and_a_stale_balance_keeps_its_value():
     over = check(client(later).get("/api/v1/overview"), "OverviewResponse")
     assert (over["cash"]["status"], over["cash"]["minor"]) == ("stale", 7_000_000)
     assert over["completeness"]["status"] == "partial"
+    # Stale is observed but not current, never unknown: each account says which it is.
+    assert {a["account_id"]: a["status"] for a in over["completeness"]["accounts"]} == {
+        "borrower-a/operating": "stale", "lender/operating": "stale", "lender/venue": "stale"}
+    assert [a["as_of"] for a in over["completeness"]["accounts"]] == [iso(NOW)] * 3
+
+
+def test_completeness_is_one_list_of_reasons():
+    stale = {"account_id": "lender/operating", "status": "stale", "as_of": iso(NOW)}
+    unknown = {"account_id": "lender/venue", "status": "unknown", "as_of": None}
+    c6.Completeness.model_validate(
+        {"status": "partial", "missing": ["lender/operating", "lender/venue"],
+         "accounts": [stale, unknown]})
+    for bad in ({"status": "partial", "missing": ["lender/venue"], "accounts": [stale, unknown]},
+                {"status": "complete", "missing": ["lender/venue"], "accounts": [unknown]},
+                {"status": "partial", "missing": ["lender/venue"],
+                 "accounts": [unknown | {"as_of": iso(NOW)}]},
+                {"status": "partial", "missing": ["lender/operating"],
+                 "accounts": [stale | {"as_of": None}]}):
+        with pytest.raises(ValueError):
+            c6.Completeness.model_validate(bad)
+
+
+STALE_EXAMPLES = {"overview": "valid-overview-lf-stale", "lending": "valid-lending-lf-stale"}
+
+
+@pytest.mark.parametrize("route", sorted(STALE_EXAMPLES))
+def test_the_stale_examples_are_what_the_api_answers(route):
+    """The screens' stale-account tests read these recordings; they must stay the API's own."""
+    later = build(observed(stressed=True), clock=lambda: NOW + timedelta(hours=7))
+    body = check(client(later).get(f"/api/v1/{route}"), f"{route.capitalize()}Response")
+    path = ROOT / f"contracts/examples/c6_api/{STALE_EXAMPLES[route]}.json"
+    assert body == json.loads(path.read_text(encoding="utf-8"))["instance"]
 
 
 def test_an_unknown_treasury_balance_has_no_value():

@@ -30,6 +30,16 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The URL of an /api/v1 path under `base`: an absolute origin, a path prefix, or "/" for the
+ * page's own origin (the image's setting), each with or without trailing slashes. Exactly one
+ * slash joins them: "//api/v1/…" would be a protocol-relative URL to a host called "api".
+ */
+export function apiUrl (path, base = BASE) {
+  const tail = path.replace(/^\/+/, '')
+  return `${base.replace(/\/+$/, '')}/api/v1${tail && `/${tail}`}`
+}
+
 /** One request to /api/v1, no retry. A C6 ErrorResponse becomes an ApiError with its code. */
 export async function request (path, { method = 'GET', body, token, signal } = {}) {
   const headers = { Accept: 'application/json' }
@@ -37,7 +47,7 @@ export async function request (path, { method = 'GET', body, token, signal } = {
   if (token) headers.Authorization = `Bearer ${token}`
   let response
   try {
-    response = await fetch(`${BASE}/api/v1${path}`, {
+    response = await fetch(apiUrl(path), {
       method, headers, signal, body: body === undefined ? undefined : JSON.stringify(body)
     })
   } catch (error) {
@@ -141,6 +151,19 @@ export const STATES = {
 }
 
 export const stateOf = (status) => STATES[status] || STATES.unassessed
+
+/** A not-current account (completeness.accounts, Lending's capacity.unobserved) with its own
+ * reason: a stale one was
+ * observed and carries its as_of; an unknown one was not and carries none. ``text`` reads
+ * "lender/venue · ? Unknown" or "lender/operating · ◷ Stale, as of 2026-01-05 12:00 UTC". */
+export function freshness (account) {
+  const s = stateOf(account.status)
+  const at = account.status === 'stale' && account.as_of ? formatTime(account.as_of).utc : null
+  return {
+    ...s, id: account.account_id, at,
+    text: `${account.account_id} · ${s.icon} ${s.word}${at ? `, as of ${at}` : ''}`
+  }
+}
 
 /** Floor kept or breached, read off an API headroom metric (P minimum − floor). */
 export function floorState (headroom) {

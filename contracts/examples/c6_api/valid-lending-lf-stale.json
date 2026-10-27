@@ -1,0 +1,122 @@
+{
+ "about": "GET /api/v1/lending 7 h after the LF-2 observation: under the venue freeze: the pool's operating account is stale and its venue account unknown, so K_p counts no settled funds, reads stale and authority is reduced. Recorded from the API.",
+ "def": "LendingResponse",
+ "instance": {
+  "as_of": "2026-01-05T19:00:00Z",
+  "capacity": {
+   "K_p": {
+    "as_of": "2026-01-05T19:00:00Z",
+    "currency": "USD",
+    "minor": -1800000,
+    "status": "stale"
+   },
+   "authority": "reduced",
+   "parts": {
+    "committed_undrawn": {
+     "as_of": "2026-01-05T19:00:00Z",
+     "currency": "USD",
+     "minor": 1000000,
+     "status": "known"
+    },
+    "floor": {
+     "as_of": "2026-01-05T19:00:00Z",
+     "currency": "USD",
+     "minor": 800000,
+     "status": "known"
+    },
+    "obligations_due": {
+     "as_of": "2026-01-05T19:00:00Z",
+     "currency": "USD",
+     "minor": 0,
+     "status": "known"
+    },
+    "pledged": {
+     "as_of": "2026-01-05T19:00:00Z",
+     "currency": "USD",
+     "minor": 0,
+     "status": "known"
+    },
+    "settled_known": {
+     "as_of": "2026-01-05T19:00:00Z",
+     "currency": "USD",
+     "minor": 0,
+     "status": "known"
+    }
+   },
+   "unobserved": [
+    {
+     "account_id": "lender/operating",
+     "as_of": "2026-01-05T12:00:00Z",
+     "status": "stale"
+    },
+    {
+     "account_id": "lender/venue",
+     "as_of": null,
+     "status": "unknown"
+    }
+   ]
+  },
+  "facilities": [
+   {
+    "borrower": "borrower-a",
+    "facility_id": "adv-a",
+    "fee": {
+     "currency": "USD",
+     "minor": 80000
+    },
+    "kind": "revenue_advance",
+    "observed_revenue": {
+     "as_of": null,
+     "currency": "USD",
+     "minor": null,
+     "status": "unassessed"
+    },
+    "outstanding": {
+     "currency": "USD",
+     "minor": 0
+    },
+    "owed": {
+     "currency": "USD",
+     "minor": 1080000
+    },
+    "principal": {
+     "currency": "USD",
+     "minor": 1000000
+    },
+    "state": "offered"
+   },
+   {
+    "borrower": "borrower-b",
+    "facility_id": "line-b",
+    "fee": {
+     "currency": "USD",
+     "minor": 0
+    },
+    "kind": "committed_line",
+    "observed_revenue": {
+     "as_of": null,
+     "currency": "USD",
+     "minor": null,
+     "status": "unassessed"
+    },
+    "outstanding": {
+     "currency": "USD",
+     "minor": 0
+    },
+    "owed": {
+     "currency": "USD",
+     "minor": 0
+    },
+    "principal": {
+     "currency": "USD",
+     "minor": 1000000
+    },
+    "state": "active"
+   }
+  ],
+  "mode": "fake",
+  "pool": "lender",
+  "snapshot_id": "obs-lf-venue-freeze"
+ },
+ "valid": true
+}

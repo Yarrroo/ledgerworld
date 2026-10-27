@@ -27,7 +27,8 @@ an upstream path is modified or deleted and not listed in the second table.
 | `README.md` | replaced by this project's README; the upstream text stays in the import commit and `README-ZH.md` |
 | `.env.example` | lists every variable this project reads, names only, no values |
 | `.gitignore` | adds `var/` and `frontend/dist/` to the upstream rules |
-| `backend/app/__init__.py` | registers the `/api/v1` blueprint (`app.api.v1.register`) in `create_app` |
-| `frontend/src/router/index.js` | adds the `/overview`, `/treasury` and `/lending` routes; upstream routes unchanged |
+| `backend/app/__init__.py` | registers the `/api/v1` blueprint (`app.api.v1.register`) in `create_app`; wires the simulation boundary around config loading |
+| `backend/app/services/simulation_runner.py` | wires the shared scrubbed environment into all upstream simulation subprocess launches |
+| `frontend/src/router/index.js` | adds the `/overview`, `/treasury`, `/lending` and `/simulation` routes; upstream routes unchanged |
 | `frontend/package.json` | adds the `test:unit` script and its dev dependencies (vitest, happy-dom, @vue/test-utils) |
 | `frontend/package-lock.json` | the lock for those dev dependencies |

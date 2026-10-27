@@ -665,7 +665,7 @@
           }
         }
       ],
-      "description": "K_p, the parts it is computed from, and the pool's cash accounts it could not count, all\nread at one moment: authority is full exactly when nothing is unobserved.",
+      "description": "K_p, the parts it is computed from, and the pool's cash accounts it could not count (each\nstale or unknown), all read at one moment: authority is full exactly when nothing is\nunobserved.",
       "properties": {
         "K_p": {
           "$ref": "#/$defs/Metric"
@@ -683,9 +683,7 @@
         },
         "unobserved": {
           "items": {
-            "maxLength": 128,
-            "minLength": 1,
-            "type": "string"
+            "$ref": "#/$defs/NotCurrent"
           },
           "title": "Unobserved",
           "type": "array"
@@ -882,6 +880,7 @@
     },
     "Completeness": {
       "additionalProperties": false,
+      "description": "`missing` names every cash account that is not current; `accounts` gives each of them,\nin the same order, its reason (stale or unknown).",
       "properties": {
         "status": {
           "enum": [
@@ -899,11 +898,19 @@
           },
           "title": "Missing",
           "type": "array"
+        },
+        "accounts": {
+          "items": {
+            "$ref": "#/$defs/NotCurrent"
+          },
+          "title": "Accounts",
+          "type": "array"
         }
       },
       "required": [
         "status",
-        "missing"
+        "missing",
+        "accounts"
       ],
       "title": "Completeness",
       "type": "object"
@@ -2189,6 +2196,73 @@
         "currency"
       ],
       "title": "NonNegativeMoney",
+      "type": "object"
+    },
+    "NotCurrent": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "as_of": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "stale"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "as_of": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ],
+      "description": "A cash account whose balance is not current, and why: a stale one was observed and\nkeeps its last value as of `as_of`; an unknown one has no value and no time.",
+      "properties": {
+        "account_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Account Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "stale",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "as_of": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "As Of"
+        }
+      },
+      "required": [
+        "account_id",
+        "status",
+        "as_of"
+      ],
+      "title": "NotCurrent",
       "type": "object"
     },
     "Obligation": {

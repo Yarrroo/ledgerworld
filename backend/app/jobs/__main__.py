@@ -30,4 +30,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    from ..execution.boundary import enter_sim
+
+    enter_sim()
     main()
