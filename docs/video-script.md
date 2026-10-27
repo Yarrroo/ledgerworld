@@ -23,6 +23,11 @@ The opening minute visits Overview → Live Simulation → Decisions → Executi
 returns to the branch. The full execution happens in the Execute beat. Pause the narration for
 necessary UI navigation; the final edit must preserve ordering, labels and waiting-time disclosures.
 
+Rehearse the timing first with `bash scripts/walkthrough.sh "$LEDGERWORLD_URL"`. It drives the
+deployed app read-only through the seven beats below in real time with each Shot as a caption,
+records a silent labelled webm with an SRT of the Voice lines, and prints planned against actual
+seconds per beat. It performs no operator action, so it is a rehearsal, never the take.
+
 ## 00:00-00:15 State
 
 **Shot:** Overview with the mode banner, `as_of`, snapshot, cash buckets and next obligation. Name
