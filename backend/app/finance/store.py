@@ -7,6 +7,13 @@ refusal the caller catches still leaves nothing of the refused write behind.
 
 Buckets map to tables: settled ← Σ postings · reserved ← reservations held · pending_in/out ←
 expected_flows pending · pledged ← pledges active · unknown ← account_observations.
+
+Concurrent writers: every check of a cash account's free units first locks that account's row
+(`SELECT … FOR NO KEY UPDATE`, accounts in id order), so two claims on the same cash are
+serialized; under READ COMMITTED, which the PostgreSQL engine pins, the second reads after the
+first commits. A caller that checks a view and then writes (`ledger.pay`, `lending`) takes
+`lock` first. A move out of `held` or `pending` is a guarded UPDATE, so of two concurrent
+writers of one reservation or flow only the first moves it.
 """
 
 from __future__ import annotations
@@ -92,7 +99,8 @@ class LedgerStore:
             event.listen(self.engine, "connect", _sqlite_connect)
             event.listen(self.engine, "begin", _sqlite_begin)
         else:
-            self.engine = create_engine(url)
+            # The account locks serialize only if each statement after a lock reads anew.
+            self.engine = create_engine(url, isolation_level="READ COMMITTED")
         migrations.upgrade(self.engine)
 
     # ------------------------------------------------------------------------- transactions
@@ -192,19 +200,24 @@ class LedgerStore:
         for currency, diff in sorted(totals.items()):
             if diff:
                 raise LedgerRefusal("journal_unbalanced", currency=currency, diff=diff)
+        cash = self._locked(c, set(held))  # only a cash account has a balance to check
         seq = (c.execute(select(func.max(journals.c.seq))).scalar() or 0) + 1
         c.execute(insert(journals).values(
             journal_id=journal.journal_id, kind=_kind(journal.kind), round=journal.round,
             sim_time=_naive(journal.sim_time), seq=seq, source_intent_id=journal.source_intent_id,
             source_leg_id=journal.source_leg_id, mode=journal.mode))
         c.execute(insert(postings), rows)
-        for account_id in {r["account_id"] for r in rows}:
+        for account_id in cash:
             self._check_spoken_for(c, account_id)
         return Journal(**{**journal.__dict__, "seq": seq})
 
     def _free(self, c: Connection, account_id: str) -> tuple[Any, str, int, int]:
-        """(account, observability, settled, free): free = settled − everything promised."""
-        acc = self._account(c, account_id)
+        """(account, observability, settled, free): free = settled − everything promised.
+
+        The account row is locked first, so no other transaction can claim the same units
+        between this read and the caller's commit.
+        """
+        acc = self._locked(c, {account_id}).get(account_id) or self._account(c, account_id)
         observability = c.execute(select(account_observations.c.observability).where(
             account_observations.c.account_id == account_id)).scalar_one()
         settled = _sum(c, postings, account_id)
@@ -268,8 +281,7 @@ class LedgerStore:
         with self.transaction(conn) as c:
             res = self._held(c, reservation_id)
             flow_id = flow_id or f"out:{reservation_id}"
-            c.execute(update(reservations).where(reservations.c.reservation_id == reservation_id)
-                      .values(state="committed"))
+            self._leave_held(c, reservation_id, "committed")
             c.execute(insert(expected_flows).values(
                 flow_id=flow_id, account_id=res.account_id, direction="out",
                 currency=res.currency, amount_minor=res.amount_minor,
@@ -279,9 +291,7 @@ class LedgerStore:
 
     def release(self, reservation_id: str, conn: Connection | None = None) -> None:
         with self.transaction(conn) as c:
-            self._held(c, reservation_id)
-            c.execute(update(reservations).where(reservations.c.reservation_id == reservation_id)
-                      .values(state="released"))
+            self._leave_held(c, reservation_id, "released")
 
     def expire_due(self, now: datetime, conn: Connection | None = None) -> list[str]:
         """Every held reservation whose `expires_at` ≤ now becomes expired."""
@@ -291,9 +301,11 @@ class LedgerStore:
                 .where(reservations.c.state == "held", reservations.c.expires_at.is_not(None),
                        reservations.c.expires_at <= _naive(now))
                 .order_by(reservations.c.reservation_id)).scalars())
-            if due:
-                c.execute(update(reservations).where(reservations.c.reservation_id.in_(due))
-                          .values(state="expired"))
+            if due:  # guarded: a hold committed or released meanwhile is not expired
+                due = sorted(c.execute(
+                    update(reservations).where(reservations.c.reservation_id.in_(due),
+                                               reservations.c.state == "held")
+                    .values(state="expired").returning(reservations.c.reservation_id)).scalars())
         return due
 
     def settle(self, reservation_id: str, *, to_account: str, at: datetime,
@@ -323,8 +335,13 @@ class LedgerStore:
             if counterparty == flow.account_id:
                 raise ValueError(f"flow {flow_id} cannot settle against its own account")
             sign = 1 if flow.direction == "in" else -1
-            c.execute(update(expected_flows).where(expected_flows.c.flow_id == flow_id)
-                      .values(state="settled"))
+            self._locked(c, {flow.account_id, counterparty})  # both, in id order, as _apply will
+            # Guarded, so a concurrent settler that read it pending before this lock lands nothing.
+            landed = c.execute(update(expected_flows).where(expected_flows.c.flow_id == flow_id,
+                                                            expected_flows.c.state == "pending")
+                               .values(state="settled"))
+            if landed.rowcount != 1:
+                raise ValueError(f"flow {flow_id} is no longer pending")
             if flow.reservation_id:
                 c.execute(update(reservations)
                           .where(reservations.c.reservation_id == flow.reservation_id)
@@ -499,6 +516,29 @@ class LedgerStore:
 
     # ------------------------------------------------------------------------------ helpers
 
+    def lock(self, *account_ids: str, conn: Connection) -> dict[str, Any]:
+        """Lock the cash accounts among `account_ids` until `conn`'s transaction ends, before a
+        check a write relies on (a view, a capacity); returns their rows by id.
+
+        A no-op on SQLite, whose writers are already serial.
+        """
+        return self._locked(conn, set(account_ids))
+
+    @staticmethod
+    def _locked(c: Connection, account_ids: set[str]) -> dict[str, Any]:
+        """The cash account rows among `account_ids`, locked in id order.
+
+        Only a cash account's free units are checked, so only cash rows are locked; a shared
+        external or income account stays uncontended. NO KEY UPDATE, not UPDATE: an insert
+        referencing the account (a posting, a reservation) takes KEY SHARE, which it does not
+        block. One call never deadlocks against another; a transaction that locks in several
+        calls can, and then PostgreSQL aborts one of them and nothing is written.
+        """
+        return {r.account_id: r for r in c.execute(
+            select(accounts).where(accounts.c.account_id.in_(account_ids),
+                                   accounts.c.kind == "cash")
+            .order_by(accounts.c.account_id).with_for_update(key_share=True))}
+
     def _account(self, c: Connection, account_id: str, required: bool = True) -> Any:
         row = c.execute(select(accounts).where(accounts.c.account_id == account_id)).first()
         if row is None and required:
@@ -519,6 +559,14 @@ class LedgerStore:
             raise LedgerRefusal("reservation_not_held", reservation_id=reservation_id,
                                 state=res.state)
         return res
+
+    def _leave_held(self, c: Connection, reservation_id: str, state: str) -> None:
+        """held → `state`, guarded: a concurrent writer that moved it first leaves nothing to do."""
+        moved = c.execute(update(reservations).where(
+            reservations.c.reservation_id == reservation_id, reservations.c.state == "held")
+            .values(state=state))
+        if moved.rowcount != 1:
+            self._held(c, reservation_id)  # raises with the state it is in now
 
     @contextmanager
     def _one_backer(self, reservation_id: str | None,
