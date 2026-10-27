@@ -2,10 +2,12 @@
 
 Judge outcomes, not intentions: nothing here looks at what a policy projected. Settled cash at
 each round end is the sum of the account's postings in journals of that round or earlier; an
-obligation is met when its settlement journal falls in its due round, and unmet otherwise, short
-by its amount less the cash that was free then (settled less the reservations still backing
-later obligations, less pledged). Funding cost is the expense the entity booked in the branch
-(an advance's fee is recognised at disbursal). Every number is an integer in minor units.
+obligation is met when its settlement journal (its own, or its committed reservation's flow's)
+falls in its due round or earlier, by its state only when the ledger names no such journal, and
+unmet otherwise, short by its amount less the cash that was free then (settled less the
+reservations still backing later obligations, less pledged; never below zero). Funding cost is
+the expense the entity booked in the branch (an advance's fee is recognised at disbursal). Every
+number is an integer in minor units.
 
 Cash is usable only at the end of a round whose balance was known: an unknown balance adds
 nothing (HANDOFF), so the floor and an unmet obligation's shortfall count only what it owes
@@ -22,7 +24,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from ..finance.models import accounts, bounded_id, journals, postings
+from ..finance.models import accounts, bounded_id, expected_flows, journals, postings
 from ..simulation.clock import ROUND_HOURS
 from ..simulation.world import due_hour
 
@@ -124,11 +126,21 @@ def _expense(store: Any, entity: str, after_round: int) -> int:
     return int(total)
 
 
-def _paid_round(store: Any, obligation_id: str) -> int | None:
-    journal_id = bounded_id(journals.c.journal_id, f"settle:{obligation_id}")
+def _paid_round(store: Any, ob: Mapping) -> int | None:
+    """The round of the journal that paid ``ob``, None when the ledger names none.
+
+    Paid from its own hold or free cash, the journal is ``settle:<obligation>``; paid through a
+    reservation committed beforehand, it is the settled flow's ``settle:<flow>``.
+    """
+    names = [f"settle:{ob['obligation_id']}"]
     with store.reading() as c:
-        return c.execute(select(journals.c.round)
-                         .where(journals.c.journal_id == journal_id)).scalar()
+        if ob["reservation_id"]:
+            names += [f"settle:{f}" for f in c.execute(select(expected_flows.c.flow_id).where(
+                expected_flows.c.reservation_id == ob["reservation_id"],
+                expected_flows.c.state == "settled")).scalars()]
+        ids = [bounded_id(journals.c.journal_id, n) for n in names]
+        return c.execute(select(func.min(journals.c.round))
+                         .where(journals.c.journal_id.in_(ids))).scalar()
 
 
 def assess(world: Any, account: str, *, from_round: int, to_round: int,
@@ -159,7 +171,9 @@ def assess(world: Any, account: str, *, from_round: int, to_round: int,
         due_round = -(-due_h // ROUND_HOURS)
         if not from_round < due_round <= to_round:
             continue
-        paid = _paid_round(store, ob["obligation_id"])
+        paid = _paid_round(store, ob)
+        # No journal it can name: met before the ledger opened (a snapshot), or settled under a
+        # journal id its caller chose. Only then does the state the ledger left decide.
         met = paid <= due_round if paid is not None else ob["state"] == "met"
         if met:
             obligations.append(ObligationResult(ob["obligation_id"], due_h,
@@ -169,8 +183,10 @@ def assess(world: Any, account: str, *, from_round: int, to_round: int,
                     if o["reservation_id"] and o["obligation_id"] != ob["obligation_id"]
                     and _aware(o["due_at"]) > _aware(ob["due_at"]))
         free = usable[due_round * ROUND_HOURS] - later - view.pledged_minor
+        # Paid late from cash that was there (a committed flow landing after its due round) is
+        # unmet with nothing short.
         obligations.append(ObligationResult(ob["obligation_id"], due_h, ob["amount_minor"],
-                                            False, ob["amount_minor"] - max(0, free)))
+                                            False, max(0, ob["amount_minor"] - max(0, free))))
 
     floor = view.floor_minor or 0
     series = list(usable.items())
