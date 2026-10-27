@@ -116,6 +116,7 @@ function serve (answers) {
 }
 
 const posts = (calls, path) => calls.filter((c) => c.method === 'POST' && (!path || c.path === path))
+const gets = (calls, path) => calls.filter((c) => c.method === 'GET' && c.path === path)
 
 async function open (component, path) {
   const router = createRouter({
@@ -562,7 +563,6 @@ describe('vet round 1', () => {
 
 describe('vet round 2', () => {
   const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
-  const gets = (calls, path) => calls.filter((x) => x.method === 'GET' && x.path === path)
   const tick = async () => { vi.advanceTimersByTime(5000); await flushPromises() }
 
   it('a failed status read after an unanswered execution POST keeps reading', async () => {
@@ -688,7 +688,6 @@ describe('vet round 2, re-read', () => {
 })
 
 describe('leaving and returning to Execution (board item 95)', () => {
-  const gets = (calls, path) => calls.filter((x) => x.method === 'GET' && x.path === path)
   const APPROVAL_UNKNOWN = kase('approval-post-timeout').expect.message
 
   /** Leave the screen (the router unmounts it) and come back to a fresh mount in the same tab. */
@@ -769,5 +768,26 @@ describe('leaving and returning to Execution (board item 95)', () => {
     expect(text(back, 'context')).toContain('execution apr-7')
     expect(gets(calls, '/executions/apr-1')).toHaveLength(1)
     expect(text(back, 'blocked')).toContain('Do not send again') // still this run's quarantine
+    expect(text(back, 'blocked')).toContain('approval apr-1; not read on this screen')
+    expect(text(back, 'blocked')).not.toContain('reading its status')
+  })
+
+  it('a block belongs to its run: another run is not blocked by it, and coming back restores it', async () => {
+    const { w, calls } = await reviewReady({
+      'POST /approvals': timeout(),
+      'GET /decisions/run-2': { ...decisionsBody(), run_id: 'run-2' }
+    })
+    await approve(w)
+    await w.get('[data-test="review"]').find('button.lw-button--quiet').trigger('click') // Cancel
+    await flushPromises()
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    expect(w.find('[data-test="blocked"]').exists()).toBe(false)
+    expect(disabled(w, 'review-plan')).toBe(false)
+    await w.vm.$router.push('/execution?run_id=run-1')
+    await flushPromises()
+    expect(text(w, 'blocked')).toBe(APPROVAL_UNKNOWN)
+    expect(disabled(w, 'review-plan')).toBe(true)
+    expect(posts(calls, '/approvals')).toHaveLength(1)
   })
 })

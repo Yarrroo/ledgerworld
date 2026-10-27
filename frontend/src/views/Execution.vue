@@ -163,9 +163,10 @@ import { ref } from 'vue'
 // dies with the page; it is never written to storage, a URL, markup or a log.
 const token = ref('')
 
-// An operation whose outcome this tab does not know, kept beside the token for as long as the
-// token lives: run id -> { blocked, followedId }. Leaving the screen and coming back restores the
-// block and resumes reading the execution, so the token never outlives its quarantine.
+// An operation whose outcome this tab does not know, kept in the same tab memory as the token:
+// run id -> { blocked, followedId }. Leaving the screen and coming back restores the block and
+// resumes reading the execution, so the token never outlives its quarantine. Forget token does
+// not lift it: only a reload does.
 const unresolved = new Map()
 
 /** The tab reloaded, as far as this screen can tell: token and quarantine both forgotten. */
@@ -436,6 +437,12 @@ async function poll () {
   schedule()
 }
 
+/** A held block, said truthfully: its lookup is claimed only while this screen is reading it. */
+function blockFor (held) {
+  if (!held.followedId || followedId.value === held.followedId) return held.blocked
+  return `Execution outcome unknown for approval ${held.followedId}; not read on this screen. Do not send again.`
+}
+
 function follow (id) {
   followed = true
   followedId.value = id
@@ -451,12 +458,11 @@ watch(() => state.body, (body) => {
   // An unresolved operation on this run, from before this screen was last left: keep its block,
   // and resume reading the execution this tab sent unless the address names another one.
   const held = unresolved.get(body.run_id)
-  if (held?.blocked && !flow.blocked) flow.blocked = held.blocked
   const named = route.query.execution_id
-  if (held?.followedId && !followed && (!named || named === held.followedId)) {
-    follow(held.followedId)
-    return
-  }
+  const resume = held?.followedId && !followed && (!named || named === held.followedId)
+  if (resume) follow(held.followedId)
+  if (held?.blocked) flow.blocked = blockFor(held)
+  if (resume) return
   if (followed) {
     poll() // Refresh re-reads the execution this tab sent
     return
@@ -477,7 +483,8 @@ watch(() => state.body, (body) => {
 watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
   if (!flow.submitting) { // an in-flight POST keeps its review until it is answered
     flow.open = false
-    Object.assign(flow, { approval: null, invalid: '', executed: false, message: '' })
+    // a block belongs to its run: the new run's own, if any, is restored when it loads
+    Object.assign(flow, { approval: null, invalid: '', executed: false, message: '', blocked: '' })
     followed = false
     followedId.value = null
     activeId.value = null
