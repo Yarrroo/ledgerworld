@@ -1,0 +1,11 @@
+{
+ "about": "A 30,000.00 draw under the venue freeze is refused with its binding constraint (LF-2).",
+ "valid": true,
+ "instance": {
+  "intent_id": "i-r3-borrower-a-1",
+  "status": "rejected",
+  "reason": "beyond_capacity",
+  "binding": "K_p = 27,000.00",
+  "round": 3
+ }
+}

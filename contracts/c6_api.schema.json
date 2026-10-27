@@ -1,0 +1,2987 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Generated from backend/app/finance/schemas.py by `python -m app.finance.schemas`; edit the model, not this file.",
+  "title": "C6 API",
+  "description": "The /api/v1 shapes (system brief §11). Each route names its request and response under $defs; validate a body against `#/$defs/<name>`.",
+  "x-routes": {
+    "GET /api/v1/health": {
+      "request": null,
+      "response": "HealthResponse",
+      "status": 200,
+      "token": false
+    },
+    "GET /api/v1/overview": {
+      "request": null,
+      "response": "OverviewResponse",
+      "status": 200,
+      "token": false
+    },
+    "GET /api/v1/treasury": {
+      "request": null,
+      "response": "TreasuryResponse",
+      "status": 200,
+      "token": false
+    },
+    "GET /api/v1/lending": {
+      "request": null,
+      "response": "LendingResponse",
+      "status": 200,
+      "token": false
+    },
+    "POST /api/v1/runs": {
+      "request": "RunRequest",
+      "response": "JobAccepted",
+      "status": 202,
+      "token": true
+    },
+    "GET /api/v1/runs/{id}": {
+      "request": null,
+      "response": "RunResponse",
+      "status": 200,
+      "token": false
+    },
+    "POST /api/v1/runs/{id}/fork": {
+      "request": "ForkRequest",
+      "response": "JobAccepted",
+      "status": 202,
+      "token": true
+    },
+    "GET /api/v1/decisions/{run_id}": {
+      "request": null,
+      "response": "DecisionsResponse",
+      "status": 200,
+      "token": false
+    },
+    "POST /api/v1/approvals": {
+      "request": "ApprovalRequest",
+      "response": "ApprovalResponse",
+      "status": 201,
+      "token": true
+    },
+    "POST /api/v1/executions": {
+      "request": "ExecutionRequest",
+      "response": "ExecutionAccepted",
+      "status": 202,
+      "token": true
+    },
+    "GET /api/v1/executions/{id}": {
+      "request": null,
+      "response": "ExecutionResponse",
+      "status": 200,
+      "token": false
+    },
+    "POST /api/v1/webhooks/airwallex": {
+      "request": null,
+      "response": "WebhookAck",
+      "status": 200,
+      "token": false
+    },
+    "POST /api/v1/interview": {
+      "request": "InterviewRequest",
+      "response": "InterviewResponse",
+      "status": 200,
+      "token": true
+    },
+    "GET /api/v1/reports/{run_id}": {
+      "request": null,
+      "response": "ReportResponse",
+      "status": 200,
+      "token": false
+    }
+  },
+  "$defs": {
+    "ActionIntent": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "request_advance",
+                  "offer",
+                  "disburse",
+                  "repay",
+                  "convert",
+                  "pay",
+                  "pledge"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "properties": {
+                  "amount": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "amount"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "description": "C1: what an actor proposes in a round; a rejected or malformed one becomes `no_action`.",
+      "properties": {
+        "intent_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "branch_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Branch Id",
+          "type": "string"
+        },
+        "round": {
+          "minimum": 0,
+          "title": "Round",
+          "type": "integer"
+        },
+        "actor_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "request_advance",
+            "offer",
+            "accept",
+            "disburse",
+            "repay",
+            "convert",
+            "pay",
+            "pledge",
+            "release",
+            "defer",
+            "no_action"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/IntentParams"
+        },
+        "evidence_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "obs_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Obs Hash",
+          "type": "string"
+        },
+        "priority_class": {
+          "anyOf": [
+            {
+              "maximum": 3,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Priority Class"
+        },
+        "sim_minute": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sim Minute"
+        }
+      },
+      "required": [
+        "intent_id",
+        "branch_id",
+        "round",
+        "actor_id",
+        "type",
+        "params",
+        "evidence_ids",
+        "obs_hash"
+      ],
+      "title": "ActionIntent",
+      "type": "object"
+    },
+    "Amount": {
+      "additionalProperties": false,
+      "description": "A strictly positive amount: what an intent, a leg or an obligation moves.",
+      "properties": {
+        "minor": {
+          "exclusiveMinimum": 0,
+          "title": "Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "minor",
+        "currency"
+      ],
+      "title": "Amount",
+      "type": "object"
+    },
+    "ApprovalLeg": {
+      "additionalProperties": false,
+      "description": "One provider operation the approval binds, in execution order by `after`.",
+      "properties": {
+        "index": {
+          "minimum": 1,
+          "title": "Index",
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "advance",
+            "repayment",
+            "fx",
+            "payout"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "amount": {
+          "$ref": "#/$defs/Amount"
+        },
+        "source": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "counterparty": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Counterparty",
+          "type": "string"
+        },
+        "funded_by": {
+          "anyOf": [
+            {
+              "pattern": "^(spendable|reservation:[A-Za-z0-9._:/-]+)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Funded By"
+        },
+        "after": {
+          "default": [],
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": "After",
+          "type": "array"
+        },
+        "facility_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Facility Id"
+        },
+        "to_currency": {
+          "anyOf": [
+            {
+              "enum": [
+                "USD",
+                "EUR",
+                "GBP",
+                "JPY",
+                "AUD",
+                "HKD",
+                "SGD",
+                "CNY"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To Currency"
+        }
+      },
+      "required": [
+        "index",
+        "kind",
+        "amount",
+        "source",
+        "counterparty"
+      ],
+      "title": "ApprovalLeg",
+      "type": "object"
+    },
+    "ApprovalRequest": {
+      "additionalProperties": false,
+      "description": "POST /api/v1/approvals: the selected policy decides again on the observed snapshot.",
+      "properties": {
+        "run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "policy": {
+          "enum": [
+            "no-action",
+            "fixed-reserve",
+            "integrated"
+          ],
+          "title": "Policy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "policy"
+      ],
+      "title": "ApprovalRequest",
+      "type": "object"
+    },
+    "ApprovalResponse": {
+      "additionalProperties": false,
+      "description": "201 from POST /api/v1/approvals.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "approval": {
+          "$ref": "#/$defs/BoundApproval"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "approval"
+      ],
+      "title": "ApprovalResponse",
+      "type": "object"
+    },
+    "BoundApproval": {
+      "additionalProperties": false,
+      "description": "C3: the operator's approval of one plan; any term outside it invalidates the whole.",
+      "properties": {
+        "approval_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Approval Id",
+          "type": "string"
+        },
+        "entity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Entity",
+          "type": "string"
+        },
+        "account": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Account",
+          "type": "string"
+        },
+        "legs": {
+          "items": {
+            "$ref": "#/$defs/ApprovalLeg"
+          },
+          "minItems": 1,
+          "title": "Legs",
+          "type": "array"
+        },
+        "plan_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Plan Hash",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "title": "Expires At",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "approver": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Approver",
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "entity",
+        "account",
+        "legs",
+        "plan_hash",
+        "snapshot_id",
+        "expires_at",
+        "mode",
+        "approver"
+      ],
+      "title": "BoundApproval",
+      "type": "object"
+    },
+    "BranchView": {
+      "additionalProperties": false,
+      "properties": {
+        "branch_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Branch Id",
+          "type": "string"
+        },
+        "parent_branch_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Branch Id"
+        },
+        "checkpoint_round": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Checkpoint Round"
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "enum": [
+                "no-action",
+                "fixed-reserve",
+                "integrated"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Policy"
+        },
+        "replay": {
+          "title": "Replay",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "branch_id",
+        "parent_branch_id",
+        "checkpoint_round",
+        "policy",
+        "replay"
+      ],
+      "title": "BranchView",
+      "type": "object"
+    },
+    "Buckets": {
+      "additionalProperties": false,
+      "description": "An account's buckets; `settled` is null exactly when the account is unknown.",
+      "properties": {
+        "settled": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reserved": {
+          "$ref": "#/$defs/NonNegativeMoney"
+        },
+        "pledged": {
+          "$ref": "#/$defs/NonNegativeMoney"
+        },
+        "pending_in": {
+          "items": {
+            "$ref": "#/$defs/Flow"
+          },
+          "title": "Pending In",
+          "type": "array"
+        },
+        "pending_out": {
+          "items": {
+            "$ref": "#/$defs/Flow"
+          },
+          "title": "Pending Out",
+          "type": "array"
+        }
+      },
+      "required": [
+        "settled",
+        "reserved",
+        "pledged",
+        "pending_in",
+        "pending_out"
+      ],
+      "title": "Buckets",
+      "type": "object"
+    },
+    "Capacity": {
+      "additionalProperties": false,
+      "description": "K_p and the parts it is computed from.",
+      "properties": {
+        "K_p": {
+          "$ref": "#/$defs/Metric"
+        },
+        "authority": {
+          "enum": [
+            "full",
+            "reduced"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "parts": {
+          "$ref": "#/$defs/CapacityParts"
+        }
+      },
+      "required": [
+        "K_p",
+        "authority",
+        "parts"
+      ],
+      "title": "Capacity",
+      "type": "object"
+    },
+    "CapacityParts": {
+      "additionalProperties": false,
+      "properties": {
+        "settled_known": {
+          "$ref": "#/$defs/Metric"
+        },
+        "committed_undrawn": {
+          "$ref": "#/$defs/Metric"
+        },
+        "pledged": {
+          "$ref": "#/$defs/Metric"
+        },
+        "obligations_due": {
+          "$ref": "#/$defs/Metric"
+        },
+        "floor": {
+          "$ref": "#/$defs/Metric"
+        }
+      },
+      "required": [
+        "settled_known",
+        "committed_undrawn",
+        "pledged",
+        "obligations_due",
+        "floor"
+      ],
+      "title": "CapacityParts",
+      "type": "object"
+    },
+    "CashPath": {
+      "additionalProperties": false,
+      "properties": {
+        "branch_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Branch Id",
+          "type": "string"
+        },
+        "account_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Account Id",
+          "type": "string"
+        },
+        "points": {
+          "items": {
+            "$ref": "#/$defs/CashPoint"
+          },
+          "title": "Points",
+          "type": "array"
+        }
+      },
+      "required": [
+        "branch_id",
+        "account_id",
+        "points"
+      ],
+      "title": "CashPath",
+      "type": "object"
+    },
+    "CashPoint": {
+      "additionalProperties": false,
+      "properties": {
+        "t": {
+          "format": "date-time",
+          "title": "T",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Metric"
+        }
+      },
+      "required": [
+        "t",
+        "value"
+      ],
+      "title": "CashPoint",
+      "type": "object"
+    },
+    "ClearedAction": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "journal_id": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      ],
+      "description": "C2: the coordinator's verdict on one intent; the actor sees it the next round.",
+      "properties": {
+        "intent_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Intent Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "pending"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "binding": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Binding"
+        },
+        "journal_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Journal Id"
+        },
+        "round": {
+          "minimum": 0,
+          "title": "Round",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "intent_id",
+        "status",
+        "round"
+      ],
+      "title": "ClearedAction",
+      "type": "object"
+    },
+    "Completeness": {
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "missing": {
+          "items": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "title": "Missing",
+          "type": "array"
+        }
+      },
+      "required": [
+        "status",
+        "missing"
+      ],
+      "title": "Completeness",
+      "type": "object"
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "description": "Minimum projected cash P over the horizon against the reserve floor.",
+      "properties": {
+        "min_projected": {
+          "$ref": "#/$defs/Metric"
+        },
+        "at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "At"
+        },
+        "floor": {
+          "$ref": "#/$defs/Metric"
+        },
+        "headroom": {
+          "$ref": "#/$defs/Metric"
+        }
+      },
+      "required": [
+        "min_projected",
+        "at",
+        "floor",
+        "headroom"
+      ],
+      "title": "Coverage",
+      "type": "object"
+    },
+    "DecisionsResponse": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "selected"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "selected": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "all_infeasible"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "selected": {
+                "type": "null"
+              },
+              "escalation": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      ],
+      "description": "GET /api/v1/decisions/{run_id}; a selection is never an approval.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "checkpoint_round": {
+          "minimum": 0,
+          "title": "Checkpoint Round",
+          "type": "integer"
+        },
+        "cohort": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Cohort",
+          "type": "string"
+        },
+        "weight_kind": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Weight Kind",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "selected",
+            "all_infeasible"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/PolicyResult"
+          },
+          "title": "Results",
+          "type": "array"
+        },
+        "selected": {
+          "anyOf": [
+            {
+              "enum": [
+                "no-action",
+                "fixed-reserve",
+                "integrated"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Selected"
+        },
+        "escalation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Escalation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "run_id",
+        "snapshot_id",
+        "checkpoint_round",
+        "cohort",
+        "weight_kind",
+        "status",
+        "results",
+        "selected",
+        "escalation"
+      ],
+      "title": "DecisionsResponse",
+      "type": "object"
+    },
+    "DemoContext": {
+      "additionalProperties": false,
+      "description": "The prepared demonstration run and its execution; null is unavailable, never a guess.",
+      "properties": {
+        "run_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Run Id"
+        },
+        "execution_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Execution Id"
+        }
+      },
+      "required": [
+        "run_id",
+        "execution_id"
+      ],
+      "title": "DemoContext",
+      "type": "object"
+    },
+    "ErrorBody": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "maxLength": 4000,
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "detail"
+      ],
+      "title": "ErrorBody",
+      "type": "object"
+    },
+    "ErrorResponse": {
+      "additionalProperties": false,
+      "description": "A refused or failed request.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "error": {
+          "$ref": "#/$defs/ErrorBody"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "error"
+      ],
+      "title": "ErrorResponse",
+      "type": "object"
+    },
+    "Escalation": {
+      "additionalProperties": false,
+      "description": "When every policy fails: the earliest unmet constraint, the binding one, whom to call.",
+      "properties": {
+        "earliest_unmet": {
+          "maxLength": 4000,
+          "title": "Earliest Unmet",
+          "type": "string"
+        },
+        "binding": {
+          "maxLength": 4000,
+          "title": "Binding",
+          "type": "string"
+        },
+        "contact": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Contact",
+          "type": "string"
+        }
+      },
+      "required": [
+        "earliest_unmet",
+        "binding",
+        "contact"
+      ],
+      "title": "Escalation",
+      "type": "object"
+    },
+    "ExecutionAccepted": {
+      "additionalProperties": false,
+      "description": "202 from POST /api/v1/executions; the execution id is the approval id.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "execution_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Execution Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "execution_id"
+      ],
+      "title": "ExecutionAccepted",
+      "type": "object"
+    },
+    "ExecutionLeg": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "settled"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "properties": {
+              "journal_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "journal_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "reconciled": {
+                "const": true
+              }
+            },
+            "required": [
+              "reconciled"
+            ]
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "settled",
+                  "failed"
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "description": "A C4 leg with the label the connector's leg plan gives it.",
+      "properties": {
+        "leg_id": {
+          "pattern": "^[0-9a-f]{12}-[1-9][0-9]*-(advance|repayment|fx|payout)$",
+          "title": "Leg Id",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^[0-9a-f]{12}-[1-9][0-9]*-(advance|repayment|fx|payout)$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "advance",
+            "repayment",
+            "fx",
+            "payout"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "provider_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Provider Id"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "submitted",
+            "settled",
+            "failed",
+            "unknown"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "receipt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Receipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reconciled": {
+          "title": "Reconciled",
+          "type": "boolean"
+        },
+        "journal_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Journal Id"
+        },
+        "label": {
+          "maxLength": 4000,
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "leg_id",
+        "request_id",
+        "kind",
+        "state",
+        "receipt",
+        "reconciled",
+        "label"
+      ],
+      "title": "ExecutionLeg",
+      "type": "object"
+    },
+    "ExecutionRequest": {
+      "additionalProperties": false,
+      "description": "POST /api/v1/executions.",
+      "properties": {
+        "approval_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Approval Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id"
+      ],
+      "title": "ExecutionRequest",
+      "type": "object"
+    },
+    "ExecutionResponse": {
+      "additionalProperties": false,
+      "description": "GET /api/v1/executions/{id}.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "execution_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Execution Id",
+          "type": "string"
+        },
+        "approval_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Approval Id",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "legs": {
+          "items": {
+            "$ref": "#/$defs/ExecutionLeg"
+          },
+          "title": "Legs",
+          "type": "array"
+        },
+        "incidents": {
+          "items": {
+            "$ref": "#/$defs/Incident"
+          },
+          "title": "Incidents",
+          "type": "array"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "execution_id",
+        "approval_id",
+        "snapshot_id",
+        "legs",
+        "incidents"
+      ],
+      "title": "ExecutionResponse",
+      "type": "object"
+    },
+    "FacilityView": {
+      "additionalProperties": false,
+      "properties": {
+        "facility_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Facility Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "committed_line",
+            "revenue_advance",
+            "collateral"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "borrower": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Borrower",
+          "type": "string"
+        },
+        "principal": {
+          "$ref": "#/$defs/Amount"
+        },
+        "fee": {
+          "$ref": "#/$defs/NonNegativeMoney"
+        },
+        "owed": {
+          "$ref": "#/$defs/NonNegativeMoney"
+        },
+        "observed_revenue": {
+          "$ref": "#/$defs/Metric"
+        },
+        "outstanding": {
+          "$ref": "#/$defs/NonNegativeMoney"
+        },
+        "state": {
+          "enum": [
+            "offered",
+            "active",
+            "repaid",
+            "defaulted",
+            "closed"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "facility_id",
+        "kind",
+        "borrower",
+        "principal",
+        "fee",
+        "owed",
+        "observed_revenue",
+        "outstanding",
+        "state"
+      ],
+      "title": "FacilityView",
+      "type": "object"
+    },
+    "FigureSource": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "branch_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Branch Id",
+          "type": "string"
+        },
+        "round": {
+          "minimum": 0,
+          "title": "Round",
+          "type": "integer"
+        },
+        "journal_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Journal Id"
+        },
+        "intent_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent Id"
+        }
+      },
+      "required": [
+        "run_id",
+        "branch_id",
+        "round"
+      ],
+      "title": "FigureSource",
+      "type": "object"
+    },
+    "Flow": {
+      "additionalProperties": false,
+      "description": "An expected movement not yet settled: pending_in by `expected_at`, pending_out by due.",
+      "properties": {
+        "flow_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Flow Id",
+          "type": "string"
+        },
+        "amount": {
+          "$ref": "#/$defs/Amount"
+        },
+        "expected_at": {
+          "format": "date-time",
+          "title": "Expected At",
+          "type": "string"
+        },
+        "kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "reservation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reservation Id"
+        }
+      },
+      "required": [
+        "flow_id",
+        "amount",
+        "expected_at",
+        "kind"
+      ],
+      "title": "Flow",
+      "type": "object"
+    },
+    "ForkRequest": {
+      "additionalProperties": false,
+      "description": "POST /api/v1/runs/{id}/fork: one fresh branch per policy at a committed round.",
+      "properties": {
+        "checkpoint_round": {
+          "minimum": 0,
+          "title": "Checkpoint Round",
+          "type": "integer"
+        },
+        "policies": {
+          "items": {
+            "enum": [
+              "no-action",
+              "fixed-reserve",
+              "integrated"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Policies",
+          "type": "array"
+        }
+      },
+      "required": [
+        "checkpoint_round",
+        "policies"
+      ],
+      "title": "ForkRequest",
+      "type": "object"
+    },
+    "HealthResponse": {
+      "additionalProperties": false,
+      "description": "GET /api/v1/health.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "airwallex": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Airwallex",
+          "type": "string"
+        },
+        "connected": {
+          "title": "Connected",
+          "type": "boolean"
+        },
+        "model": {
+          "enum": [
+            "scripted",
+            "live"
+          ],
+          "title": "Model",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "ok",
+        "airwallex",
+        "connected",
+        "model",
+        "version"
+      ],
+      "title": "HealthResponse",
+      "type": "object"
+    },
+    "Incident": {
+      "additionalProperties": false,
+      "properties": {
+        "incident_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Incident Id",
+          "type": "string"
+        },
+        "leg_id": {
+          "pattern": "^[0-9a-f]{12}-[1-9][0-9]*-(advance|repayment|fx|payout)$",
+          "title": "Leg Id",
+          "type": "string"
+        },
+        "kind": {
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "title": "Kind",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "open",
+            "closed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "opened_at": {
+          "format": "date-time",
+          "title": "Opened At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "incident_id",
+        "leg_id",
+        "kind",
+        "state",
+        "opened_at"
+      ],
+      "title": "Incident",
+      "type": "object"
+    },
+    "IntentParams": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Param"
+      },
+      "description": "An intent's arguments: `amount` is Money; any other argument is JSON with no float.",
+      "properties": {
+        "amount": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Amount"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "IntentParams",
+      "type": "object"
+    },
+    "InterviewRequest": {
+      "additionalProperties": false,
+      "description": "POST /api/v1/interview: read-only, still behind the demo token.",
+      "properties": {
+        "run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "branch_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Branch Id",
+          "type": "string"
+        },
+        "round": {
+          "minimum": 0,
+          "title": "Round",
+          "type": "integer"
+        },
+        "actor_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "question": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "branch_id",
+        "round",
+        "actor_id",
+        "question"
+      ],
+      "title": "InterviewRequest",
+      "type": "object"
+    },
+    "InterviewResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "branch_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Branch Id",
+          "type": "string"
+        },
+        "round": {
+          "minimum": 0,
+          "title": "Round",
+          "type": "integer"
+        },
+        "actor_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "answer": {
+          "maxLength": 4000,
+          "title": "Answer",
+          "type": "string"
+        },
+        "read_only": {
+          "const": true,
+          "title": "Read Only",
+          "type": "boolean"
+        },
+        "replay": {
+          "title": "Replay",
+          "type": "boolean"
+        },
+        "evidence_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "run_id",
+        "branch_id",
+        "round",
+        "actor_id",
+        "answer",
+        "read_only",
+        "replay",
+        "evidence_ids"
+      ],
+      "title": "InterviewResponse",
+      "type": "object"
+    },
+    "JobAccepted": {
+      "additionalProperties": false,
+      "description": "202 from POST /api/v1/runs and POST /api/v1/runs/{id}/fork.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "job_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Job Id",
+          "type": "string"
+        },
+        "run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "branch_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Branch Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "job_id",
+        "run_id",
+        "branch_ids"
+      ],
+      "title": "JobAccepted",
+      "type": "object"
+    },
+    "LendingResponse": {
+      "additionalProperties": false,
+      "description": "GET /api/v1/lending.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "pool": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Pool",
+          "type": "string"
+        },
+        "capacity": {
+          "$ref": "#/$defs/Capacity"
+        },
+        "facilities": {
+          "items": {
+            "$ref": "#/$defs/FacilityView"
+          },
+          "title": "Facilities",
+          "type": "array"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "snapshot_id",
+        "pool",
+        "capacity",
+        "facilities"
+      ],
+      "title": "LendingResponse",
+      "type": "object"
+    },
+    "Metric": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "minor": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "known",
+                  "stale"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "minor": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      ],
+      "description": "One figure on screen: a value only when known or stale; unknown is never zero.",
+      "properties": {
+        "minor": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Minor"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "known",
+            "unknown",
+            "stale",
+            "unassessed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "as_of": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "As Of"
+        }
+      },
+      "required": [
+        "minor",
+        "currency",
+        "status"
+      ],
+      "title": "Metric",
+      "type": "object"
+    },
+    "Money": {
+      "additionalProperties": false,
+      "description": "An amount in integer minor units of an ISO-4217 currency; signed inside the ledger.",
+      "properties": {
+        "minor": {
+          "title": "Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "minor",
+        "currency"
+      ],
+      "title": "Money",
+      "type": "object"
+    },
+    "NonNegativeMoney": {
+      "additionalProperties": false,
+      "description": "An amount that is zero or more: a reserved or pledged bucket, a floor, a fee.",
+      "properties": {
+        "minor": {
+          "minimum": 0,
+          "title": "Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "minor",
+        "currency"
+      ],
+      "title": "NonNegativeMoney",
+      "type": "object"
+    },
+    "Obligation": {
+      "additionalProperties": false,
+      "description": "A payment owed by a deadline; it is never removed by inaction.",
+      "properties": {
+        "obligation_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Obligation Id",
+          "type": "string"
+        },
+        "entity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Entity",
+          "type": "string"
+        },
+        "account": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Account",
+          "type": "string"
+        },
+        "amount": {
+          "$ref": "#/$defs/Amount"
+        },
+        "due_at": {
+          "format": "date-time",
+          "title": "Due At",
+          "type": "string"
+        },
+        "kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "mandatory": {
+          "default": true,
+          "title": "Mandatory",
+          "type": "boolean"
+        },
+        "reservation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reservation Id"
+        },
+        "state": {
+          "default": "open",
+          "enum": [
+            "open",
+            "met",
+            "missed",
+            "deferred"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "obligation_id",
+        "entity",
+        "account",
+        "amount",
+        "due_at",
+        "kind"
+      ],
+      "title": "Obligation",
+      "type": "object"
+    },
+    "OverviewResponse": {
+      "additionalProperties": false,
+      "description": "GET /api/v1/overview.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "cash": {
+          "$ref": "#/$defs/Metric"
+        },
+        "spendable": {
+          "$ref": "#/$defs/Metric"
+        },
+        "upcoming_outflows": {
+          "items": {
+            "$ref": "#/$defs/UpcomingOutflow"
+          },
+          "title": "Upcoming Outflows",
+          "type": "array"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        },
+        "lender_capacity": {
+          "$ref": "#/$defs/Metric"
+        },
+        "completeness": {
+          "$ref": "#/$defs/Completeness"
+        },
+        "demo": {
+          "$ref": "#/$defs/DemoContext"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "snapshot_id",
+        "cash",
+        "spendable",
+        "upcoming_outflows",
+        "coverage",
+        "lender_capacity",
+        "completeness",
+        "demo"
+      ],
+      "title": "OverviewResponse",
+      "type": "object"
+    },
+    "Param": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/Param"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/Param"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "PolicyResult": {
+      "additionalProperties": false,
+      "description": "One policy on one scenario, read from its branch's realised ledger.",
+      "properties": {
+        "policy": {
+          "enum": [
+            "no-action",
+            "fixed-reserve",
+            "integrated"
+          ],
+          "title": "Policy",
+          "type": "string"
+        },
+        "scenario_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Scenario Id",
+          "type": "string"
+        },
+        "branch_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Branch Id",
+          "type": "string"
+        },
+        "replay": {
+          "title": "Replay",
+          "type": "boolean"
+        },
+        "obligations_unmet": {
+          "minimum": 0,
+          "title": "Obligations Unmet",
+          "type": "integer"
+        },
+        "floor_kept": {
+          "title": "Floor Kept",
+          "type": "boolean"
+        },
+        "min_cash": {
+          "$ref": "#/$defs/Metric"
+        },
+        "funding_cost": {
+          "$ref": "#/$defs/NonNegativeMoney"
+        },
+        "feasible": {
+          "title": "Feasible",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "policy",
+        "scenario_id",
+        "branch_id",
+        "replay",
+        "obligations_unmet",
+        "floor_kept",
+        "min_cash",
+        "funding_cost",
+        "feasible"
+      ],
+      "title": "PolicyResult",
+      "type": "object"
+    },
+    "Post": {
+      "additionalProperties": false,
+      "properties": {
+        "post_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Post Id",
+          "type": "string"
+        },
+        "round": {
+          "minimum": 0,
+          "title": "Round",
+          "type": "integer"
+        },
+        "branch_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Branch Id",
+          "type": "string"
+        },
+        "author": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Author",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 4000,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "post_id",
+        "round",
+        "branch_id",
+        "author",
+        "text"
+      ],
+      "title": "Post",
+      "type": "object"
+    },
+    "Receipt": {
+      "additionalProperties": false,
+      "description": "What the provider's `GET` showed for a leg; `amount` is the provider's decimal string.",
+      "properties": {
+        "provider_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Id",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^[0-9a-f]{12}-[1-9][0-9]*-(advance|repayment|fx|payout)$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "advance",
+            "repayment",
+            "fx",
+            "payout"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "status": {
+          "pattern": "^[A-Z][A-Z_]*$",
+          "title": "Status",
+          "type": "string"
+        },
+        "amount": {
+          "pattern": "^[0-9]+(\\.[0-9]+)?$",
+          "title": "Amount",
+          "type": "string"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 4000,
+          "title": "Label",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "raw_keys": {
+          "items": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "title": "Raw Keys",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider_id",
+        "request_id",
+        "kind",
+        "status",
+        "amount",
+        "currency",
+        "label",
+        "mode",
+        "raw_keys",
+        "observed_at"
+      ],
+      "title": "Receipt",
+      "type": "object"
+    },
+    "ReportFigure": {
+      "additionalProperties": false,
+      "description": "A number in a report, with the structured result it came from.",
+      "properties": {
+        "label": {
+          "maxLength": 4000,
+          "title": "Label",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Metric"
+        },
+        "source": {
+          "$ref": "#/$defs/FigureSource"
+        }
+      },
+      "required": [
+        "label",
+        "value",
+        "source"
+      ],
+      "title": "ReportFigure",
+      "type": "object"
+    },
+    "ReportResponse": {
+      "additionalProperties": false,
+      "description": "GET /api/v1/reports/{run_id}.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "model": {
+          "enum": [
+            "scripted",
+            "live"
+          ],
+          "title": "Model",
+          "type": "string"
+        },
+        "replay": {
+          "title": "Replay",
+          "type": "boolean"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/ReportSection"
+          },
+          "title": "Sections",
+          "type": "array"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "run_id",
+        "snapshot_id",
+        "model",
+        "replay",
+        "sections"
+      ],
+      "title": "ReportResponse",
+      "type": "object"
+    },
+    "ReportSection": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 4000,
+          "title": "Text",
+          "type": "string"
+        },
+        "figures": {
+          "items": {
+            "$ref": "#/$defs/ReportFigure"
+          },
+          "title": "Figures",
+          "type": "array"
+        }
+      },
+      "required": [
+        "title",
+        "text",
+        "figures"
+      ],
+      "title": "ReportSection",
+      "type": "object"
+    },
+    "RoundView": {
+      "additionalProperties": false,
+      "description": "One committed round of one branch.",
+      "properties": {
+        "round": {
+          "minimum": 0,
+          "title": "Round",
+          "type": "integer"
+        },
+        "branch_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Branch Id",
+          "type": "string"
+        },
+        "t_hours": {
+          "minimum": 0,
+          "title": "T Hours",
+          "type": "integer"
+        },
+        "intents": {
+          "items": {
+            "$ref": "#/$defs/ActionIntent"
+          },
+          "title": "Intents",
+          "type": "array"
+        },
+        "cleared": {
+          "items": {
+            "$ref": "#/$defs/ClearedAction"
+          },
+          "title": "Cleared",
+          "type": "array"
+        },
+        "journal_ids": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Journal Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "round",
+        "branch_id",
+        "t_hours",
+        "intents",
+        "cleared",
+        "journal_ids"
+      ],
+      "title": "RoundView",
+      "type": "object"
+    },
+    "RunRequest": {
+      "additionalProperties": false,
+      "description": "POST /api/v1/runs.",
+      "properties": {
+        "snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "scenario": {
+          "$ref": "#/$defs/ScenarioSpec"
+        },
+        "rounds": {
+          "maximum": 18,
+          "minimum": 1,
+          "title": "Rounds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "snapshot_id",
+        "scenario",
+        "rounds"
+      ],
+      "title": "RunRequest",
+      "type": "object"
+    },
+    "RunResponse": {
+      "additionalProperties": false,
+      "description": "GET /api/v1/runs/{id}.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "run_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Run Id",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "queued",
+            "running",
+            "done",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "committed_round": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Committed Round"
+        },
+        "rounds": {
+          "items": {
+            "$ref": "#/$defs/RoundView"
+          },
+          "title": "Rounds",
+          "type": "array"
+        },
+        "feed": {
+          "items": {
+            "$ref": "#/$defs/Post"
+          },
+          "title": "Feed",
+          "type": "array"
+        },
+        "cash_paths": {
+          "items": {
+            "$ref": "#/$defs/CashPath"
+          },
+          "title": "Cash Paths",
+          "type": "array"
+        },
+        "branches": {
+          "items": {
+            "$ref": "#/$defs/BranchView"
+          },
+          "title": "Branches",
+          "type": "array"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "run_id",
+        "snapshot_id",
+        "status",
+        "committed_round",
+        "rounds",
+        "feed",
+        "cash_paths",
+        "branches"
+      ],
+      "title": "RunResponse",
+      "type": "object"
+    },
+    "ScenarioSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "enum": [
+            "delayed_receipt",
+            "confidence_rumour",
+            "stablecoin_depeg",
+            "borrower_silence",
+            "redemption_spike",
+            "fx_gap"
+          ],
+          "title": "Family",
+          "type": "string"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "params": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Param"
+          },
+          "title": "Params",
+          "type": "object"
+        }
+      },
+      "required": [
+        "family",
+        "seed",
+        "params"
+      ],
+      "title": "ScenarioSpec",
+      "type": "object"
+    },
+    "TreasuryAccount": {
+      "additionalProperties": false,
+      "description": "An account with S (spendable now) and P (projected cash) kept as separate measures.",
+      "properties": {
+        "account_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Account Id",
+          "type": "string"
+        },
+        "entity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Entity",
+          "type": "string"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        },
+        "observability": {
+          "enum": [
+            "known",
+            "unknown"
+          ],
+          "title": "Observability",
+          "type": "string"
+        },
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "buckets": {
+          "$ref": "#/$defs/Buckets"
+        },
+        "spendable": {
+          "$ref": "#/$defs/Metric"
+        },
+        "authority": {
+          "enum": [
+            "full",
+            "reduced"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "floor": {
+          "$ref": "#/$defs/Metric"
+        },
+        "projected": {
+          "items": {
+            "$ref": "#/$defs/CashPoint"
+          },
+          "title": "Projected",
+          "type": "array"
+        }
+      },
+      "required": [
+        "account_id",
+        "entity",
+        "currency",
+        "observability",
+        "as_of",
+        "buckets",
+        "spendable",
+        "authority",
+        "floor",
+        "projected"
+      ],
+      "title": "TreasuryAccount",
+      "type": "object"
+    },
+    "TreasuryResponse": {
+      "additionalProperties": false,
+      "description": "GET /api/v1/treasury.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "snapshot_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Snapshot Id",
+          "type": "string"
+        },
+        "accounts": {
+          "items": {
+            "$ref": "#/$defs/TreasuryAccount"
+          },
+          "title": "Accounts",
+          "type": "array"
+        },
+        "obligations": {
+          "items": {
+            "$ref": "#/$defs/Obligation"
+          },
+          "title": "Obligations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "snapshot_id",
+        "accounts",
+        "obligations"
+      ],
+      "title": "TreasuryResponse",
+      "type": "object"
+    },
+    "UpcomingOutflow": {
+      "additionalProperties": false,
+      "properties": {
+        "obligation_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Obligation Id",
+          "type": "string"
+        },
+        "kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "amount": {
+          "$ref": "#/$defs/Amount"
+        },
+        "due_at": {
+          "format": "date-time",
+          "title": "Due At",
+          "type": "string"
+        },
+        "reserved": {
+          "title": "Reserved",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "obligation_id",
+        "kind",
+        "amount",
+        "due_at",
+        "reserved"
+      ],
+      "title": "UpcomingOutflow",
+      "type": "object"
+    },
+    "WebhookAck": {
+      "additionalProperties": false,
+      "description": "POST /api/v1/webhooks/airwallex: a verified hint that triggers a GET.",
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "accepted": {
+          "title": "Accepted",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "as_of",
+        "mode",
+        "accepted"
+      ],
+      "title": "WebhookAck",
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Generated from backend/app/finance/schemas.py by `python -m app.finance.schemas`; edit the model, not this file.",
+  "$defs": {
+    "Amount": {
+      "additionalProperties": false,
+      "description": "A strictly positive amount: what an intent, a leg or an obligation moves.",
+      "properties": {
+        "minor": {
+          "exclusiveMinimum": 0,
+          "title": "Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "minor",
+        "currency"
+      ],
+      "title": "Amount",
+      "type": "object"
+    },
+    "IntentParams": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Param"
+      },
+      "description": "An intent's arguments: `amount` is Money; any other argument is JSON with no float.",
+      "properties": {
+        "amount": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Amount"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "IntentParams",
+      "type": "object"
+    },
+    "Param": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/Param"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/Param"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "request_advance",
+              "offer",
+              "disburse",
+              "repay",
+              "convert",
+              "pay",
+              "pledge"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "params": {
+            "properties": {
+              "amount": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "amount"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "description": "C1: what an actor proposes in a round; a rejected or malformed one becomes `no_action`.",
+  "properties": {
+    "intent_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Intent Id",
+      "type": "string"
+    },
+    "branch_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Branch Id",
+      "type": "string"
+    },
+    "round": {
+      "minimum": 0,
+      "title": "Round",
+      "type": "integer"
+    },
+    "actor_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Actor Id",
+      "type": "string"
+    },
+    "type": {
+      "enum": [
+        "request_advance",
+        "offer",
+        "accept",
+        "disburse",
+        "repay",
+        "convert",
+        "pay",
+        "pledge",
+        "release",
+        "defer",
+        "no_action"
+      ],
+      "title": "Type",
+      "type": "string"
+    },
+    "params": {
+      "$ref": "#/$defs/IntentParams"
+    },
+    "evidence_ids": {
+      "items": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Evidence Ids",
+      "type": "array"
+    },
+    "obs_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Obs Hash",
+      "type": "string"
+    },
+    "priority_class": {
+      "anyOf": [
+        {
+          "maximum": 3,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Priority Class"
+    },
+    "sim_minute": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sim Minute"
+    }
+  },
+  "required": [
+    "intent_id",
+    "branch_id",
+    "round",
+    "actor_id",
+    "type",
+    "params",
+    "evidence_ids",
+    "obs_hash"
+  ],
+  "title": "ActionIntent",
+  "type": "object"
+}

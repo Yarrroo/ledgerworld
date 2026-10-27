@@ -1,0 +1,27 @@
+{
+ "about": "When every policy fails nothing is selected; the result escalates.",
+ "def": "DecisionsResponse",
+ "valid": false,
+ "reason": "an all-infeasible decision selects a policy",
+ "error": {
+  "path": "/selected",
+  "keyword": "type"
+ },
+ "instance": {
+  "as_of": "2026-11-05T10:00:00Z",
+  "mode": "fake",
+  "run_id": "run-1",
+  "snapshot_id": "lf1",
+  "checkpoint_round": 3,
+  "cohort": "s1",
+  "weight_kind": "unweighted scenario set",
+  "status": "all_infeasible",
+  "results": [],
+  "selected": "integrated",
+  "escalation": {
+   "earliest_unmet": "reserve floor at t=40 h",
+   "binding": "K_p = 7,000.00",
+   "contact": "treasury operator"
+  }
+ }
+}

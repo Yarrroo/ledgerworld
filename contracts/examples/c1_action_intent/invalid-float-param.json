@@ -1,0 +1,30 @@
+{
+ "about": "No float anywhere in an intent's arguments.",
+ "valid": false,
+ "reason": "params.fx_rate is a float",
+ "error": {
+  "path": "/params/fx_rate",
+  "keyword": "anyOf"
+ },
+ "instance": {
+  "intent_id": "i-r0-treasury-1",
+  "branch_id": "base",
+  "round": 0,
+  "actor_id": "treasury",
+  "type": "pay",
+  "params": {
+   "amount": {
+    "minor": 1000000,
+    "currency": "USD"
+   },
+   "to": "supplier-1",
+   "fx_rate": 1.08
+  },
+  "evidence_ids": [
+   "obs-r0-treasury"
+  ],
+  "obs_hash": "712a5bb8eba258ab46e3c4630fc6907f7ebb9b70aa37cbb8afdcc48ea42c797e",
+  "priority_class": 1,
+  "sim_minute": 60
+ }
+}

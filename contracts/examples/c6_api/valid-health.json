@@ -1,0 +1,14 @@
+{
+ "about": "GET /api/v1/health in fake mode with the scripted model.",
+ "def": "HealthResponse",
+ "valid": true,
+ "instance": {
+  "as_of": "2026-11-05T10:00:00Z",
+  "mode": "fake",
+  "ok": true,
+  "airwallex": "fake",
+  "connected": false,
+  "model": "scripted",
+  "version": "0.1.0"
+ }
+}

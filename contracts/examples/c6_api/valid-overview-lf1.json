@@ -1,0 +1,63 @@
+{
+ "about": "GET /api/v1/overview on LF-1 with no shock (ui money-views.json): floor kept, no execution associated yet.",
+ "def": "OverviewResponse",
+ "valid": true,
+ "instance": {
+  "as_of": "2026-01-05T00:00:00Z",
+  "mode": "fake",
+  "snapshot_id": "lf1",
+  "cash": {
+   "minor": 7000000,
+   "currency": "USD",
+   "status": "known"
+  },
+  "spendable": {
+   "minor": 2000000,
+   "currency": "USD",
+   "status": "known"
+  },
+  "upcoming_outflows": [
+   {
+    "obligation_id": "payroll-1",
+    "kind": "payroll",
+    "amount": {
+     "minor": 5000000,
+     "currency": "USD"
+    },
+    "due_at": "2026-01-06T16:00:00Z",
+    "reserved": true
+   }
+  ],
+  "coverage": {
+   "min_projected": {
+    "minor": 4000000,
+    "currency": "USD",
+    "status": "known"
+   },
+   "at": "2026-01-06T16:00:00Z",
+   "floor": {
+    "minor": 3000000,
+    "currency": "USD",
+    "status": "known"
+   },
+   "headroom": {
+    "minor": 1000000,
+    "currency": "USD",
+    "status": "known"
+   }
+  },
+  "lender_capacity": {
+   "minor": 4200000,
+   "currency": "USD",
+   "status": "known"
+  },
+  "completeness": {
+   "status": "complete",
+   "missing": []
+  },
+  "demo": {
+   "run_id": "run-1",
+   "execution_id": null
+  }
+ }
+}

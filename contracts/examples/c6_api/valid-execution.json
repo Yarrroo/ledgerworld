@@ -1,0 +1,43 @@
+{
+ "about": "GET /api/v1/executions/{id}: the advance leg settled and reconciled.",
+ "def": "ExecutionResponse",
+ "valid": true,
+ "instance": {
+  "as_of": "2026-11-05T10:02:00Z",
+  "mode": "fake",
+  "execution_id": "apr-1",
+  "approval_id": "apr-1",
+  "snapshot_id": "obs-2026-11-05T09:58Z",
+  "legs": [
+   {
+    "leg_id": "2072516a1b79-1-advance",
+    "request_id": "2072516a1b79-1-advance",
+    "kind": "advance",
+    "provider_id": "dep-0001",
+    "state": "settled",
+    "receipt": {
+     "provider_id": "dep-0001",
+     "request_id": "2072516a1b79-1-advance",
+     "kind": "advance",
+     "status": "SETTLED",
+     "amount": "10000.00",
+     "currency": "USD",
+     "label": "advance inflow (sandbox simulation)",
+     "mode": "fake",
+     "raw_keys": [
+      "id",
+      "amount",
+      "currency",
+      "status",
+      "reference"
+     ],
+     "observed_at": "2026-11-05T10:01:30Z"
+    },
+    "reconciled": true,
+    "journal_id": "j-adv-adv-a-disburse",
+    "label": "advance inflow (sandbox simulation)"
+   }
+  ],
+  "incidents": []
+ }
+}

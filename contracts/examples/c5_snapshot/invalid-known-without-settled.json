@@ -1,0 +1,92 @@
+{
+ "about": "Unknown is a state, never a missing number on a known account.",
+ "valid": false,
+ "reason": "a known account has no settled balance",
+ "error": {
+  "path": "/accounts/0/buckets/settled",
+  "keyword": "type"
+ },
+ "instance": {
+  "snapshot_id": "lf1",
+  "as_of": "2026-01-05T00:00:00Z",
+  "entities": [
+   {
+    "entity_id": "borrower-a",
+    "name": "Northwind Parts (synthetic)",
+    "kind": "treasury",
+    "escalation": "treasury operator"
+   }
+  ],
+  "accounts": [
+   {
+    "id": "borrower-a/operating",
+    "entity": "borrower-a",
+    "currency": "USD",
+    "floor": {
+     "minor": 3000000,
+     "currency": "USD"
+    },
+    "observability": "known",
+    "as_of": "2026-01-05T00:00:00Z",
+    "buckets": {
+     "settled": null,
+     "reserved": {
+      "minor": 5000000,
+      "currency": "USD"
+     },
+     "pledged": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pending_in": [
+      {
+       "flow_id": "rcv-1",
+       "amount": {
+        "minor": 2000000,
+        "currency": "USD"
+       },
+       "expected_at": "2026-01-05T12:00:00Z",
+       "kind": "receivable"
+      },
+      {
+       "flow_id": "wd-1",
+       "amount": {
+        "minor": 1500000,
+        "currency": "USD"
+       },
+       "expected_at": "2026-01-07T00:00:00Z",
+       "kind": "exchange withdrawal"
+      }
+     ],
+     "pending_out": []
+    }
+   }
+  ],
+  "obligations": [
+   {
+    "obligation_id": "payroll-1",
+    "entity": "borrower-a",
+    "account": "borrower-a/operating",
+    "amount": {
+     "minor": 5000000,
+     "currency": "USD"
+    },
+    "due_at": "2026-01-06T16:00:00Z",
+    "kind": "payroll",
+    "reservation_id": "res-payroll-1"
+   }
+  ],
+  "contracts": [],
+  "exposures": [
+   {
+    "exposure_id": "venue-1",
+    "venue": "exchange-venue",
+    "shared_with": [
+     "lender"
+    ],
+    "flow_id": "wd-1"
+   }
+  ],
+  "pools": []
+ }
+}

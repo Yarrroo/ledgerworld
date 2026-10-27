@@ -1,0 +1,116 @@
+{
+ "about": "LF-2 (system brief §6, ledger lf2-lender.json): the pool, its committed line and the offered advance.",
+ "valid": true,
+ "instance": {
+  "snapshot_id": "lf2",
+  "as_of": "2026-01-05T00:00:00Z",
+  "entities": [
+   {
+    "entity_id": "lender",
+    "name": "Harbor Pool (synthetic)",
+    "kind": "lender pool"
+   }
+  ],
+  "accounts": [
+   {
+    "id": "lender/operating",
+    "entity": "lender",
+    "currency": "USD",
+    "observability": "known",
+    "as_of": "2026-01-05T00:00:00Z",
+    "buckets": {
+     "settled": {
+      "minor": 4500000,
+      "currency": "USD"
+     },
+     "reserved": {
+      "minor": 1000000,
+      "currency": "USD"
+     },
+     "pledged": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pending_in": [],
+     "pending_out": []
+    }
+   },
+   {
+    "id": "lender/venue",
+    "entity": "lender",
+    "currency": "USD",
+    "venue": "exchange-venue",
+    "observability": "known",
+    "as_of": "2026-01-05T00:00:00Z",
+    "buckets": {
+     "settled": {
+      "minor": 1500000,
+      "currency": "USD"
+     },
+     "reserved": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pledged": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pending_in": [],
+     "pending_out": []
+    }
+   }
+  ],
+  "obligations": [],
+  "contracts": [
+   {
+    "contract_id": "line-b",
+    "kind": "committed_line",
+    "lender": "lender",
+    "borrower": "borrower-b",
+    "limit": {
+     "minor": 1000000,
+     "currency": "USD"
+    },
+    "drawn": {
+     "minor": 0,
+     "currency": "USD"
+    },
+    "state": "active",
+    "reservation_id": "res-line-b",
+    "reserved_on": "lender/operating"
+   },
+   {
+    "contract_id": "adv-a",
+    "kind": "revenue_advance",
+    "lender": "lender",
+    "borrower": "borrower-a",
+    "principal": {
+     "minor": 1000000,
+     "currency": "USD"
+    },
+    "fee_bps": 800,
+    "repay_share_bps": 1500,
+    "state": "offered"
+   }
+  ],
+  "exposures": [
+   {
+    "exposure_id": "venue-1",
+    "venue": "exchange-venue",
+    "account": "lender/venue",
+    "shared_with": [
+     "borrower-a"
+    ]
+   }
+  ],
+  "pools": [
+   {
+    "entity": "lender",
+    "floor": {
+     "minor": 800000,
+     "currency": "USD"
+    }
+   }
+  ]
+ }
+}

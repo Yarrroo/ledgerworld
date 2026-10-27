@@ -1,0 +1,36 @@
+{
+ "about": "The leg state is ours; the provider's status lives in the receipt.",
+ "valid": false,
+ "reason": "state is a provider status, not a leg state",
+ "error": {
+  "path": "/state",
+  "keyword": "enum"
+ },
+ "instance": {
+  "leg_id": "2072516a1b79-1-advance",
+  "request_id": "2072516a1b79-1-advance",
+  "kind": "advance",
+  "provider_id": "dep-0001",
+  "state": "SETTLED",
+  "receipt": {
+   "provider_id": "dep-0001",
+   "request_id": "2072516a1b79-1-advance",
+   "kind": "advance",
+   "status": "SETTLED",
+   "amount": "10000.00",
+   "currency": "USD",
+   "label": "advance inflow (sandbox simulation)",
+   "mode": "fake",
+   "raw_keys": [
+    "id",
+    "amount",
+    "currency",
+    "status",
+    "reference"
+   ],
+   "observed_at": "2026-11-05T10:01:30Z"
+  },
+  "reconciled": true,
+  "journal_id": "j-adv-adv-a-disburse"
+ }
+}

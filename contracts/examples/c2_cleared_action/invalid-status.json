@@ -1,0 +1,16 @@
+{
+ "about": "Three statuses only.",
+ "valid": false,
+ "reason": "status is not accepted, rejected or pending",
+ "error": {
+  "path": "/status",
+  "keyword": "enum"
+ },
+ "instance": {
+  "intent_id": "i-r3-borrower-a-1",
+  "status": "done",
+  "reason": "beyond_capacity",
+  "binding": "K_p = 27,000.00",
+  "round": 3
+ }
+}

@@ -1,0 +1,837 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Generated from backend/app/finance/schemas.py by `python -m app.finance.schemas`; edit the model, not this file.",
+  "$defs": {
+    "Account": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "observability": {
+                "const": "known"
+              }
+            },
+            "required": [
+              "observability"
+            ]
+          },
+          "then": {
+            "properties": {
+              "buckets": {
+                "properties": {
+                  "settled": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "description": "One account of one entity in one currency; stale is derived from `as_of`, never stored.",
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "entity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Entity",
+          "type": "string"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        },
+        "kind": {
+          "default": "cash",
+          "enum": [
+            "cash",
+            "receivable",
+            "payable",
+            "income",
+            "expense",
+            "external"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "venue": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Venue"
+        },
+        "floor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonNegativeMoney"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "observability": {
+          "enum": [
+            "known",
+            "unknown"
+          ],
+          "title": "Observability",
+          "type": "string"
+        },
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "buckets": {
+          "$ref": "#/$defs/Buckets"
+        }
+      },
+      "required": [
+        "id",
+        "entity",
+        "currency",
+        "observability",
+        "as_of",
+        "buckets"
+      ],
+      "title": "Account",
+      "type": "object"
+    },
+    "Amount": {
+      "additionalProperties": false,
+      "description": "A strictly positive amount: what an intent, a leg or an obligation moves.",
+      "properties": {
+        "minor": {
+          "exclusiveMinimum": 0,
+          "title": "Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "minor",
+        "currency"
+      ],
+      "title": "Amount",
+      "type": "object"
+    },
+    "Buckets": {
+      "additionalProperties": false,
+      "description": "An account's buckets; `settled` is null exactly when the account is unknown.",
+      "properties": {
+        "settled": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reserved": {
+          "$ref": "#/$defs/NonNegativeMoney"
+        },
+        "pledged": {
+          "$ref": "#/$defs/NonNegativeMoney"
+        },
+        "pending_in": {
+          "items": {
+            "$ref": "#/$defs/Flow"
+          },
+          "title": "Pending In",
+          "type": "array"
+        },
+        "pending_out": {
+          "items": {
+            "$ref": "#/$defs/Flow"
+          },
+          "title": "Pending Out",
+          "type": "array"
+        }
+      },
+      "required": [
+        "settled",
+        "reserved",
+        "pledged",
+        "pending_in",
+        "pending_out"
+      ],
+      "title": "Buckets",
+      "type": "object"
+    },
+    "CollateralFacility": {
+      "additionalProperties": false,
+      "description": "A facility secured by pledged collateral (simulation and tests only).",
+      "properties": {
+        "contract_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Contract Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "collateral",
+          "title": "Kind",
+          "type": "string"
+        },
+        "lender": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Lender",
+          "type": "string"
+        },
+        "borrower": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Borrower",
+          "type": "string"
+        },
+        "limit": {
+          "$ref": "#/$defs/Amount"
+        },
+        "collateral_ref": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Collateral Ref",
+          "type": "string"
+        },
+        "advance_rate_bps": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Advance Rate Bps",
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "offered",
+            "active",
+            "repaid",
+            "defaulted",
+            "closed"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract_id",
+        "kind",
+        "lender",
+        "borrower",
+        "limit",
+        "collateral_ref",
+        "advance_rate_bps",
+        "state"
+      ],
+      "title": "CollateralFacility",
+      "type": "object"
+    },
+    "CommittedLine": {
+      "additionalProperties": false,
+      "description": "A committed undrawn line: held for the borrower, never discretionary for the lender.",
+      "properties": {
+        "contract_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Contract Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "committed_line",
+          "title": "Kind",
+          "type": "string"
+        },
+        "lender": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Lender",
+          "type": "string"
+        },
+        "borrower": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Borrower",
+          "type": "string"
+        },
+        "limit": {
+          "$ref": "#/$defs/Amount"
+        },
+        "drawn": {
+          "$ref": "#/$defs/NonNegativeMoney"
+        },
+        "state": {
+          "enum": [
+            "offered",
+            "active",
+            "repaid",
+            "defaulted",
+            "closed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "reservation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reservation Id"
+        },
+        "reserved_on": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reserved On"
+        }
+      },
+      "required": [
+        "contract_id",
+        "kind",
+        "lender",
+        "borrower",
+        "limit",
+        "drawn",
+        "state"
+      ],
+      "title": "CommittedLine",
+      "type": "object"
+    },
+    "Entity": {
+      "additionalProperties": false,
+      "description": "A synthetic organisation; `escalation` is the role to call when every plan fails.",
+      "properties": {
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "treasury",
+            "lender pool",
+            "borrower",
+            "counterparty",
+            "venue",
+            "external"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "escalation": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Escalation"
+        },
+        "synthetic": {
+          "default": true,
+          "title": "Synthetic",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "entity_id",
+        "name",
+        "kind"
+      ],
+      "title": "Entity",
+      "type": "object"
+    },
+    "Exposure": {
+      "additionalProperties": false,
+      "description": "A venue or counterparty that two entities depend on: one shock reaches both.",
+      "properties": {
+        "exposure_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Exposure Id",
+          "type": "string"
+        },
+        "venue": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Venue",
+          "type": "string"
+        },
+        "shared_with": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Shared With",
+          "type": "array"
+        },
+        "account": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Account"
+        },
+        "flow_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Flow Id"
+        }
+      },
+      "required": [
+        "exposure_id",
+        "venue",
+        "shared_with"
+      ],
+      "title": "Exposure",
+      "type": "object"
+    },
+    "Flow": {
+      "additionalProperties": false,
+      "description": "An expected movement not yet settled: pending_in by `expected_at`, pending_out by due.",
+      "properties": {
+        "flow_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Flow Id",
+          "type": "string"
+        },
+        "amount": {
+          "$ref": "#/$defs/Amount"
+        },
+        "expected_at": {
+          "format": "date-time",
+          "title": "Expected At",
+          "type": "string"
+        },
+        "kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "reservation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reservation Id"
+        }
+      },
+      "required": [
+        "flow_id",
+        "amount",
+        "expected_at",
+        "kind"
+      ],
+      "title": "Flow",
+      "type": "object"
+    },
+    "Money": {
+      "additionalProperties": false,
+      "description": "An amount in integer minor units of an ISO-4217 currency; signed inside the ledger.",
+      "properties": {
+        "minor": {
+          "title": "Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "minor",
+        "currency"
+      ],
+      "title": "Money",
+      "type": "object"
+    },
+    "NonNegativeMoney": {
+      "additionalProperties": false,
+      "description": "An amount that is zero or more: a reserved or pledged bucket, a floor, a fee.",
+      "properties": {
+        "minor": {
+          "minimum": 0,
+          "title": "Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "minor",
+        "currency"
+      ],
+      "title": "NonNegativeMoney",
+      "type": "object"
+    },
+    "Obligation": {
+      "additionalProperties": false,
+      "description": "A payment owed by a deadline; it is never removed by inaction.",
+      "properties": {
+        "obligation_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Obligation Id",
+          "type": "string"
+        },
+        "entity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Entity",
+          "type": "string"
+        },
+        "account": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Account",
+          "type": "string"
+        },
+        "amount": {
+          "$ref": "#/$defs/Amount"
+        },
+        "due_at": {
+          "format": "date-time",
+          "title": "Due At",
+          "type": "string"
+        },
+        "kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "mandatory": {
+          "default": true,
+          "title": "Mandatory",
+          "type": "boolean"
+        },
+        "reservation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reservation Id"
+        },
+        "state": {
+          "default": "open",
+          "enum": [
+            "open",
+            "met",
+            "missed",
+            "deferred"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "obligation_id",
+        "entity",
+        "account",
+        "amount",
+        "due_at",
+        "kind"
+      ],
+      "title": "Obligation",
+      "type": "object"
+    },
+    "Pool": {
+      "additionalProperties": false,
+      "description": "A lender pool's reserve floor.",
+      "properties": {
+        "entity": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Entity",
+          "type": "string"
+        },
+        "floor": {
+          "$ref": "#/$defs/NonNegativeMoney"
+        }
+      },
+      "required": [
+        "entity",
+        "floor"
+      ],
+      "title": "Pool",
+      "type": "object"
+    },
+    "RevenueAdvance": {
+      "additionalProperties": false,
+      "description": "A revenue-based advance: a flat fee on principal, repaid as a share of observed revenue.",
+      "properties": {
+        "contract_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Contract Id",
+          "type": "string"
+        },
+        "kind": {
+          "const": "revenue_advance",
+          "title": "Kind",
+          "type": "string"
+        },
+        "lender": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Lender",
+          "type": "string"
+        },
+        "borrower": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Borrower",
+          "type": "string"
+        },
+        "principal": {
+          "$ref": "#/$defs/Amount"
+        },
+        "fee_bps": {
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Fee Bps",
+          "type": "integer"
+        },
+        "repay_share_bps": {
+          "maximum": 10000,
+          "minimum": 1,
+          "title": "Repay Share Bps",
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "offered",
+            "active",
+            "repaid",
+            "defaulted",
+            "closed"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract_id",
+        "kind",
+        "lender",
+        "borrower",
+        "principal",
+        "fee_bps",
+        "repay_share_bps",
+        "state"
+      ],
+      "title": "RevenueAdvance",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "C5: the frozen observed state the world starts from and every plan is decided on.",
+  "properties": {
+    "snapshot_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Snapshot Id",
+      "type": "string"
+    },
+    "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+    },
+    "entities": {
+      "items": {
+        "$ref": "#/$defs/Entity"
+      },
+      "minItems": 1,
+      "title": "Entities",
+      "type": "array"
+    },
+    "accounts": {
+      "items": {
+        "$ref": "#/$defs/Account"
+      },
+      "title": "Accounts",
+      "type": "array"
+    },
+    "obligations": {
+      "items": {
+        "$ref": "#/$defs/Obligation"
+      },
+      "title": "Obligations",
+      "type": "array"
+    },
+    "contracts": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "collateral": "#/$defs/CollateralFacility",
+            "committed_line": "#/$defs/CommittedLine",
+            "revenue_advance": "#/$defs/RevenueAdvance"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/CommittedLine"
+          },
+          {
+            "$ref": "#/$defs/RevenueAdvance"
+          },
+          {
+            "$ref": "#/$defs/CollateralFacility"
+          }
+        ]
+      },
+      "title": "Contracts",
+      "type": "array"
+    },
+    "exposures": {
+      "items": {
+        "$ref": "#/$defs/Exposure"
+      },
+      "title": "Exposures",
+      "type": "array"
+    },
+    "pools": {
+      "items": {
+        "$ref": "#/$defs/Pool"
+      },
+      "title": "Pools",
+      "type": "array"
+    }
+  },
+  "required": [
+    "snapshot_id",
+    "as_of",
+    "entities",
+    "accounts",
+    "obligations",
+    "contracts",
+    "exposures",
+    "pools"
+  ],
+  "title": "Snapshot",
+  "type": "object"
+}

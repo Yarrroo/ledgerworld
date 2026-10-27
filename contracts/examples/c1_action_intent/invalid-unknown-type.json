@@ -1,0 +1,29 @@
+{
+ "about": "An actor has no tool that executes against a provider.",
+ "valid": false,
+ "reason": "type is not a finance tool",
+ "error": {
+  "path": "/type",
+  "keyword": "enum"
+ },
+ "instance": {
+  "intent_id": "i-r0-treasury-1",
+  "branch_id": "base",
+  "round": 0,
+  "actor_id": "treasury",
+  "type": "execute",
+  "params": {
+   "amount": {
+    "minor": 1000000,
+    "currency": "USD"
+   },
+   "to": "supplier-1"
+  },
+  "evidence_ids": [
+   "obs-r0-treasury"
+  ],
+  "obs_hash": "712a5bb8eba258ab46e3c4630fc6907f7ebb9b70aa37cbb8afdcc48ea42c797e",
+  "priority_class": 1,
+  "sim_minute": 60
+ }
+}
