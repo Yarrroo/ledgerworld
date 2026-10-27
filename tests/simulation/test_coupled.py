@@ -983,6 +983,42 @@ def test_a_repeated_intent_id_is_a_rejection(tmp_path):
     assert verdict(again["i-r1-borrower-c-1"]) == ("rejected", "duplicate_intent")
 
 
+@pytest.mark.parametrize("case", ["long_id", "duplicate"])
+def test_a_rejected_intent_is_delivered_next_round_without_breaking_it(tmp_path, case):
+    """A C2 is shown under an id of its own, so an intent id at the column's limit or one
+    repeated within the round still reaches its actor and the next round commits."""
+    pay = {"amount": usd(1_000), "to": "supplier-2"}
+    ids = {"long_id": ["i-r1-borrower-c-" + "7" * 112],  # 128: valid C1, too long to journal
+           "duplicate": ["i-r1-borrower-c-9", "i-r1-borrower-c-9"]}[case]
+    seen = {}
+
+    def inject(world, ctx, intents):
+        return [*intents, *(ActionIntent(
+            intent_id=i, branch_id=world.branch_id, round=ctx.round, actor_id="borrower-c",
+            type="pay", params=pay, evidence_ids=[], obs_hash=HASH,
+            priority_class=ACTOR_SPECS["borrower-c"]["priority_class"],
+            sim_minute=world.clock.sim_minute) for i in ids if ctx.round == 1)]
+
+    def observed(world, ctx):
+        seen[ctx.round] = ctx.observations
+
+    async def go():
+        world = make_world(tmp_path, case, plan=ScriptedPlan(IDLE),
+                           hooks={"intents": inject, "observed": observed})
+        async with world:
+            return world, await world.run(2)
+
+    world, (r1, _) = run(go())
+    assert world.committed_round == 2 and not world.failures
+    sent = sorted((c.intent_id, c.status, c.reason) for c in r1.cleared
+                  if c.intent_id in ids)
+    obs = seen[2]["borrower-c"]
+    c2s = [i for i in obs.body["items"] if i["id"].startswith("c2:")]
+    assert sorted((i["intent_id"], i["status"], i.get("reason")) for i in c2s) == sent
+    assert len(sent) == len(ids)
+    assert all(len(e) <= 128 for e in obs.evidence_ids)
+
+
 def test_the_in_transit_account_is_observed_from_the_disbursal(tmp_path):
     world = ledger_world(tmp_path, "transit")
     clear(world, 1, ("lender", "offer", {"amount": usd(100_000), "to": "borrower-c"}))
