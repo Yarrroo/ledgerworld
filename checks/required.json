@@ -192,7 +192,11 @@
       "tests/simulation/test_branches.py::test_a_fork_takes_its_own_scheduled_events_after_the_checkpoint",
       "tests/simulation/test_branches.py::test_lineage_time_is_utc_whatever_the_epochs_zone",
       "tests/simulation/test_branches.py::test_a_failed_fork_leaves_nothing_behind_and_can_be_retried",
-      "tests/simulation/test_branches.py::test_a_checkpoint_is_usable_from_another_thread"
+      "tests/simulation/test_branches.py::test_a_checkpoint_is_usable_from_another_thread",
+      "tests/simulation/test_branches.py::test_another_branchs_early_event_is_no_reason_to_refuse_a_fork",
+      "tests/simulation/test_branches.py::test_a_fork_that_fails_anywhere_can_be_retried[start]",
+      "tests/simulation/test_branches.py::test_a_fork_that_fails_anywhere_can_be_retried[close]",
+      "tests/simulation/test_branches.py::test_a_fork_that_fails_anywhere_can_be_retried[memory]"
     ]},
     {"id": "replay_identity", "name": "replay identity", "tests": [
       "tests/simulation/test_branches.py::test_replay_identity",
@@ -200,7 +204,10 @@
       "tests/simulation/test_branches.py::test_a_replay_refuses_a_transcript_of_another_history",
       "tests/simulation/test_branches.py::test_a_replay_shown_another_observation_fails_instead_of_answering",
       "tests/simulation/test_branches.py::test_a_replay_keeps_the_lineage_its_branch_inherited",
-      "tests/simulation/test_branches.py::test_a_replay_runs_under_the_branchs_coordinator_and_memory"
+      "tests/simulation/test_branches.py::test_a_replay_runs_under_the_branchs_coordinator_and_memory",
+      "tests/simulation/test_branches.py::test_a_replay_of_the_checkpoints_own_branch_carries_its_graph_memory",
+      "tests/simulation/test_branches.py::test_a_replay_may_not_make_an_ancestor_its_child",
+      "tests/simulation/test_branches.py::test_a_failed_replay_can_be_retried_in_the_same_workdir"
     ]},
     {"id": "six_families_run", "name": "six families run", "tests": []},
     {"id": "report_numbers_grounded", "name": "report numbers grounded", "tests": [

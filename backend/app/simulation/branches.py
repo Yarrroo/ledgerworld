@@ -232,7 +232,8 @@ async def fork(
     ``model(actor_id, world)`` gives each rebuilt agent its backend. With ``memory_client`` the
     branch gets its own ``BranchMemory`` holding the checkpoint's pinned records. ``scenario``
     adds events after the checkpoint (one naming a ``branch`` only in that branch) to the ones
-    the checkpoint inherited. A fork that fails removes the platform file it created.
+    the checkpoint inherited. A fork that fails removes the platform file and the memory
+    graph it created, so it can be retried.
     """
     return await _fork(cp, branch_id, model=model, workdir=workdir, memory_client=memory_client,
                        store=store, coordinator=coordinator, scenario=scenario, replay=False)
@@ -242,10 +243,11 @@ async def _fork(cp: Checkpoint, branch_id: str, *, model: ModelFactory, workdir:
                 memory_client: Any, store: LedgerStore | None, coordinator: Any,
                 scenario: Sequence[Mapping[str, Any]], replay: bool) -> Branch:
     """``fork``, or with ``replay`` the same branch re-run under its own id."""
-    if not replay and branch_id in cp.lineage:
-        raise BranchMismatch(f"a fork needs its own id; {branch_id!r} is the checkpoint's "
-                             f"branch or an ancestor of it")
-    early = [e for e in scenario if e["round"] <= cp.round]
+    if branch_id in (cp.lineage if not replay else cp.lineage - {cp.branch_id}):
+        raise BranchMismatch(f"{branch_id!r} is the checkpoint's branch or an ancestor of it; "
+                             "a fork needs its own id and only the checkpoint's branch replays")
+    early = [e for e in scenario
+             if e.get("branch") in (None, branch_id) and e["round"] <= cp.round]
     if early:
         raise ValueError(f"a fork's own events come after the checkpoint (round {cp.round}): "
                          f"{early}")
@@ -253,8 +255,10 @@ async def _fork(cp: Checkpoint, branch_id: str, *, model: ModelFactory, workdir:
                   copy.deepcopy(list(cp.actors)), model=model, workdir=workdir,
                   scenario=copy.deepcopy([*cp.events, *scenario]), store=store, seed=cp.seed,
                   epoch=cp.epoch, coordinator=coordinator)
-    await world.start()  # refuses an existing file; from here on the file is this fork's
+    created = not world.db_path.exists()  # else start refuses: the file is not this fork's
+    memory = None
     try:
+        await world.start()
         if set(world.agents) != set(cp.capture.agents):
             raise BranchMismatch(f"{branch_id}'s model actors differ from the checkpoint's")
         # The new branch's models answer a new plan: none of their entries is used yet.
@@ -271,14 +275,20 @@ async def _fork(cp: Checkpoint, branch_id: str, *, model: ModelFactory, workdir:
         if differs:
             raise BranchMismatch(f"{branch_id} restored differently from its checkpoint: "
                                  f"{differs}")
-        memory = None
         if memory_client is not None:
             memory = BranchMemory(memory_client, cp.world_id, branch_id)
-            if cp.memory is not None:
-                cp.memory.restore_into(memory)
+            # A replay of the checkpoint's own branch shares its namespace, on its own client,
+            # so the pinned records are written as they were rather than restored "into" it.
+            for r in cp.memory.records if cp.memory is not None else ():
+                memory.write_record(r.actor_id, r.key, r.value, r.round)
     except BaseException:
-        await world.close()
-        world.db_path.unlink(missing_ok=True)
+        try:
+            await world.close()
+        finally:
+            if created:
+                world.db_path.unlink(missing_ok=True)
+            if memory is not None:
+                memory.client.graph.delete(memory.graph_id)
         raise
     return Branch(world, memory, parent, checkpoint_round, replay)
 
@@ -320,6 +330,11 @@ async def replay(
     try:
         await branch.world.run(rounds)
     except BaseException:
-        await branch.world.close()
+        try:
+            await branch.world.close()
+        finally:
+            branch.world.db_path.unlink(missing_ok=True)
+            if branch.memory is not None:
+                branch.memory.client.graph.delete(branch.memory.graph_id)
         raise
     return branch

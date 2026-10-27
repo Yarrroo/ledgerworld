@@ -45,8 +45,10 @@ parent World ──checkpoint()──► Checkpoint (frozen)
   `ledger_hash`, which leaves out `branch_meta`). A fork may not reuse the parent's id unless it
   is a replay, nor take the id of any ancestor its ledger records. `scenario` adds the fork's own
   events after the checkpoint (an event naming a `branch` runs only there). A fork that fails
-  removes the platform file it created, so it can be retried. A replay of a branch the
-  checkpoint already records keeps that row's parent and round and only sets `replay`.
+  removes the platform file and memory graph it created, so it can be retried; a
+  scenario event naming another branch is that branch's and is not checked. A replay of a branch the
+  checkpoint already records keeps that row's parent and round and only sets `replay`;
+  only the checkpoint's own branch or a new one may replay, never an ancestor (a cycle).
 - **`replay(cp, transcript, *, workdir) → Branch`** — the transcript must hold the checkpoint's
   calls as its prefix; each model actor gets `transcript.replay_model(...)` (no live model, obs
   hash checked per call); runs the recorded rounds; same branch id, so journals compare byte for

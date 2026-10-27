@@ -503,3 +503,129 @@ def test_a_checkpoint_is_usable_from_another_thread(tmp_path):
     thread.join()
     assert "error" not in out, out.get("error")
     assert out["fingerprint"]["OASIS SQLite"]
+
+
+# ------------------------------------------------------------- vet round 2: each failed first
+
+
+def test_a_replay_of_the_checkpoints_own_branch_carries_its_graph_memory(tmp_path):
+    async def go():
+        parent, cp = await small_parent(tmp_path)
+        await parent.run(1)
+        (tmp_path / "again").mkdir()
+        replayed = await replay(
+            cp, parent.transcript, workdir=tmp_path / "again",
+            memory_client=FakeGraphMemory(namespace_for(WORLD_ID, PARENT), GraphMemoryStore()))
+        records = replayed.memory.retrieve()
+        await replayed.world.close()
+        await parent.close()
+        return records, replayed.label()
+
+    records, label = asyncio.run(go())
+    assert recs(records) == PARENT_MEMORY
+    assert (label["parent"], label["replay"]) == (None, True)
+
+
+def test_a_replay_may_not_make_an_ancestor_its_child(tmp_path):
+    async def go():
+        parent, cp = await small_parent(tmp_path)
+        (tmp_path / "a").mkdir()
+        a = await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a")
+        cp_a = checkpoint(a.world)  # before a diverges: main's transcript still fits it
+        await parent.run(1)
+        try:
+            with pytest.raises(BranchMismatch, match="ancestor"):
+                await replay(cp_a, parent.transcript, workdir=tmp_path)
+        finally:
+            await a.world.close()
+            await parent.close()
+
+    asyncio.run(go())
+
+
+def test_another_branchs_early_event_is_no_reason_to_refuse_a_fork(tmp_path):
+    async def go():
+        parent, cp = await small_parent(tmp_path)
+        (tmp_path / "a").mkdir()
+        a = await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a",
+                       scenario=[{"round": 1, "kind": "message", "id": "m-b", "to": "borrower-b",
+                                  "text": "hello", "branch": "b"}])
+        await a.world.close()
+        await parent.close()
+
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("fault", ["start", "close", "memory"])
+def test_a_fork_that_fails_anywhere_can_be_retried(tmp_path, monkeypatch, fault):
+    from app.simulation import branches
+
+    graph = GraphMemoryStore()
+    once = {"armed": True}
+
+    def trip() -> None:
+        if once.pop("armed", False):
+            raise RuntimeError("injected")
+
+    real_start, real_close = coupled.World.start, coupled.World.close
+    real_write = BranchMemory.write_record
+
+    async def start(self):
+        result = await real_start(self)
+        if self.branch_id == "a":
+            trip()
+        return result
+
+    async def close(self):
+        await real_close(self)
+        if self.branch_id == "a" and once.get("armed") is None and fault == "close":
+            once["armed"] = True
+            trip()
+
+    def write(self, *args):
+        if self.branch_id == "a":
+            trip()
+        return real_write(self, *args)
+
+    if fault == "start":
+        monkeypatch.setattr(coupled.World, "start", start)
+    elif fault == "close":
+        monkeypatch.setattr(branches, "_copy_ledger", lambda rows, store: trip())
+        monkeypatch.setattr(coupled.World, "close", close)
+    else:
+        monkeypatch.setattr(BranchMemory, "write_record", write)
+
+    async def go():
+        parent, cp = await small_parent(tmp_path)  # writes main's memory, never trips
+        (tmp_path / "a").mkdir()
+        client = FakeGraphMemory(namespace_for(WORLD_ID, "a"), graph)
+        with pytest.raises(RuntimeError, match="injected"):
+            await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a", memory_client=client)
+        monkeypatch.undo()
+        left = sorted(p.name for p in (tmp_path / "a").iterdir())
+        a = await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a", memory_client=client)
+        records = a.memory.retrieve()
+        await a.world.close()
+        await parent.close()
+        return left, records
+
+    left, records = asyncio.run(go())
+    assert left == []
+    assert recs(records) == PARENT_MEMORY
+
+
+def test_a_failed_replay_can_be_retried_in_the_same_workdir(played, tmp_path):
+    cp, calls = played["cp"], list(played["integrated"]["calls"])
+    n = next(i for i, c in enumerate(calls)
+             if (c.round, c.actor_id) == (CP_ROUND + 1, "borrower-c"))
+    bad = [*calls[:n], dataclasses.replace(calls[n], obs_hash="f" * 64), *calls[n + 1:]]
+
+    async def go():
+        with pytest.raises(ReplayMiss):
+            await replay(cp, Transcript(WORLD_ID, "integrated", calls=bad), workdir=tmp_path)
+        branch = await replay(cp, Transcript(WORLD_ID, "integrated", calls=calls),
+                              workdir=tmp_path)
+        await branch.world.close()
+        return journal_bytes(branch.world)
+
+    assert asyncio.run(go()) == played["integrated"]["journals"]

@@ -1,35 +1,51 @@
-# T09 · close-out
+# T09 · Branches with isolated memory and exact replay — Close-out
+> Close-out. Source: design.md, HANDOFF.md ← briefs/T09.md.
+> Date: 2026-10-27
 
-> Close-out (build stage 5). Source: design.md, HANDOFF.md.
+## What shipped
+- `backend/app/simulation/branches.py`:
+  - `checkpoint(world, memory)`, `fork(cp, branch_id, model=…, scenario=…)`,
+    `replay(cp, transcript, …)`, `Branch.label()`, `ledger_hash(store)`.
+  - Lineage is recorded in the child ledger's `branch_meta`, and a replay sets `replay=true` there.
+- `tests/simulation/test_branches.py`: 25 tests.
+  - 11 play `branch-isolation.json` once on real OASIS platforms (ScriptedModel, FakeGraphMemory,
+    SQLite) and assert each `expect` line.
+  - 14 pin the review findings; each failed before its fix.
+- `checks/required.json` g2: `sibling_isolation` (16 ids), `replay_identity` (9 ids).
 
-## What landed
-- `backend/app/simulation/branches.py`: `checkpoint(world, memory)`, `fork(cp, branch_id, model=…)`,
-  `replay(cp, transcript)`, `Branch.label()`, `ledger_hash(store)`.
-- `tests/simulation/test_branches.py`: 11 tests that play `branch-isolation.json` once on real OASIS
-  platforms (ScriptedModel, FakeGraphMemory, SQLite) and assert each `expect` line.
-- `checks/required.json` g2: `sibling_isolation` (7 ids) and `replay_identity` (4 ids).
-
-## Measured
-- `uv run pytest -q tests/simulation/test_branches.py`: 11 passed (about 11 s).
-- Touched neighbours (`test_branch_memory`, `test_coupled`, `test_skeleton`, `checks/tests/test_kpi`) plus
-  the new file: 116 passed. ruff, `no_secrets` and `attribution` are ok. The full gate is the landing
-  train's.
-- Fixture numbers reproduced: K_p at round 5 is 4,200,000 on no-action and 3,000,000 on integrated. The
-  replayed `integrated` gives byte-identical journals and postings, the same ledger hash and the same
-  transcript bytes.
+## Verification
+- Accept: `uv run pytest -q tests/simulation/test_branches.py` gives 25 passed in about 25 s.
+  It ran 20 times in a row with 0 red.
+- Touched suites (`test_branches`, `test_branch_memory`, `test_coupled`, `test_actions`,
+  `test_tool_boundary`, `test_skeleton`, `checks/tests`): 206 passed.
+- ruff, `checks/no_secrets.py` and `checks/attribution.py` are ok. The full `checks/merge.sh` is run
+  by the landing train.
+- Fixture numbers reproduced:
+  - K_p at round 5: no-action 4,200,000, integrated 3,000,000.
+  - The replayed `integrated` gives byte-identical journals and postings, the same ledger hash and
+    the same transcript bytes.
+  - After both forks reach round 6, the parent's ledger hash, SQLite file hash and memory digest
+    equal the checkpoint's.
 
 ## Brief vs code
 - HANDOFF names `fork() → World`. The code returns a `Branch`, which wraps the `World` with its
-  `BranchMemory` and lineage, because graph memory is not part of `World`. The design records this
+  `BranchMemory` and lineage, because graph memory is not part of `World`. design.md records the
   deviation.
 - `memory.py` and `transcripts.py` were not changed: commit b14e2cd already supplied namespaces,
   snapshots and `ReplayModel`.
 
-## Open, by name
-- The OASIS RNG is module-global (inherited from T08). After a fork has run, a parent that continues
-  draws from where the fork left the RNG. Only the random recommender reads it; it is a checkpoint
-  component, but it is not isolated per world.
-- No caller exists yet: the runs API (`POST /runs/{id}/fork`), decisions (a fresh branch per policy)
-  and the T18 replay label are the consumers named in design.md.
-- Copying a PostgreSQL ledger is written (it moves the posting-id sequence) but is not exercised
+## Follow-ups / known gaps
+- **The RNG is per process, not per world** (`world.py`, outside this task). After a fork has run,
+  a parent that continues draws from where the fork left the RNG, and interleaved branches share
+  one RNG.
+  - Effect: OASIS's random recommender, so only the social feed.
+  - Fix: each `World` keeps its own RNG state and swaps it in around a round.
+- **A checkpoint shares one SQLite connection** across the forks made from it. Forking one
+  checkpoint from several threads at once needs a lock or per-fork bytes. `World.capture` copies
+  the platform once more than needed. Both belong to `world.py`.
+- **A replay from the wrong ancestor checkpoint is not detected** when the transcripts agree up to
+  it: the lineage row then names that checkpoint's branch.
+- **No caller yet.** The consumers named in design.md are the runs API, decisions (a fresh branch
+  per policy) and the T18 replay label.
+- **Copying a PostgreSQL ledger** is written (it moves the posting-id sequence) but is not run
   offline.
