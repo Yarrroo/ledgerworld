@@ -180,8 +180,21 @@
       "tests/simulation/test_coupled.py::test_a_rejected_intent_is_not_a_failed_round",
       "tests/simulation/test_coupled.py::test_capture_covers_every_component_the_fixture_names"
     ]},
-    {"id": "sibling_isolation", "name": "sibling isolation", "tests": []},
-    {"id": "replay_identity", "name": "replay identity", "tests": []},
+    {"id": "sibling_isolation", "name": "sibling isolation", "tests": [
+      "tests/simulation/test_branches.py::test_the_checkpoint_pins_every_component_the_fixture_names",
+      "tests/simulation/test_branches.py::test_a_fork_rebuilds_every_agent_on_its_own_queue",
+      "tests/simulation/test_branches.py::test_sibling_read_raises_namespace_violation",
+      "tests/simulation/test_branches.py::test_checkpoint_memory_is_immutable",
+      "tests/simulation/test_branches.py::test_checkpoint_continuation",
+      "tests/simulation/test_branches.py::test_parent_unchanged",
+      "tests/simulation/test_branches.py::test_branch_ledgers_differ"
+    ]},
+    {"id": "replay_identity", "name": "replay identity", "tests": [
+      "tests/simulation/test_branches.py::test_replay_identity",
+      "tests/simulation/test_branches.py::test_replay_label",
+      "tests/simulation/test_branches.py::test_a_replay_refuses_a_transcript_of_another_history",
+      "tests/simulation/test_branches.py::test_a_replay_shown_another_observation_fails_instead_of_answering"
+    ]},
     {"id": "six_families_run", "name": "six families run", "tests": []},
     {"id": "report_numbers_grounded", "name": "report numbers grounded", "tests": [
       "tests/reports/test_provenance.py::test_an_invented_number_is_rejected[amount-and-percent]",
