@@ -9,6 +9,8 @@ ledger.
 Built on [MiroFish](https://github.com/666ghj/MiroFish) (AGPL-3.0); see `UPSTREAM.md` and
 `ATTRIBUTION.md` for exactly what changed.
 
+**Live:** <https://peterson-prefix-assumptions-hits.trycloudflare.com> (simulated provider until the sandbox keys land).
+
 ## What it is
 
 - **A ledger first.** Money is integer minor units with an ISO currency; journals are
