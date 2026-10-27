@@ -1504,12 +1504,14 @@ version = "0.1.0"
 source = { editable = "packages/oasis-finance" }
 dependencies = [
     { name = "camel-oasis" },
+    { name = "jsonschema" },
     { name = "mcp" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "camel-oasis", specifier = "==0.2.5" },
+    { name = "jsonschema", specifier = ">=4,<5" },
     { name = "mcp", specifier = "<2" },
 ]
 

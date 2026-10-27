@@ -87,7 +87,10 @@
       "tests/simulation/test_actions.py::test_each_agent_offers_exactly_its_mandate_and_the_set_is_sealed[venue]",
       "tests/simulation/test_actions.py::test_a_finance_agent_is_never_offered_a_purchase",
       "tests/simulation/test_actions.py::test_an_agent_without_a_model_is_refused",
-      "tests/simulation/test_actions.py::test_acting_by_data_runs_only_the_social_subset"
+      "tests/simulation/test_actions.py::test_acting_by_data_runs_only_the_social_subset",
+      "tests/simulation/test_actions.py::test_a_social_schema_with_a_list_type_refuses_instead_of_raising",
+      "tests/simulation/test_actions.py::test_a_response_of_social_calls_only_still_queues_no_action",
+      "tests/simulation/test_actions.py::test_a_tool_outside_the_offer_is_refused_naming_every_offered_tool"
     ]},
     {"id": "public_shock_traceable_response", "name": "public shock traceable response", "tests": []},
     {"id": "failed_round_rolls_back", "name": "failed round rolls back", "tests": []},

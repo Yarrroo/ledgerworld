@@ -10,8 +10,10 @@
   only queue C1 intents, and the accepted response's social calls run on the platform.
 - S6: ``perform_action_by_data`` runs only the actor's social subset; a finance act by data has
   no observation to cite and is refused. ``perform_action_by_hci`` is refused.
-- S8: the tool set is sealed once built, and ``clone()`` (which returns a plain ``ChatAgent``
-  without the finance tools) is refused: a fork rebuilds the agent.
+- S8: the tool set is sealed once built (camel's registry refuses changes, and the social offer
+  is fixed at construction rather than read from upstream's mutable ``action_tools``), and
+  ``clone()`` (which returns a plain ``ChatAgent`` without the finance tools) is refused: a fork
+  rebuilds the agent.
 
 Importing this module imports ``oasis``, which writes ``./log`` in the working directory (S13).
 """
@@ -20,8 +22,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable
+from types import MappingProxyType
 from typing import Any
 
+from camel.memories import MemoryRecord
 from camel.messages import BaseMessage
 from camel.toolkits import FunctionTool
 from camel.types import OpenAIBackendRole
@@ -40,8 +44,14 @@ class SealedToolset(PermissionError):
     """A tool added to or removed from a finance agent after it was built."""
 
 
+def _name(action: str | ActionType) -> str:
+    return action.value if isinstance(action, ActionType) else action
+
+
 class FinanceAgent(SocialAgent):
     """One actor in one branch: its persona, its finance tools on the branch's queue, its feed."""
+
+    _sealed = False
 
     def __init__(
         self,
@@ -56,7 +66,7 @@ class FinanceAgent(SocialAgent):
         user_info_template: Any = None,
         agent_graph: Any = None,
     ) -> None:
-        social = tuple(a.value if isinstance(a, ActionType) else a for a in social_actions)
+        social = tuple(_name(a) for a in social_actions)
         unknown = sorted(set(social) - SOCIAL_TOOLS)
         refused = sorted(set(social) & REFUSED_SOCIAL)
         if unknown or refused:
@@ -66,8 +76,10 @@ class FinanceAgent(SocialAgent):
             raise ValueError(f"{actor.actor_id} needs its model: a scripted or a configured one")
         self.finance_actor = actor
         self.intent_queue = queue
-        self.observation: Observation | None = None
+        self.observation: Observation | None = None  # this round's, kept after the turn
+        self._observed = False  # an observation given and not yet acted on
         self.last_turn: TurnResult | None = None
+        self.last_social_results: tuple[tuple[str, Any], ...] = ()
         finance = [FunctionTool(tool, openai_tool_schema=tool.openai_tool_schema)
                    for tool in make_finance_tools(queue, actor).values()]
         super().__init__(
@@ -78,13 +90,16 @@ class FinanceAgent(SocialAgent):
         if not social:
             super().remove_tool(ActionType.DO_NOTHING.value)
             self.action_tools = []
-        self.social_actions = social
+        self._social_tools = MappingProxyType(
+            {t.get_function_name(): t for t in self.action_tools})
+        self._social_schemas = MappingProxyType(
+            {n: t.get_openai_tool_schema() for n, t in self._social_tools.items()})
         self._sealed = True
 
     # ------------------------------------------------------------------- the tool set (S8)
 
     def _refuse_change(self) -> None:
-        if getattr(self, "_sealed", False):
+        if self._sealed:
             raise SealedToolset(f"{self.finance_actor.actor_id}'s tools are fixed by its mandate")
 
     def add_tool(self, tool: Any) -> None:
@@ -107,6 +122,10 @@ class FinanceAgent(SocialAgent):
         self._refuse_change()
         super().remove_tools(tool_names)
 
+    def remove_external_tool(self, tool_name: str) -> bool:
+        self._refuse_change()
+        return super().remove_external_tool(tool_name)
+
     def clone(self, with_memory: bool = False) -> Any:
         raise NotImplementedError("a finance agent is rebuilt from its persona, never cloned")
 
@@ -117,7 +136,7 @@ class FinanceAgent(SocialAgent):
         if observation.body.get("actor_id") != self.finance_actor.actor_id:
             raise ValueError(f"{observation.body.get('actor_id')}'s observation given to "
                              f"{self.finance_actor.actor_id}")
-        self.observation = observation
+        self.observation, self._observed = observation, True
 
     async def perform_action_by_llm(self) -> TurnResult:
         """One model response, judged whole: finance calls queue intents, social calls post.
@@ -126,41 +145,44 @@ class FinanceAgent(SocialAgent):
         (``last_turn.alert``). An error from the model or the platform is raised, not returned:
         the round fails and rolls back (system brief §7.2).
         """
-        observation, self.observation = self.observation, None
-        if observation is None:
+        if not self._observed:
             raise RuntimeError(f"{self.finance_actor.actor_id} was asked to act before it was "
                                "given its observation")
-        feed = await self.env.to_text_prompt()
-        social_prompt = f"Here is your social media environment: {feed}"
-        social = {t.get_function_name(): t for t in self.action_tools}
+        observation, self._observed = self.observation, False
+        # The follower and follow counts are not part of the prompt upstream renders.
+        feed = await self.env.to_text_prompt(include_followers=False, include_follows=False)
         result = await arun_turn(
             amodel_responder(self.model_backend), self.intent_queue, self.finance_actor,
-            observation, social_prompt=social_prompt,
-            social={name: t.get_openai_tool_schema() for name, t in social.items()},
+            observation, social_prompt=f"Here is your social media environment: {feed}",
+            social=self._social_schemas,
             system=self.system_message.content if self.system_message else None,
         )
-        outcomes = [(call.name, await social[call.name].async_call(**call.arguments))
-                    for call in result.social]
-        self._remember(f"{observation.to_prompt()}\n\n{social_prompt}", result, outcomes)
-        self.last_turn = result
+        outcomes = tuple([(call.name, await self._social_tools[call.name].async_call(
+            **call.arguments)) for call in result.social])
+        self._remember(observation, result, outcomes)
+        self.last_turn, self.last_social_results = result, outcomes
         return result
 
-    def _remember(self, prompt: str, result: TurnResult, outcomes: list) -> None:
+    def _remember(self, observation: Observation, result: TurnResult, outcomes: tuple) -> None:
+        """What the actor saw (its financial block; the feed is the platform's) and did."""
         done = [f"queued {i.intent_id} ({i.type})" for i in result.intents]
         done += [f"{name} -> {json.dumps(out, sort_keys=True, default=str)}"
                  for name, out in outcomes]
         if result.alert is not None:
             done.append(f"refused after repair: {result.alert.reason}")
-        self.update_memory(BaseMessage.make_user_message("User", prompt),
-                           OpenAIBackendRole.USER)
-        self.update_memory(BaseMessage.make_assistant_message("Assistant", "; ".join(done)),
-                           OpenAIBackendRole.ASSISTANT)
+        # Written as records: update_memory re-counts the whole history's tokens each time.
+        self.memory.write_records([
+            MemoryRecord(message=BaseMessage.make_user_message("User", observation.to_prompt()),
+                         role_at_backend=OpenAIBackendRole.USER),
+            MemoryRecord(message=BaseMessage.make_assistant_message("Assistant", "; ".join(done)),
+                         role_at_backend=OpenAIBackendRole.ASSISTANT),
+        ])
 
     # ----------------------------------------------------------- other dispatch paths (S6)
 
     async def perform_action_by_data(self, func_name: Any, *args: Any, **kwargs: Any) -> Any:
-        name = func_name.value if isinstance(func_name, ActionType) else func_name
-        if name not in self.social_actions:
+        name = _name(func_name)
+        if name not in self._social_tools:
             raise ValueError(f"{name!r} is not one of {self.finance_actor.actor_id}'s social "
                              "tools; a finance act is a tool call inside a turn")
         return await super().perform_action_by_data(func_name, *args, **kwargs)

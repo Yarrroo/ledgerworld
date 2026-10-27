@@ -32,27 +32,34 @@ shown that turn — replay and the judge's trace rely on it.
 
 - **Construction** (S3/S4/S8): finance tools from `make_finance_tools(queue, actor)` wrapped as `FunctionTool` with
   their schema; `available_actions` = the actor's social subset (an empty subset gives no social tool — upstream
-  reads empty as "all", so it is built on `do_nothing` and that tool removed), and `purchase_product` is refused. After `__init__` the tool set
-  is sealed: `add_tool(s)`, `add_external_tool`, `remove_tool(s)` and `clone()` raise.
-- **`perform_action_by_llm`** (S5): needs `observe(obs)` first. Prompt = `obs.to_prompt()` then
-  `env.to_text_prompt()`; system = the persona plus the tool rule. One model response offers finance + social tools;
-  the guardrail checks the whole response (finance args typed, social args are an object with the schema's required
-  keys and no others), repairs once, else queues `no_action` + alert. Only the accepted response's social calls run
-  through the platform channel; finance calls only queue intents. The turn is written to memory. Returns the
-  `TurnResult` (also `last_turn`) and never swallows a model or platform error (a round failure, §7.2).
+  reads empty as "all", so it is built on `do_nothing` and that tool removed), and `purchase_product` is refused.
+  After `__init__` the tool set is sealed: `add_tool(s)`, `add_external_tool`, `remove_tool(s)`,
+  `remove_external_tool` and `clone()` raise, and the social offer is frozen at construction (upstream's
+  `action_tools` list is not read again). A model is required: upstream would fall back to a default live one.
+- **`perform_action_by_llm`** (S5): needs a fresh `observe(obs)` (one observation, one turn; `observation` stays
+  readable after the turn). Prompt = `obs.to_prompt()` then the feed; system = the persona plus the tool rule. One
+  model response offers finance + social tools; the guardrail checks the whole response (finance args typed, social
+  args valid against the tool's JSON schema with no other keys), repairs once, else queues `no_action` + alert. A
+  response with no financial call queues `no_action`, so every turn leaves one intent carrying `obs_hash`. Only the
+  accepted response's social calls run on the platform; their results are `last_social_results` (a platform refusal
+  is a `success: false` result, not an exception). The turn's observation and actions are written to memory. A
+  model or platform exception is raised, never returned (a round failure, §7.2).
 - **`perform_action_by_data`** (S6): only the actor's social subset; a finance name or an unoffered social act
   (`purchase_product`) is refused. **`perform_action_by_hci`** is refused.
 
 Guardrail change: `arun_turn/run_turn` take `social` (name → schema) and `system`; `TurnResult.social` holds the
-accepted social calls. Defaults keep every existing caller's behaviour.
+accepted social calls; a call outside the offer is refused naming every offered tool. `decode_args` is shared by the
+finance and social parsers. Without `social`, every existing caller's behaviour is unchanged.
 
-Wiring: `app.simulation.actions` exports `FinanceAgent` and `build_finance_agent(spec, …)`;
+Wiring: `app.simulation.actions` exports `build_finance_agent(spec, …)` (the class itself is
+`oasis_finance.agent.FinanceAgent`, imported lazily: importing `oasis` is slow and writes `./log`);
 `app.simulation.observations` adapts world items as before.
 
 ## Dependency
 
 camel's agent stack does not import with `mcp` 2.x (`FastMCP` left `mcp.server`), which the lock resolves today, so no
-`SocialAgent` can be built. `oasis-finance` now depends on `camel-oasis==0.2.5` and `mcp<2` (lock: mcp 2.3.0 → 1.x).
+`SocialAgent` can be built. `oasis-finance` now depends on `camel-oasis==0.2.5`, `mcp<2` (lock: mcp 2.3.0 → 1.30.0) and `jsonschema>=4,<5`
+(already locked through camel-ai; now declared, as the guardrail validates social arguments with it).
 This also un-skips the agent-stack test in `tests/testing/test_doubles.py`.
 
 ## Phases (each gated by its tests)
@@ -75,4 +82,4 @@ see the whole response before any tool runs (S5, S7).
   by `FinanceActor.stamp`.
 - Simplicity: no new model client; the guardrail stays the single place a response is judged.
 
-Run footer: Architect at Brief tier, unattended; no reviewer pack on this node; no publish (needs the owner's tap).
+Review depth: a brief pass (feasibility, failure modes, simplicity); no separate design panel.

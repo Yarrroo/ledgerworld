@@ -26,6 +26,7 @@ from app.finance.store import LedgerStore
 from app.simulation.actions import IntentQueue, build_finance_agent
 from app.simulation.observations import build_observation
 from app.testing.scripted_model import PlanEntry, ScriptedModel, ScriptedPlan, ToolCall
+from oasis_finance.guardrail import RawCall, parse_social_call
 from oasis_finance.observation import DEFAULT_EPOCH, sha256_of
 
 # Importing oasis writes ./log in the working directory (oasis-seam.md S13): do it elsewhere.
@@ -83,6 +84,10 @@ def clear_payments(store: LedgerStore, intents, now) -> list[Journal]:
 def account_item(owner: str, settled_minor: int) -> dict:
     return {"id": f"acct:{owner}/operating", "kind": "own_account", "owner": owner,
             "visible_from_h": 0, "settled_minor": settled_minor}
+
+
+def idle_plan() -> ScriptedPlan:
+    return ScriptedPlan([{"default": True, "tool_calls": [{"name": "no_action", "args": {}}]}])
 
 
 def user_prompt(call) -> str:
@@ -204,6 +209,7 @@ def test_a_post_runs_on_the_platform_and_queues_no_intent(tmp_path):
         ("Unconfirmed: the venue may pause.",)]
     assert [i.type for i in queue.drain()] == ["no_action"]
     assert [c.name for c in feed.last_turn.social] == ["create_post"]
+    assert feed.last_social_results == (("create_post", {"success": True, "post_id": 1}),)
 
 
 # --------------------------------------------------------- malformed output: repair, fallback
@@ -214,7 +220,7 @@ def borrower_c(queue, model):
 
 
 async def one_turn(agent, observation, feed="(no posts)"):
-    async def no_feed():
+    async def no_feed(**_):
         return feed
 
     agent.env.to_text_prompt = no_feed  # the platform's feed, which these cases do not need
@@ -282,7 +288,8 @@ def test_a_malformed_social_call_is_repaired_with_the_response():
     feed = build_finance_agent(ACTORS["feed"], 0, queue, model=model)
     result = asyncio.run(one_turn(feed, build_observation(ACTORS["feed"], [], 3, 12)))
     assert result.repair_attempts == 1 and result.alert is None and result.social == ()
-    assert "create_post.content: missing" in model.calls[1].messages[-1]["content"]
+    repair = model.calls[1].messages[-1]["content"]
+    assert "'content' is a required property" in repair and "'text' was unexpected" in repair
     assert [i.type for i in queue.drain()] == ["no_action"]
 
 
@@ -291,7 +298,7 @@ def test_a_malformed_social_call_is_repaired_with_the_response():
 
 def test_an_observation_never_holds_the_future_or_another_actors_cash():
     round_ = SCOPE["round"]
-    plan = ScriptedPlan([{"default": True, "tool_calls": [{"name": "no_action", "args": {}}]}])
+    plan = idle_plan()
     queue = IntentQueue("shock")
     agent = borrower_c(queue, plan.model("borrower-c", lambda: round_))
     observation = build_observation(ACTORS["borrower-c"], SCOPE["world_items"], round_,
@@ -307,7 +314,7 @@ def test_an_observation_never_holds_the_future_or_another_actors_cash():
     for item_id in SCOPE["expect"]["excluded"]:
         assert item_id not in prompt
     (intent,) = queue.drain()
-    assert intent.obs_hash == observation.obs_hash
+    assert intent.obs_hash == observation.obs_hash == agent.observation.obs_hash
     # The same world, or the same world plus every excluded item, gives the same hash.
     included = [i for i in SCOPE["world_items"] if i["id"] in SCOPE["expect"]["included"]]
     again = build_observation(ACTORS["borrower-c"], included, round_, SCOPE["sim_time_h"])
@@ -316,7 +323,7 @@ def test_an_observation_never_holds_the_future_or_another_actors_cash():
 
 def test_a_turn_needs_its_own_observation_first():
     queue = IntentQueue("shock")
-    plan = ScriptedPlan([{"default": True, "tool_calls": [{"name": "no_action", "args": {}}]}])
+    plan = idle_plan()
     agent = borrower_c(queue, plan.model("borrower-c", lambda: 4))
     with pytest.raises(RuntimeError, match="before it was given its observation"):
         asyncio.run(agent.perform_action_by_llm())
@@ -331,13 +338,15 @@ def test_a_turn_needs_its_own_observation_first():
 @pytest.mark.parametrize("actor_id", sorted(a for a, s in ACTORS.items() if s["llm"]))
 def test_each_agent_offers_exactly_its_mandate_and_the_set_is_sealed(actor_id):
     spec = ACTORS[actor_id]
-    plan = ScriptedPlan([{"default": True, "tool_calls": [{"name": "no_action", "args": {}}]}])
+    plan = idle_plan()
     agent = build_finance_agent(spec, 0, IntentQueue("b"), model=plan.model(actor_id, lambda: 1))
     assert isinstance(agent, FinanceAgent)
     assert sorted(agent.tool_dict) == sorted(spec["tools"])
     assert "purchase_product" not in agent.tool_dict
     asyncio.run(one_turn(agent, build_observation(spec, [], 1, 4)))
     assert sorted(plan.calls[0].tools) == sorted(spec["tools"])
+    with pytest.raises(RuntimeError, match="before it was given its observation"):
+        asyncio.run(agent.perform_action_by_llm())  # one observation, one turn
 
     with pytest.raises(SealedToolset):
         agent.add_tool(lambda: None)
@@ -347,9 +356,16 @@ def test_each_agent_offers_exactly_its_mandate_and_the_set_is_sealed(actor_id):
         agent.add_external_tool({"type": "function", "function": {"name": "wire_money"}})
     with pytest.raises(SealedToolset):
         agent.remove_tool("no_action")
+    with pytest.raises(SealedToolset):
+        agent.remove_external_tool("no_action")
     with pytest.raises(NotImplementedError):
         agent.clone()
     assert sorted(agent.tool_dict) == sorted(spec["tools"])
+
+    # What the model is offered is fixed at construction, not read from a mutable list.
+    agent.action_tools.append(agent.tool_dict["no_action"])
+    asyncio.run(one_turn(agent, build_observation(spec, [], 2, 8)))
+    assert sorted(plan.calls[-1].tools) == sorted(spec["tools"])
 
 
 def test_a_finance_agent_is_never_offered_a_purchase():
@@ -376,3 +392,41 @@ def test_acting_by_data_runs_only_the_social_subset(tmp_path):
     assert len(queue) == 0
     with pytest.raises(NotImplementedError):
         asyncio.run(feed.perform_action_by_hci())
+
+
+def test_a_social_schema_with_a_list_type_refuses_instead_of_raising():
+    schema = {"function": {"name": "note", "parameters": {
+        "properties": {"text": {"type": ["string", "null"]}}, "required": ["text"]}}}
+    refused = parse_social_call(RawCall("note", {"text": 3}), schema)
+    assert refused.code == "malformed_tool_args" and "note.text" in refused.detail
+    assert parse_social_call(RawCall("note", {"text": None}), schema).arguments == {"text": None}
+
+
+def test_a_response_of_social_calls_only_still_queues_no_action():
+    queue = IntentQueue("shock")
+    model = ListModel("feed", 3, [[{"name": "create_post", "args": {"content": "news"}}]])
+    feed = build_finance_agent(ACTORS["feed"], 0, queue, model=model)
+    observation = build_observation(ACTORS["feed"], [], 3, 12)
+    posted = []  # no platform in this case: the post lands in a list
+
+    async def create_post(content):
+        posted.append(content)
+        return {"success": True, "post_id": 7}
+
+    feed._social_tools["create_post"].func = create_post
+    result = asyncio.run(one_turn(feed, observation))
+    (intent,) = queue.drain()
+    assert (intent.type, intent.obs_hash) == ("no_action", observation.obs_hash)
+    assert result.alert is None and posted == ["news"]
+
+
+def test_a_tool_outside_the_offer_is_refused_naming_every_offered_tool():
+    queue = IntentQueue("shock")
+    model = ListModel("feed", 3, [[{"name": "like_post", "args": {"post_id": 1}}],
+                                  [{"name": "no_action", "args": {}}]])
+    feed = build_finance_agent(ACTORS["feed"], 0, queue, model=model)
+    result = asyncio.run(one_turn(feed, build_observation(ACTORS["feed"], [], 3, 12)))
+    repair = model.calls[1].messages[-1]["content"]
+    assert "'like_post' is not one of your tools ['create_post', 'no_action']" in repair
+    assert "amount_minor" not in repair  # no money hint when no money call was refused
+    assert result.alert is None and [i.type for i in queue.drain()] == ["no_action"]
