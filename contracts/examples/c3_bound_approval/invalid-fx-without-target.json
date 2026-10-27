@@ -1,0 +1,47 @@
+{
+ "about": "An FX leg names the currency it converts into.",
+ "valid": false,
+ "reason": "an fx leg has no to_currency",
+ "error": {
+  "path": "/legs/0",
+  "keyword": "required",
+  "model_message": "names its target"
+ },
+ "instance": {
+  "approval_id": "apr-1",
+  "entity": "borrower-a",
+  "account": "borrower-a/operating",
+  "legs": [
+   {
+    "index": 1,
+    "kind": "fx",
+    "amount": {
+     "minor": 1000000,
+     "currency": "USD"
+    },
+    "source": "lender/operating",
+    "counterparty": "borrower-a/operating",
+    "facility_id": "adv-a"
+   },
+   {
+    "index": 2,
+    "kind": "payout",
+    "amount": {
+     "minor": 5000000,
+     "currency": "USD"
+    },
+    "source": "borrower-a/operating",
+    "counterparty": "ben-payroll-1",
+    "funded_by": "reservation:res-payroll-1",
+    "after": [
+     1
+    ]
+   }
+  ],
+  "plan_hash": "2072516a1b79b12586e50fae8c39e5831eac12234542daa73ca6df06e047eff9",
+  "snapshot_id": "obs-2026-11-05T09:58Z",
+  "expires_at": "2026-11-05T10:15:00Z",
+  "mode": "fake",
+  "approver": "operator"
+ }
+}

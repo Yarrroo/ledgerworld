@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Generated from backend/app/finance/schemas.py by `python -m app.finance.schemas`; edit the model, not this file.",
+  "$defs": {
+    "Amount": {
+      "additionalProperties": false,
+      "description": "A strictly positive amount: what an intent, a leg or an obligation moves.",
+      "properties": {
+        "minor": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        }
+      },
+      "required": [
+        "minor",
+        "currency"
+      ],
+      "title": "Amount",
+      "type": "object"
+    },
+    "ApprovalLeg": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "to_currency": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "fx"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "to_currency": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "to_currency"
+            ]
+          }
+        }
+      ],
+      "description": "One provider operation the approval binds; `after` names earlier legs it waits for.",
+      "properties": {
+        "index": {
+          "minimum": 1,
+          "title": "Index",
+          "type": "integer"
+        },
+        "kind": {
+          "enum": [
+            "advance",
+            "repayment",
+            "fx",
+            "payout"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "amount": {
+          "$ref": "#/$defs/Amount"
+        },
+        "source": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "counterparty": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Counterparty",
+          "type": "string"
+        },
+        "funded_by": {
+          "anyOf": [
+            {
+              "pattern": "^(spendable|reservation:[A-Za-z0-9._:/-]+)$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Funded By"
+        },
+        "after": {
+          "default": [],
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": "After",
+          "type": "array"
+        },
+        "facility_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Facility Id"
+        },
+        "to_currency": {
+          "anyOf": [
+            {
+              "enum": [
+                "USD",
+                "EUR",
+                "GBP",
+                "JPY",
+                "AUD",
+                "HKD",
+                "SGD",
+                "CNY"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To Currency"
+        }
+      },
+      "required": [
+        "index",
+        "kind",
+        "amount",
+        "source",
+        "counterparty"
+      ],
+      "title": "ApprovalLeg",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "C3: the operator's approval of one plan; any term outside it invalidates the whole.",
+  "properties": {
+    "approval_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Approval Id",
+      "type": "string"
+    },
+    "entity": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Entity",
+      "type": "string"
+    },
+    "account": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Account",
+      "type": "string"
+    },
+    "legs": {
+      "items": {
+        "$ref": "#/$defs/ApprovalLeg"
+      },
+      "minItems": 1,
+      "title": "Legs",
+      "type": "array"
+    },
+    "plan_hash": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Plan Hash",
+      "type": "string"
+    },
+    "snapshot_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Snapshot Id",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "mode": {
+      "enum": [
+        "fake",
+        "sandbox"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "approver": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Approver",
+      "type": "string"
+    }
+  },
+  "required": [
+    "approval_id",
+    "entity",
+    "account",
+    "legs",
+    "plan_hash",
+    "snapshot_id",
+    "expires_at",
+    "mode",
+    "approver"
+  ],
+  "title": "BoundApproval",
+  "type": "object"
+}

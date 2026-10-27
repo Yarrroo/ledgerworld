@@ -1,0 +1,24 @@
+{
+ "about": "A pending decision has no selection yet.",
+ "def": "DecisionsResponse",
+ "valid": false,
+ "reason": "a pending decision selects a policy",
+ "error": {
+  "path": "/selected",
+  "keyword": "type",
+  "model_message": "selects nothing"
+ },
+ "instance": {
+  "as_of": "2026-11-05T10:00:00Z",
+  "mode": "fake",
+  "run_id": "run-1",
+  "snapshot_id": "lf1",
+  "checkpoint_round": 3,
+  "cohort": "s1",
+  "weight_kind": "unweighted scenario set",
+  "status": "pending",
+  "results": [],
+  "selected": "integrated",
+  "escalation": null
+ }
+}

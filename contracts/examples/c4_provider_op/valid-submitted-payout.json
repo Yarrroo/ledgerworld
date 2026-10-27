@@ -1,0 +1,13 @@
+{
+ "about": "Written before the provider call: no provider id, no receipt yet.",
+ "valid": true,
+ "instance": {
+  "leg_id": "2072516a1b79-2-payout",
+  "request_id": "2072516a1b79-2-payout",
+  "kind": "payout",
+  "provider_id": null,
+  "state": "submitted",
+  "receipt": null,
+  "reconciled": false
+ }
+}

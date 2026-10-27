@@ -1,0 +1,19 @@
+{
+ "about": "Every response carries as_of.",
+ "def": "HealthResponse",
+ "valid": false,
+ "reason": "as_of is missing",
+ "error": {
+  "path": "",
+  "keyword": "required",
+  "model_message": "Field required"
+ },
+ "instance": {
+  "mode": "fake",
+  "ok": true,
+  "airwallex": "fake",
+  "connected": false,
+  "model": "scripted",
+  "version": "0.1.0"
+ }
+}

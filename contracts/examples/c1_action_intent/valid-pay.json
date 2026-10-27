@@ -1,0 +1,24 @@
+{
+ "about": "The treasury pays a supplier 10,000.00 at round 0 (agent-world clearing-order.json).",
+ "valid": true,
+ "instance": {
+  "intent_id": "i-r0-treasury-1",
+  "branch_id": "base",
+  "round": 0,
+  "actor_id": "treasury",
+  "type": "pay",
+  "params": {
+   "amount": {
+    "minor": 1000000,
+    "currency": "USD"
+   },
+   "to": "supplier-1"
+  },
+  "evidence_ids": [
+   "obs-r0-treasury"
+  ],
+  "obs_hash": "712a5bb8eba258ab46e3c4630fc6907f7ebb9b70aa37cbb8afdcc48ea42c797e",
+  "priority_class": 1,
+  "sim_minute": 60
+ }
+}

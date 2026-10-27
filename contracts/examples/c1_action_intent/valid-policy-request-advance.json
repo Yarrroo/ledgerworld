@@ -1,0 +1,25 @@
+{
+ "about": "In a policy branch the policy drives the treasury: params.source names it.",
+ "valid": true,
+ "instance": {
+  "intent_id": "i-r3-treasury-1",
+  "branch_id": "run-1-s1-integrated",
+  "round": 3,
+  "actor_id": "treasury",
+  "type": "request_advance",
+  "params": {
+   "amount": {
+    "minor": 1000000,
+    "currency": "USD"
+   },
+   "contract_id": "adv-a",
+   "source": "policy:integrated"
+  },
+  "evidence_ids": [
+   "obs-r0-treasury"
+  ],
+  "obs_hash": "712a5bb8eba258ab46e3c4630fc6907f7ebb9b70aa37cbb8afdcc48ea42c797e",
+  "priority_class": 1,
+  "sim_minute": 720
+ }
+}

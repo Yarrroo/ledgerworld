@@ -1,0 +1,20 @@
+{
+ "about": "The safe fallback: no action, no amount.",
+ "valid": true,
+ "instance": {
+  "intent_id": "i-r1-borrower-b-1",
+  "branch_id": "base",
+  "round": 1,
+  "actor_id": "borrower-b",
+  "type": "no_action",
+  "params": {
+   "note": "waiting for the venue to confirm"
+  },
+  "evidence_ids": [
+   "obs-r0-treasury"
+  ],
+  "obs_hash": "712a5bb8eba258ab46e3c4630fc6907f7ebb9b70aa37cbb8afdcc48ea42c797e",
+  "priority_class": 2,
+  "sim_minute": 240
+ }
+}

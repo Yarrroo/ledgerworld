@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Generated from backend/app/finance/schemas.py by `python -m app.finance.schemas`; edit the model, not this file.",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "rejected"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "journal_id": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      }
+    }
+  ],
+  "description": "C2: the coordinator's verdict on one intent; the actor sees it the next round.",
+  "properties": {
+    "intent_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Intent Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "accepted",
+        "rejected",
+        "pending"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    },
+    "binding": {
+      "anyOf": [
+        {
+          "maxLength": 4000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Binding"
+    },
+    "journal_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Journal Id"
+    },
+    "round": {
+      "minimum": 0,
+      "title": "Round",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "intent_id",
+    "status",
+    "round"
+  ],
+  "title": "ClearedAction",
+  "type": "object"
+}

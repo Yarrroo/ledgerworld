@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Generated from backend/app/finance/schemas.py by `python -m app.finance.schemas`; edit the model, not this file.",
+  "$defs": {
+    "Receipt": {
+      "additionalProperties": false,
+      "description": "What the provider's `GET` showed for a leg; `amount` is the provider's decimal string.",
+      "properties": {
+        "provider_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Provider Id",
+          "type": "string"
+        },
+        "request_id": {
+          "pattern": "^[0-9a-f]{12}-[1-9][0-9]*-(advance|repayment|fx|payout)$",
+          "title": "Request Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "advance",
+            "repayment",
+            "fx",
+            "payout"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "status": {
+          "pattern": "^[A-Z][A-Z_]*$",
+          "title": "Status",
+          "type": "string"
+        },
+        "amount": {
+          "pattern": "^[0-9]+(\\.[0-9]+)?$",
+          "title": "Amount",
+          "type": "string"
+        },
+        "currency": {
+          "enum": [
+            "USD",
+            "EUR",
+            "GBP",
+            "JPY",
+            "AUD",
+            "HKD",
+            "SGD",
+            "CNY"
+          ],
+          "title": "Currency",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 4000,
+          "title": "Label",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "raw_keys": {
+          "items": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "title": "Raw Keys",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider_id",
+        "request_id",
+        "kind",
+        "status",
+        "amount",
+        "currency",
+        "label",
+        "mode",
+        "raw_keys",
+        "observed_at"
+      ],
+      "title": "Receipt",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "settled"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "journal_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "journal_id"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "reconciled": {
+            "const": true
+          }
+        },
+        "required": [
+          "reconciled"
+        ]
+      },
+      "then": {
+        "properties": {
+          "state": {
+            "enum": [
+              "settled",
+              "failed"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "description": "C4: one leg's provider state; `unknown` opens an incident and is looked up by its ids.",
+  "properties": {
+    "leg_id": {
+      "pattern": "^[0-9a-f]{12}-[1-9][0-9]*-(advance|repayment|fx|payout)$",
+      "title": "Leg Id",
+      "type": "string"
+    },
+    "request_id": {
+      "pattern": "^[0-9a-f]{12}-[1-9][0-9]*-(advance|repayment|fx|payout)$",
+      "title": "Request Id",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "advance",
+        "repayment",
+        "fx",
+        "payout"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "provider_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Provider Id"
+    },
+    "state": {
+      "enum": [
+        "pending",
+        "submitted",
+        "settled",
+        "failed",
+        "unknown"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "receipt": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Receipt"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reconciled": {
+      "title": "Reconciled",
+      "type": "boolean"
+    },
+    "journal_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Journal Id"
+    }
+  },
+  "required": [
+    "leg_id",
+    "request_id",
+    "kind",
+    "state",
+    "receipt",
+    "reconciled"
+  ],
+  "title": "ProviderOp",
+  "type": "object"
+}

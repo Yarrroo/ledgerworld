@@ -1,0 +1,26 @@
+{
+ "about": "A money intent carries its amount.",
+ "valid": false,
+ "reason": "a pay intent needs params.amount",
+ "error": {
+  "path": "/params",
+  "keyword": "required",
+  "model_message": "needs params.amount"
+ },
+ "instance": {
+  "intent_id": "i-r0-treasury-1",
+  "branch_id": "base",
+  "round": 0,
+  "actor_id": "treasury",
+  "type": "pay",
+  "params": {
+   "to": "supplier-1"
+  },
+  "evidence_ids": [
+   "obs-r0-treasury"
+  ],
+  "obs_hash": "712a5bb8eba258ab46e3c4630fc6907f7ebb9b70aa37cbb8afdcc48ea42c797e",
+  "priority_class": 1,
+  "sim_minute": 60
+ }
+}

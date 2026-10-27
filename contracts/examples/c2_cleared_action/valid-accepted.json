@@ -1,0 +1,10 @@
+{
+ "about": "The first payment clears and posts a journal.",
+ "valid": true,
+ "instance": {
+  "intent_id": "i-r0-treasury-1",
+  "status": "accepted",
+  "journal_id": "j-base-1",
+  "round": 0
+ }
+}

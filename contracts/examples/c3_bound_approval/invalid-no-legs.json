@@ -1,0 +1,20 @@
+{
+ "about": "An approval binds at least one leg.",
+ "valid": false,
+ "reason": "legs is empty",
+ "error": {
+  "path": "/legs",
+  "keyword": "minItems"
+ },
+ "instance": {
+  "approval_id": "apr-1",
+  "entity": "borrower-a",
+  "account": "borrower-a/operating",
+  "legs": [],
+  "plan_hash": "2072516a1b79b12586e50fae8c39e5831eac12234542daa73ca6df06e047eff9",
+  "snapshot_id": "obs-2026-11-05T09:58Z",
+  "expires_at": "2026-11-05T10:15:00Z",
+  "mode": "fake",
+  "approver": "operator"
+ }
+}

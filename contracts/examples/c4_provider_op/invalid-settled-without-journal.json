@@ -1,0 +1,36 @@
+{
+ "about": "A leg settles and its journal posts in one transaction.",
+ "valid": false,
+ "reason": "a settled leg has no journal_id",
+ "error": {
+  "path": "",
+  "keyword": "required",
+  "model_message": "has a journal"
+ },
+ "instance": {
+  "leg_id": "2072516a1b79-1-advance",
+  "request_id": "2072516a1b79-1-advance",
+  "kind": "advance",
+  "provider_id": "dep-0001",
+  "state": "settled",
+  "receipt": {
+   "provider_id": "dep-0001",
+   "request_id": "2072516a1b79-1-advance",
+   "kind": "advance",
+   "status": "SETTLED",
+   "amount": "10000.00",
+   "currency": "USD",
+   "label": "advance inflow (sandbox simulation)",
+   "mode": "fake",
+   "raw_keys": [
+    "id",
+    "amount",
+    "currency",
+    "status",
+    "reference"
+   ],
+   "observed_at": "2026-11-05T10:01:30Z"
+  },
+  "reconciled": true
+ }
+}
