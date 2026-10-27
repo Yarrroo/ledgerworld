@@ -8,6 +8,7 @@ dependencies = [
     "mirofish-backend",
     "oasis-finance",
     "psycopg[binary]>=3.1",
+    "redis>=5.0",
     "sqlalchemy>=2.0.30",
 ]
 

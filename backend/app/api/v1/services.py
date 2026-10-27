@@ -1,0 +1,161 @@
+"""What the /api/v1 routes read and write, built once per app.
+
+- the observed snapshot and its ledger store: the state Overview, Treasury and Lending show and
+  every plan is decided on (the demo world's snapshot, LF-1's treasury beside LF-2's pool, unless
+  the caller passes another);
+- the job queue and its records (runs, decisions, transcripts, the demo context) in the ledger
+  store's database;
+- the execution gateway on the observed store, built on first use (it reads the provider);
+- the demo token, the provider mode, the simulated clock the observed state is read at.
+
+`Services.from_env()` is the deployed wiring; tests build one directly with fakes.
+"""
+
+from __future__ import annotations
+
+import hmac
+import os
+import secrets
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+from ...execution.gateway import Gateway
+from ...finance.ledger import from_snapshot
+from ...finance.schemas import Mode, Snapshot
+from ...finance.store import LedgerStore
+from ...jobs.queue import JobQueue
+from ...jobs.store import JobStore
+from ...simulation.scenarios import load_world
+
+API_VERSION = "v1"
+APPROVER = "operator"
+
+
+def beneficiaries_for(snapshot: Snapshot) -> dict[str, str]:
+    """Each treasury obligation's payee: the allowlisted beneficiary `ben-<obligation_id>`."""
+    treasury = {e.entity_id for e in snapshot.entities if e.kind == "treasury"}
+    return {o.obligation_id: f"ben-{o.obligation_id}" for o in snapshot.obligations
+            if o.entity in treasury}
+
+
+@dataclass
+class Services:
+    snapshot: Snapshot
+    store: LedgerStore
+    jobs: JobStore
+    queue: JobQueue | None
+    epoch: datetime
+    mode: Mode
+    token: str | None
+    make_gateway: Callable[[Services], Gateway] | None = None
+    clock: Callable[[], datetime] | None = None  # the simulated now; the snapshot's as_of
+    wall_ms: Callable[[], int] = field(default=lambda: int(time.time() * 1000))
+    webhook_secret: str | None = None
+    connected_setting: str = "auto"
+    model_kind: str = "scripted"
+    live_runs: bool = False  # a worker with a live model runs families off their parameters
+    interview_model: Callable[[str], Any] | None = None
+    terms: dict[str, dict] = field(default_factory=dict)
+    beneficiaries: dict[str, str] | None = None
+    report_key: bytes = field(default_factory=lambda: secrets.token_bytes(32))
+    lock: threading.RLock = field(default_factory=threading.RLock)
+    _gateway: Gateway | None = None
+
+    def __post_init__(self) -> None:
+        if self.beneficiaries is None:
+            self.beneficiaries = beneficiaries_for(self.snapshot)
+
+    @classmethod
+    def build(cls, snapshot: Snapshot, *, store: LedgerStore | None = None,
+              redis: Any = None, **kwargs: Any) -> Services:
+        """Load ``snapshot`` into an empty observed store (or reuse a loaded one)."""
+        store = store or LedgerStore("sqlite://")
+        if not store.rows("accounts"):
+            from_snapshot(store, snapshot)
+        jobs = JobStore(store.engine)
+        queue = JobQueue(jobs, redis) if redis is not None else None
+        return cls(snapshot=snapshot, store=store, jobs=jobs, queue=queue, **kwargs)
+
+    @classmethod
+    def from_env(cls) -> Services:
+        from ...connectors.airwallex.client import connected_setting
+        from ...connectors.airwallex.transport import mode_from
+
+        world = load_world()
+        redis = None
+        if os.environ.get("REDIS_URL"):
+            import redis as redis_lib
+
+            redis = redis_lib.Redis.from_url(os.environ["REDIS_URL"])
+        return cls.build(
+            world.snapshot, store=LedgerStore(), redis=redis, epoch=world.epoch,
+            mode=mode_from(os.environ), token=os.environ.get("LEDGERWORLD_DEMO_TOKEN") or None,
+            make_gateway=gateway_from_env,
+            webhook_secret=os.environ.get("AIRWALLEX_WEBHOOK_SECRET") or None,
+            connected_setting=connected_setting())
+
+    # -------------------------------------------------------------------------- reading
+
+    def now(self) -> datetime:
+        return self.clock() if self.clock is not None else self.snapshot.as_of
+
+    @property
+    def connected(self) -> bool:
+        if self._gateway is not None:
+            return self._gateway.leg_mode == "A"
+        return self.connected_setting == "on"
+
+    def gateway(self) -> Gateway:
+        with self.lock:
+            if self._gateway is None:
+                if self.make_gateway is None:
+                    raise LookupError("no execution gateway is configured")
+                self._gateway = self.make_gateway(self)
+            return self._gateway
+
+    def authorised(self, header: str | None) -> bool:
+        """`Authorization: Bearer <LEDGERWORLD_DEMO_TOKEN>`; no configured token admits nobody."""
+        if not self.token or not header or not header.startswith("Bearer "):
+            return False
+        return hmac.compare_digest(header[len("Bearer "):].encode(), self.token.encode())
+
+    def demo(self) -> dict:
+        """The prepared demonstration run and its execution; null where none is associated."""
+        context = self.jobs.get("demo", "current") or {}
+        run_id = context.get("run_id")
+        if run_id is None or self.jobs.get("run", run_id) is None:
+            return {"run_id": None, "execution_id": None}
+        execution_id = context.get("execution_id")
+        if execution_id is not None and self.jobs.get("approval_run", execution_id) != run_id:
+            execution_id = None
+        return {"run_id": run_id, "execution_id": execution_id}
+
+    def prepare_demo(self, run_id: str, execution_id: str | None = None) -> dict:
+        """Name the demonstration run, and the execution approved from its decision. An
+        execution approved from another run is refused, never shown beside this one."""
+        if self.jobs.get("run", run_id) is None:
+            raise LookupError(f"no run {run_id}")
+        if execution_id is not None and self.jobs.get("approval_run", execution_id) != run_id:
+            raise ValueError(f"execution {execution_id} was not approved from run {run_id}")
+        self.jobs.put("demo", "current", {"run_id": run_id, "execution_id": execution_id})
+        return self.demo()
+
+
+def gateway_from_env(services: Services) -> Gateway:
+    """The gateway on the observed store, through the client `AIRWALLEX_MODE` selects."""
+    from ...connectors.airwallex.client import client_from_env
+
+    client = client_from_env()
+    leg_mode = client.probe_connected(services.connected_setting)
+    currency = next(a.currency for a in services.snapshot.accounts
+                    if any(e.entity_id == a.entity and e.kind == "treasury"
+                           for e in services.snapshot.entities))
+    global_account = os.environ.get("AIRWALLEX_GLOBAL_ACCOUNT_ID") or next(
+        (g["id"] for g in client.global_accounts() if g.get("currency") == currency), None)
+    return Gateway(services.store, client, mode=services.mode, leg_mode=leg_mode,
+                   beneficiaries=set(services.beneficiaries.values()),
+                   clock=services.now, global_account_id=global_account)

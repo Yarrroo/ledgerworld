@@ -765,7 +765,7 @@ class RunResponse(Response):
 
     run_id: Id
     snapshot_id: Id
-    status: Literal["queued", "running", "done", "failed"]
+    status: Literal["queued", "running", "done", "failed", "cancelled"]
     committed_round: Count | None
     rounds: list[RoundView]
     feed: list[Post]
