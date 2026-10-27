@@ -1,0 +1,17 @@
+{
+  "board_item": 57,
+  "goal": "g1",
+  "goal_text": "Money is correct",
+  "line_id": "l_5e3c6dcc82",
+  "outcome": "Every money-correctness property the system brief names for g1 is proven by a passing offline test: the LF-1 and LF-2 fixture reproductions, the five ledger invariants (journals balance, no orphan posting, reserved <= settled, no double pledge, unknown != zero), draw beyond K_p rejected, no duplicate movement, no movement from unowned funds, altered approval refused, timeout resolved by query, reconciliation closes the advance, clairvoyant policy rejected, credential isolation and the eight money-safety hunts. Measured by running the tests, never counted from tasks closed.",
+  "name": "money_checks_pct",
+  "unit": "percent of the 16 required g1 checks in checks/required.json whose registered pytest node ids all pass offline; a check with no registered tests, or whose ids do not exist, counts as failing",
+  "source": "python3 checks/kpi.py g1 --print (T22: runs checks/goals/g1.py, which runs uv run pytest -q --junitxml var/kpi/g1.xml on the ids in checks/required.json group g1 and prints the passing share in %; prints the baseline with the reason on stderr when it cannot run). Defined in prp/2026-10-20-ledgerworld/00-system.md section 17, row g1 (KPI money_checks_pct, target 100).",
+  "baseline": 0,
+  "baseline_observed_at": "2026-10-27T04:29:19Z",
+  "target": 100,
+  "target_comparison": ">=",
+  "direction": "up",
+  "observation": "At the commit under test, run python3 checks/kpi.py g1 --print and read the printed percent. Until checks/kpi.py exists, observe by hand: for each of the 16 entries in checks/required.json group g1, the check passes only if its tests list is non-empty and uv run pytest -q <those ids> exits 0; the value is 100 * passing / 16. An empty tests list, a missing node id or any failing test counts that check as failing. Observe after every landing train and before the build freeze (2026-11-12) and submission close (2026-11-13 18:29 UTC). Met when the value is 100.",
+  "evidence": "Definition: 00-system.md section 17 (g1: KPI money_checks_pct, target 100, passing share of checks/required.json group g1) and its list of required g1 check ids. briefs/T22.md: kpi.py g1 runs pytest on the group's ids, ids that do not exist count as failing. briefs/T01.md: required.json holds the named ids per goal; briefs T04, T05, T11, T13, T14 and T29 each register their test ids under g1 in the same commit as the test. Baseline observed 2026-10-27T04:29:19Z in this checkout at fa860e4: python3 checks/kpi.py g1 --print -> no such file, exit 2; checks/required.json group g1 has 16 checks and 0 with any registered test (python3 -I -c counting non-empty tests lists -> '16 0'); backend/app/finance does not exist. 0 of 16 checks pass, so the value is 0."
+}
