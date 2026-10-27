@@ -715,12 +715,12 @@ describe('correction: a status read never overwrites a newer one', () => {
   async function openLinked () {
     fakeTimers()
     const reads = queued(executionBody({ legs: [settledOnly()] }))
-    serve({
+    const calls = serve({
       'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
       'GET /decisions/run-1': decisionsBody(),
       'GET /executions/apr-1': reads.answer
     })
-    return { w: await open(Execution, '/execution'), reads }
+    return { w: await open(Execution, '/execution'), reads, calls }
   }
 
   it('a poll started before Refresh cannot overwrite the reconciled receipt Refresh read', async () => {
@@ -780,7 +780,7 @@ describe('correction: a status read never overwrites a newer one', () => {
     expect(text(w, 'incident')).toContain('paid then failed')
   })
 
-  it('a poll that fails after Refresh began is no answer: the Refresh read still shows, the error goes', async () => {
+  it('a poll that fails after Refresh began is no answer: the Refresh read still shows, the error stands', async () => {
     const { w, reads } = await openLinked()
     reads.holdThen(timeout())
     await w.get('[data-test="refresh"]').trigger('click') // Refresh's read is now in flight
@@ -790,11 +790,11 @@ describe('correction: a status read never overwrites a newer one', () => {
     reads.release(executionBody({ legs: [paidPayout()] }))
     await flushPromises()
     expect(text(w, 'leg-status')).toContain('PAID · reconciled as of')
-    expect(w.find('[data-test="poll-error"]').exists()).toBe(false)
+    expect(w.find('[data-test="poll-error"]').exists()).toBe(true) // the newest read did fail
   })
 
   it('a Refresh read older than an applied answer never reaches the screen', async () => {
-    const { w, reads } = await openLinked()
+    const { w, reads, calls } = await openLinked()
     reads.holdThen(refuse(404, 'not_found'))
     await w.get('[data-test="refresh"]').trigger('click')
     await flushPromises()
@@ -802,6 +802,10 @@ describe('correction: a status read never overwrites a newer one', () => {
     reads.release(executionBody({ legs: [paidPayout()] }))
     await flushPromises()
     expect(w.find('[data-test="not-found"]').exists()).toBe(true)
-    expect(text(w, 'leg-status')).not.toContain('PAID · reconciled')
+    // the 404 is the newest answer: no earlier legs stand beside it, and it is not polled again
+    expect(w.find('[data-test="leg-status"]').exists()).toBe(false)
+    const reads404 = calls.filter((c) => c.path === '/executions/apr-1').length
+    await tick()
+    expect(calls.filter((c) => c.path === '/executions/apr-1')).toHaveLength(reads404)
   })
 })
