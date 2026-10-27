@@ -5,12 +5,14 @@ body through the wire encoding, and keeps state: balances per account, global ac
 beneficiaries, quotes, conversions, transfers, connected-account transfers, charges and deposits.
 What it pins, because the gateway's tests rely on it:
 - a replayed `request_id` is REJECTED — `400 duplicate_request_id` (`request_id_duplicate` on
-  connected-account transfers), `409` while the first call is held open — never answered with
+  connected-account transfers, `invalid_argument` on conversions), `409` in flight — never answered with
   the original; the original is found by list-by-`request_id`;
 - transfer `SCHEDULED → PROCESSING → SENT → PAID`, `PAID` is not final (`FAILED`, then
   `CANCELLED` five seconds later with the funds back); a skipped transition is refused;
 - conversion `SCHEDULED → SETTLED | CANCELLED`, the sell side debited at create;
-- request amounts are decimal strings, the deposit simulation's `amount` a JSON number.
+- request amounts are decimal strings, the deposit simulation's `amount` a JSON number;
+- deposit create answers PENDING; its paginated list observes SETTLED and credits once
+  (an explicitly requested PENDING deposit stays pending).
 
 Scenarios arm the next request(s) (`times`, None for every one): `happy`, `timeout_after_accept`
 (stored, then no answer), `timeout_before_send` (nothing stored), `insufficient_funds`,
@@ -285,6 +287,24 @@ class FakeTransport:
                 self._need_connected()
                 return 200, {"items": [{"id": CONNECTED_ACCOUNT, "status": "ACTIVE"}],
                              "has_more": False}
+            if route == "/api/v1/deposits":
+                try:
+                    page, size = int(query["page_num"]), int(query["page_size"])
+                    if page < 0 or not 1 <= size <= 100:
+                        raise ValueError
+                except (KeyError, ValueError):
+                    raise _Refuse(400, "invalid_argument",
+                                  "page_num and page_size are required") from None
+                for deposit in self.objects["deposits"].values():
+                    if deposit["status"] == "PENDING" and deposit["_settle_on_lookup"]:
+                        deposit["status"] = "SETTLED"
+                        self._credit(PLATFORM, deposit["currency"],
+                                     _to_minor(Decimal(deposit["amount"]),
+                                               deposit["currency"], None))
+                items = list(self.objects["deposits"].values())
+                start = page * size
+                return 200, {"items": [self._public(d) for d in items[start:start + size]],
+                             "has_more": start + size < len(items)}
             for collection, base in COLLECTION_PATHS.items():
                 if route != base and not route.startswith(f"{base}/"):
                     continue
@@ -389,6 +409,10 @@ class FakeTransport:
         if used and request_id in self._held:
             raise _Refuse(409, None, "A request with this request_id is in progress")
         if used:
+            if collection == "conversions":
+                raise _Refuse(400, "invalid_argument",
+                              f"request_id '{request_id}' has been used in the past. Please use a "
+                              "different request_id for this request", "request_id")
             code = ("request_id_duplicate" if collection == "connected_account_transfers"
                     else "duplicate_request_id")
             raise _Refuse(400, code, "The request_id has been used", "request_id")
@@ -477,15 +501,14 @@ class FakeTransport:
         status = body.get("status") or "SETTLED"
         if status not in ("SETTLED", "PENDING"):
             raise _Refuse(400, "invalid_argument", "status is SETTLED or PENDING", "status")
-        if status == "SETTLED":
-            self._credit(PLATFORM, currency, minor)
         self._serial += 1
-        deposit = {"id": f"deposit-{self._serial}", "request_id": None, "status": status,
+        deposit = {"id": f"deposit-{self._serial}", "request_id": None, "status": "PENDING",
+                   "_settle_on_lookup": status == "SETTLED",
                    "global_account_id": account["id"], "amount": _number(minor, currency),
                    "currency": currency, "reference": body.get("reference"),
                    "created_at": _iso(self.clock())}
         self.objects["deposits"][deposit["id"]] = deposit
-        return dict(deposit)
+        return self._public(deposit)
 
     def _transition(self, transfer_id: str, body: Mapping) -> dict:
         transfer = self._get("transfers", transfer_id)

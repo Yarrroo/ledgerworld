@@ -491,7 +491,7 @@ def test_a_failed_advance_fails_the_payout_without_a_call_and_frees_its_reservat
     assert MACHINE["dependencies"]["demo"].endswith("payout failed without a call")
 
 
-def test_mode_b_advance_is_a_labelled_deposit_and_an_unknown_one_waits_for_the_operator():
+def test_mode_b_advance_is_a_labelled_deposit_and_a_lost_answer_is_looked_up():
     world = World(leg_mode="B")
     done = world.execute(bind_terms(BASE))
     advance, payout = done.legs
@@ -500,13 +500,13 @@ def test_mode_b_advance_is_a_labelled_deposit_and_an_unknown_one_waits_for_the_o
     (deposit,) = world.posts(advance.request_id)
     assert deposit.body["reference"].endswith(advance.request_id)
     assert payout.receipt_label == "payout from the operator account"
-    # A deposit lost on the wire cannot be looked up: it stays unknown, the incident open.
     other = World(leg_mode="B")
     other.fake.arm("timeout_after_accept")
     other.execute(bind_terms(BASE))
     advance, payout = other.legs()
-    assert (advance.state, payout.state) == ("unknown", "pending")
-    assert other.gateway.incidents(open_only=True)[0]["kind"] == "outcome_unknown"
+    assert advance.state == "settled" and advance.reconciled
+    assert payout.state == "submitted"
+    assert not other.gateway.incidents(open_only=True)
     assert len(other.posts(advance.request_id)) == 1
 
 

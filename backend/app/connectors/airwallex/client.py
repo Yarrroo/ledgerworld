@@ -492,6 +492,48 @@ class AirwallexClient:
         raw = self._request("POST", "/api/v1/simulation/deposit/create", body)
         return ProviderObject.parse("deposit", raw)
 
+    def list_deposits(self) -> list[ProviderObject]:
+        """Read the deposit list with both required page parameters; never truncate silently."""
+        found = []
+        for page in range(20):
+            answer = self._request(
+                "GET", f"/api/v1/deposits?page_num={page}&page_size=100")
+            found.extend(ProviderObject.parse("deposit", item) for item in self._items(answer))
+            if not isinstance(answer, dict) or not isinstance(answer.get("has_more"), bool):
+                raise OutcomeUnknown(None, "deposit list has no pagination state")
+            if not answer["has_more"]:
+                return found
+        raise OutcomeUnknown(None, "deposit list exceeded 20 pages")
+
+    def find_deposit(self, reference: str) -> list[ProviderObject]:
+        """Deposits have no request_id; the gateway's exact reference binds them to a leg."""
+        return [obj for obj in self.list_deposits() if obj.raw.get("reference") == reference]
+
+    def get_deposit(self, provider_id: str) -> ProviderObject:
+        found = [obj for obj in self.list_deposits() if obj.provider_id == provider_id]
+        if len(found) != 1:
+            raise OutcomeUnknown(None, f"deposit lookup found {len(found)} objects",
+                                 provider_id=provider_id)
+        return found[0]
+
+    def wait_for_deposit(self, provider_id: str) -> ProviderObject:
+        """At most ten observations, one second apart. Only an observed terminal state wins.
+
+        A missing, unreadable or still-pending deposit stays unresolved; never create another.
+        Each GET also has the transport's timeout and the client's bounded retry policy."""
+        for attempt in range(10):
+            try:
+                obj = self.get_deposit(provider_id)
+            except OutcomeUnknown as unknown:
+                reason = unknown.reason
+            else:
+                if obj.status in ("SETTLED", "FAILED", "CANCELLED", "REVERSED"):
+                    return obj
+                reason = f"status {obj.status}"
+            if attempt < 9:
+                self._sleep(1)
+        raise OutcomeUnknown(None, f"deposit did not settle ({reason})", provider_id=provider_id)
+
     def simulate_transition(
         self, transfer_id: str, next_status: str, *, failure_type: str | None = None
     ) -> ProviderObject:

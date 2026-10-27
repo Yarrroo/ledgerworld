@@ -18,7 +18,7 @@ design/modules/execution/HANDOFF.md:
 
 Mode A (connected accounts) and Mode B (fallback) take their operation and receipt label from the
 connector's `leg_plan`. A Mode B deposit carries no `request_id`, so its reference carries the leg
-id; the client has no deposit list or GET, so an unknown deposit stays unknown for the operator.
+id; its paginated list supplies fresh status and resolves a lost create by that exact reference.
 """
 
 from __future__ import annotations
@@ -174,10 +174,10 @@ class ConnectorProvider:
 
     def find(self, leg: ob.Leg) -> list[ob.ProviderObject]:
         kind, path = collection(leg.kind, self.leg_mode)
-        if kind == "deposit":
-            raise ob.LookupFailed("the deposit simulation has no list by request_id")
         try:
-            if kind == "transfer":
+            if kind == "deposit":
+                found = self.client.find_deposit(deposit_reference(leg))
+            elif kind == "transfer":
                 found = self.client.find_transfer(leg.request_id)
             elif kind == "conversion":
                 found = self.client.find_conversion(leg.request_id)
@@ -191,11 +191,6 @@ class ConnectorProvider:
         kind, path = collection(leg.kind, self.leg_mode)
         if leg.provider_id is None:
             raise ob.LookupFailed(f"{leg.leg_id} has no provider id")
-        if kind == "deposit":  # no GET either: the create answer is all there is
-            obj = self.seen.get(leg.leg_id)
-            if obj is None or obj.provider_id != leg.provider_id:
-                raise ob.LookupFailed("the deposit simulation has no GET")
-            return self._ours(leg, obj)
         try:
             return self._ours(leg, self.get_object(kind, path, leg.provider_id))
         except AirwallexError as failed:
@@ -203,6 +198,8 @@ class ConnectorProvider:
 
     def get_object(self, kind: str, path: str, provider_id: str) -> aw.ProviderObject:
         """`GET` one provider object by its id: reconciliation's truth."""
+        if kind == "deposit":
+            return self.client.wait_for_deposit(provider_id)
         if kind == "transfer":
             return self.client.get_transfer(provider_id)
         if kind == "conversion":
@@ -220,7 +217,9 @@ class ConnectorProvider:
         request_id = obj.request_id or ""
         if obj.kind == "deposit":
             reference = obj.raw.get("reference")
-            request_id = leg.request_id if reference == deposit_reference(leg) else ""
+            if reference != deposit_reference(leg):
+                raise ob.LookupFailed("the deposit reference belongs to another leg")
+            request_id = leg.request_id
         if obj.amount is None or obj.currency not in EXPONENT:
             raise ob.LookupFailed(f"{obj.kind} {obj.provider_id} shows no amount")
         if request_id == leg.request_id:

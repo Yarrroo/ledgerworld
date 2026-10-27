@@ -349,6 +349,9 @@ def fund_wallet(client: Any, plan: dict) -> list[dict]:
         amount = Money(minor=minor, currency=currency)
         obj = client.simulate_deposit(amount=amount, global_account_id=accounts[currency],
                                       reference=SETUP_LABEL)
+        obj = client.wait_for_deposit(obj.provider_id)
+        if obj.status != "SETTLED":
+            raise DemoFailed(f"sandbox wallet funding {obj.provider_id} is {obj.status}")
         setup.append({"kind": "wallet_funding", "label": SETUP_LABEL,
                       "provider_id": obj.provider_id, "amount": to_provider_decimal(amount)})
     return setup

@@ -227,7 +227,11 @@ In a policy branch the policy drives the treasury and the treasury model is not 
   in the sandbox by default**; Airwallex enables them on request.
 - [FACT] Deposit simulation (sandbox only): `POST /api/v1/simulation/deposit/create` with
   `{amount, global_account_id, reference?, status?}`; `status` defaults to `SETTLED` and a settled
-  deposit adds to `balances/current`. It needs a Global Account in the advance currency
+  deposit adds to `balances/current`. The create can answer `PENDING` while settlement is
+  asynchronous; confirm `SETTLED` via `GET /api/v1/deposits?page_num=0&page_size=N` (both page
+  parameters required), following pagination and matching the deposit id. A bounded wait that
+  cannot confirm settlement never books an advance or releases dependent legs. It needs a Global
+  Account in the advance currency
   (`GET /api/v1/global_accounts`). The `deposits/{id}/settle|reverse` endpoints are for direct
   debits and are not used.
 - [FACT] Transfer status simulation: `POST /api/v1/simulation/transfers/{id}/transition`
@@ -238,7 +242,8 @@ In a policy branch the policy drives the treasury and the treasury model is not 
 - [FACT] Airwallex's lending API is a partner API for lender apps; it is not used.
 - Every request carries a deterministic `request_id` (leg id); a replay with the same id must not
   move money twice. [FACT] The provider **rejects** a duplicate id (`duplicate_request_id`, or
-  `409` while the first is in flight); it does not return the original. The gateway resolves both
+  `409` while the first is in flight, or conversions' `400 invalid_argument` with a
+  `request_id ... has been used` message); it does not return the original. The gateway resolves both
   by `GET /api/v1/transfers?request_id=…` (or `conversions?request_id=…`) and adopts what it
   finds; it never resubmits under a new id, and the fake reproduces the rejection.
 - [FACT] Webhooks carry `x-timestamp` (Unix ms) and `x-signature` = hex HMAC-SHA256 keyed by the
