@@ -36,6 +36,8 @@ TIMEOUT_S = 15
 USER_AGENT = "ledgerworld-submission-links/1"
 LIMIT_S = 300
 LABELS = ("Repository", "Demo", "Video")
+VIDEO_HOSTS = ("youtube.com", "studio.youtube.com", "youtu.be", "vimeo.com", "player.vimeo.com",
+               "loom.com", "drive.google.com")
 VIDEO_LINE = re.compile(r"^- Video:[^\r\n]*", re.MULTILINE)
 
 # fetch(url) -> (HTTP status, body text); raises OSError when no answer came.
@@ -126,8 +128,7 @@ def vet_video(url: str, get: Fetch = fetch) -> tuple[bool, str]:
     kind = video_kind(url)
     if kind is None:
         host = host_of(url)
-        if host in ("studio.youtube.com", "loom.com", "youtube.com", "youtu.be", "vimeo.com",
-                    "player.vimeo.com", "drive.google.com"):
+        if host in VIDEO_HOSTS:
             return False, f"{host}: not a published video link (an editor, draft or folder page?)"
         return False, f"{host or 'no host'}: not an allowed video host (YouTube, Vimeo, Loom, Google Drive)"
     seconds = None
@@ -145,9 +146,8 @@ def vet_video(url: str, get: Fetch = fetch) -> tuple[bool, str]:
                 return False, f"{kind}: oEmbed answer is not JSON"
             if isinstance(data, dict) and isinstance(data.get("duration"), (int, float)):
                 seconds = int(data["duration"])
-        page = watch_url(url) if kind == "youtube" else url
         if seconds is None:
-            status, body = get(page)
+            status, body = get(watch_url(url) if kind == "youtube" else url)
             if status != 200:
                 return False, f"{kind}: video page answers HTTP {status}"
             if kind == "drive" and re.search(r"accounts\.google\.com/(?:ServiceLogin|v3/signin)", body):
@@ -185,10 +185,9 @@ def probe(text: str, get: Fetch = fetch) -> list[tuple[str, str, bool, str]]:
     """One (label, url, alive, detail) per link: Repository, Demo, Demo health, Video."""
     links = read_links(text)
     demo = links["Demo"].rstrip("/")
-    rows = [("Repository", links["Repository"], *probe_one(links["Repository"], get)),
-            ("Demo", links["Demo"], *probe_one(links["Demo"], get)),
-            ("Demo health", f"{demo}/api/v1/health" if demo else "",
-             *probe_one(f"{demo}/api/v1/health" if demo else "", get))]
+    health = f"{demo}/api/v1/health" if demo else ""
+    pages = (("Repository", links["Repository"]), ("Demo", links["Demo"]), ("Demo health", health))
+    rows = [(label, url, *probe_one(url, get)) for label, url in pages]
     video = links["Video"]
     rows.append(("Video", video, *(vet_video(video, get) if video else (False, "no URL"))))
     return rows
