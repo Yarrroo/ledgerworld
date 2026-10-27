@@ -301,7 +301,7 @@ class Integrated(_Policy):
             if amount and currency != obs["currency"] and t < o["due_h"] <= t + CONVERT_LEAD_H:
                 convert = {"type": "convert", "buy": {"minor": amount, "currency": currency},
                            "sell_currency": obs["currency"], "for_obligation": o["id"]}
-                if "account" in o:  # set only off the home account
+                if o.get("account", obs.get("account")) != obs.get("account"):
                     convert["to_account"] = o["account"]
                 actions.append(convert)
         deferred: dict[str, int] = {}
@@ -703,7 +703,7 @@ def plan_for_now(policy: _Policy, observed_snapshot: Snapshot, *, epoch: datetim
     short_at = proposal.projected_short.at_h
     for o in sorted(obs["obligations"], key=lambda o: (o["due_h"], o["id"])):
         if not obs["t_h"] < o["due_h"] <= short_at or o["currency"] != currency \
-                or "account" in o:  # paid from its own account
+                or o.get("account", account) != account:  # paid from its own account
             continue
         if o["id"] not in beneficiaries:
             raise ValueError(f"no beneficiary for {o['id']}, which this plan's funding protects")
