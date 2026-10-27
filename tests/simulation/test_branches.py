@@ -18,11 +18,11 @@ import dataclasses
 import hashlib
 import json
 import re
+import sqlite3
 from pathlib import Path
 
 import pytest
 import test_coupled as coupled
-from app.finance.lending import capacity
 from app.simulation.branches import (
     BranchMismatch,
     checkpoint,
@@ -66,12 +66,21 @@ def plans() -> dict[str, ScriptedPlan]:
             "integrated": chain_plan()}
 
 
-def k_p(world) -> int:
-    return capacity(world.store, "lender", world.clock.now).K_p
-
-
 def file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def recs(records) -> list[tuple]:
+    return [(r.actor_id, r.key, r.value, r.round) for r in records]
+
+
+def parent_world(tmp: Path, plan: ScriptedPlan, **kw):
+    """main on the coupled lender world, its model actors driven by ``plan``."""
+    (tmp / PARENT).mkdir()
+    return coupled.World(
+        WORLD_ID, PARENT, coupled.snapshot(treasury=False),
+        [coupled.ACTOR_SPECS[a] for a in coupled.MODEL_ACTORS + ["payroll", "market-maker"]],
+        model=coupled.plan_model(plan), workdir=tmp / PARENT, **kw)
 
 
 def journal_bytes(world) -> bytes:
@@ -87,13 +96,9 @@ async def play(tmp: Path) -> dict:
     def client(branch_id: str) -> FakeGraphMemory:
         return FakeGraphMemory(namespace_for(WORLD_ID, branch_id), graph)
 
-    (tmp / PARENT).mkdir()
     parent_plan = ScriptedPlan(copy.deepcopy(coupled.COUPLED["plan"][:-1]) + [DEFER]
                                + copy.deepcopy(coupled.COUPLED["plan"][-1:]))
-    parent = coupled.World(
-        WORLD_ID, PARENT, coupled.snapshot(treasury=False),
-        [coupled.ACTOR_SPECS[a] for a in coupled.MODEL_ACTORS + ["payroll", "market-maker"]],
-        model=coupled.plan_model(parent_plan), workdir=tmp / PARENT, scenario=[RUMOUR, NOTICE])
+    parent = parent_world(tmp, parent_plan, scenario=[RUMOUR, NOTICE])
     parent_memory = BranchMemory(client(PARENT), WORLD_ID, PARENT)
     async with parent:
         await parent.run(CP_ROUND)
@@ -101,10 +106,12 @@ async def play(tmp: Path) -> dict:
             parent_memory.write_record(*record)
         cp = checkpoint(parent, parent_memory)
         out["cp"] = cp
-        out["parent_before"] = {"ledger": ledger_hash(parent.store),
-                                "sqlite_file": file_hash(parent.db_path),
-                                "fingerprint": parent.fingerprint(),
-                                "memory": parent_memory.snapshot().digest()}
+        def parent_state() -> dict:
+            return {"ledger": ledger_hash(parent.store), "sqlite_file": file_hash(parent.db_path),
+                    "fingerprint": parent.fingerprint(),
+                    "memory": parent_memory.snapshot().digest()}
+
+        out["parent_before"] = parent_state()
         with pytest.raises(BranchMismatch):
             await fork(cp, PARENT, model=coupled.plan_model(chain_plan()), workdir=tmp)
 
@@ -129,19 +136,11 @@ async def play(tmp: Path) -> dict:
             await branch.world.run(1)
             out["round_4"][branch_id] = branch.world.state.rounds[-1]
             await branch.world.run(1)
-            out["k_p_r5"][branch_id] = k_p(branch.world)
+            out["k_p_r5"][branch_id] = coupled.k_p(branch.world)
             await branch.world.run(LAST_ROUND - CP_ROUND - 2)
         out["branches"] = branches
 
-        out["parent_after"] = {"ledger": ledger_hash(parent.store),
-                               "sqlite_file": file_hash(parent.db_path),
-                               "fingerprint": parent.fingerprint(),
-                               "memory": parent_memory.snapshot().digest()}
-        try:
-            branches["no-action"].memory.retrieve(namespace=namespace_for(WORLD_ID,
-                                                                          "integrated"))
-        except NamespaceViolation as exc:
-            out["no-action reads integrated"] = exc
+        out["parent_after"] = parent_state()
 
         # The parent goes on: its round 4 is the clean continuation of the same capture, and
         # it remembers past the checkpoint.
@@ -205,7 +204,7 @@ def test_the_checkpoint_pins_every_component_the_fixture_names(played):
     assert fingerprint["intent queue"] == "0"
     assert fingerprint["world and OASIS clocks"] == f"{CP_ROUND}/{CP_ROUND}"
     assert cp.memory_ns == cp.memory.namespace == namespace_for(WORLD_ID, PARENT)
-    assert [(r.actor_id, r.key, r.value, r.round) for r in cp.memory.records] == PARENT_MEMORY
+    assert recs(cp.memory.records) == PARENT_MEMORY
     assert [c["status"] for c in cp.pending_c2] == ["rejected"]
     assert cp.event_cursor == 1  # the rumour delivered, the round-4 notice not yet
     assert cp.transcript_cursor == CP_ROUND * len(coupled.MODEL_ACTORS)
@@ -229,21 +228,20 @@ def test_sibling_read_raises_namespace_violation(played):
     assert expect["result"] == "raises NamespaceViolation"
     with pytest.raises(NamespaceViolation):
         reader.retrieve(namespace=expect["namespace"])
-    assert isinstance(played["no-action reads integrated"], NamespaceViolation)
     expect_own = EXPECT["own_read"]
     own = played["branches"][expect_own["branch_id"]].memory
     assert own.read("borrower-c", expect_own["key"]) == expect_own["value"]
     # Each branch starts from main's pinned records and sees only its own writes after them.
     for w in FIXTURE["memory_writes"]:
         records = played["branches"][w["branch_id"]].memory.retrieve()
-        assert [(r.actor_id, r.key, r.value, r.round) for r in records] == \
+        assert recs(records) == \
             PARENT_MEMORY + [(w["actor_id"], w["key"], w["value"], w["round"])]
 
 
 def test_checkpoint_memory_is_immutable(played):
     assert "cannot read that later record" in EXPECT["checkpoint_memory_immutable"]
     late = played["late"]
-    assert [(r.actor_id, r.key, r.value, r.round) for r in late["records"]] == PARENT_MEMORY
+    assert recs(late["records"]) == PARENT_MEMORY
     assert LATE_MEMORY[2] not in [r.value for r in late["records"]]
     # The parent's actor (chat) memory moved on in its round 4; the fork's is the checkpoint's.
     cp = played["cp"].fingerprint()
@@ -330,3 +328,178 @@ def test_a_replay_shown_another_observation_fails_instead_of_answering(played, t
     with pytest.raises(ReplayMiss, match="borrower-c round 4"):
         asyncio.run(replay(cp, Transcript(WORLD_ID, "integrated", calls=calls),
                            workdir=tmp_path))
+
+
+# ------------------------------------------------------------- vet round 1: each failed first
+
+
+async def small_parent(tmp: Path, **kw):
+    """main after one idle round, its graph memory holding one record; and its checkpoint."""
+    world = parent_world(tmp, ScriptedPlan(copy.deepcopy(coupled.IDLE)), **kw)
+    memory = BranchMemory(FakeGraphMemory(namespace_for(WORLD_ID, PARENT), GraphMemoryStore()),
+                          WORLD_ID, PARENT)
+    await world.start()
+    await world.run(1)
+    memory.write_record(*PARENT_MEMORY[0])
+    return world, checkpoint(world, memory)
+
+
+def idle_model():
+    return coupled.plan_model(ScriptedPlan(copy.deepcopy(coupled.IDLE)))
+
+
+def test_a_replay_keeps_the_lineage_its_branch_inherited(tmp_path):
+    async def go():
+        parent, cp = await small_parent(tmp_path)
+        (tmp_path / "a").mkdir()
+        a = await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a")
+        await a.world.run(1)
+        cp_a = checkpoint(a.world)
+        await a.world.run(1)
+        (tmp_path / "again").mkdir()
+        replayed = await replay(cp_a, a.world.transcript, workdir=tmp_path / "again")
+        rows = replayed.world.store.rows("branch_meta")
+        label = replayed.label()
+        for w in (parent, a.world, replayed.world):
+            await w.close()
+        return rows, label
+
+    rows, label = asyncio.run(go())
+    assert (label["parent"], label["checkpoint_round"], label["replay"]) == (PARENT, 1, True)
+    assert [(r["branch_id"], r["parent_branch_id"], r["checkpoint_round"], r["replay"])
+            for r in rows] == [("a", PARENT, 1, True)]
+
+
+def test_a_fork_may_not_take_an_ancestors_id(tmp_path):
+    async def go():
+        parent, cp = await small_parent(tmp_path)
+        (tmp_path / "a").mkdir()
+        a = await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a")
+        cp_a = checkpoint(a.world)
+        try:
+            with pytest.raises(BranchMismatch, match="ancestor"):
+                await fork(cp_a, PARENT, model=idle_model(), workdir=tmp_path)
+        finally:
+            await a.world.close()
+            await parent.close()
+
+    asyncio.run(go())
+
+
+def test_a_replay_runs_under_the_branchs_coordinator_and_memory(tmp_path):
+    async def go():
+        parent, cp = await small_parent(tmp_path)
+        (tmp_path / "a").mkdir()
+        a = await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a")
+        await a.world.run(1)
+        seen = []
+        coordinator = coupled.Coordinator({"intents": lambda w, ctx, i: seen.append(ctx.round)
+                                           or i})
+        (tmp_path / "again").mkdir()
+        replayed = await replay(cp, a.world.transcript, workdir=tmp_path / "again",
+                                coordinator=coordinator,
+                                memory_client=FakeGraphMemory(namespace_for(WORLD_ID, "a"),
+                                                              GraphMemoryStore()))
+        records = replayed.memory.retrieve()
+        for w in (parent, a.world, replayed.world):
+            await w.close()
+        return seen, records, replayed.world.coordinator is coordinator
+
+    seen, records, same = asyncio.run(go())
+    assert same and seen == [2]
+    assert recs(records) == PARENT_MEMORY
+
+
+def test_a_fork_takes_its_own_scheduled_events_after_the_checkpoint(tmp_path):
+    own = {"round": 2, "kind": "message", "id": "m-own", "to": "borrower-b", "text": "hello",
+           "branch": "a"}
+    other = {**own, "id": "m-other", "branch": "b"}
+
+    async def go():
+        parent, cp = await small_parent(tmp_path)
+        with pytest.raises(ValueError, match="after the checkpoint"):
+            await fork(cp, "a", model=idle_model(), workdir=tmp_path,
+                       scenario=[{**own, "round": 1}])
+        (tmp_path / "a").mkdir()
+        a = await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a",
+                       scenario=[own, other])
+        await a.world.run(1)
+        deliveries = list(a.world.state.deliveries)
+        await a.world.close()
+        await parent.close()
+        return deliveries
+
+    assert asyncio.run(go()) == ["m-own"]
+
+
+def test_lineage_time_is_utc_whatever_the_epochs_zone(tmp_path):
+    from datetime import UTC, timedelta, timezone
+
+    from oasis_finance.observation import DEFAULT_EPOCH
+
+    epoch = DEFAULT_EPOCH.astimezone(timezone(timedelta(hours=3)))
+
+    async def go():
+        parent, cp = await small_parent(tmp_path, epoch=epoch)
+        (tmp_path / "a").mkdir()
+        a = await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a")
+        rows = a.world.store.rows("branch_meta")
+        await a.world.close()
+        await parent.close()
+        return rows
+
+    (row,) = asyncio.run(go())
+    assert row["created_at"] == (DEFAULT_EPOCH + timedelta(hours=4)).astimezone(UTC) \
+        .replace(tzinfo=None)
+
+
+def test_a_failed_fork_leaves_nothing_behind_and_can_be_retried(tmp_path, monkeypatch):
+    from app.simulation import branches
+
+    real = branches._copy_ledger
+    calls = []
+
+    def flaky(rows, store):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("injected")
+        real(rows, store)
+
+    monkeypatch.setattr(branches, "_copy_ledger", flaky)
+
+    async def go():
+        parent, cp = await small_parent(tmp_path)
+        (tmp_path / "a").mkdir()
+        with pytest.raises(RuntimeError, match="injected"):
+            await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a")
+        left = sorted(p.name for p in (tmp_path / "a").iterdir())
+        a = await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a")
+        await a.world.close()
+        await parent.close()
+        return left
+
+    assert asyncio.run(go()) == []
+
+
+def test_a_checkpoint_is_usable_from_another_thread(tmp_path):
+    import threading
+
+    async def go():
+        parent, cp = await small_parent(tmp_path)
+        await parent.close()
+        return cp
+
+    cp = asyncio.run(go())
+    out: dict = {}
+
+    def other() -> None:
+        try:
+            out["fingerprint"] = cp.fingerprint()
+        except sqlite3.ProgrammingError as exc:  # reported, not swallowed
+            out["error"] = exc
+
+    thread = threading.Thread(target=other)
+    thread.start()
+    thread.join()
+    assert "error" not in out, out.get("error")
+    assert out["fingerprint"]["OASIS SQLite"]

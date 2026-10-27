@@ -187,13 +187,20 @@
       "tests/simulation/test_branches.py::test_checkpoint_memory_is_immutable",
       "tests/simulation/test_branches.py::test_checkpoint_continuation",
       "tests/simulation/test_branches.py::test_parent_unchanged",
-      "tests/simulation/test_branches.py::test_branch_ledgers_differ"
+      "tests/simulation/test_branches.py::test_branch_ledgers_differ",
+      "tests/simulation/test_branches.py::test_a_fork_may_not_take_an_ancestors_id",
+      "tests/simulation/test_branches.py::test_a_fork_takes_its_own_scheduled_events_after_the_checkpoint",
+      "tests/simulation/test_branches.py::test_lineage_time_is_utc_whatever_the_epochs_zone",
+      "tests/simulation/test_branches.py::test_a_failed_fork_leaves_nothing_behind_and_can_be_retried",
+      "tests/simulation/test_branches.py::test_a_checkpoint_is_usable_from_another_thread"
     ]},
     {"id": "replay_identity", "name": "replay identity", "tests": [
       "tests/simulation/test_branches.py::test_replay_identity",
       "tests/simulation/test_branches.py::test_replay_label",
       "tests/simulation/test_branches.py::test_a_replay_refuses_a_transcript_of_another_history",
-      "tests/simulation/test_branches.py::test_a_replay_shown_another_observation_fails_instead_of_answering"
+      "tests/simulation/test_branches.py::test_a_replay_shown_another_observation_fails_instead_of_answering",
+      "tests/simulation/test_branches.py::test_a_replay_keeps_the_lineage_its_branch_inherited",
+      "tests/simulation/test_branches.py::test_a_replay_runs_under_the_branchs_coordinator_and_memory"
     ]},
     {"id": "six_families_run", "name": "six families run", "tests": []},
     {"id": "report_numbers_grounded", "name": "report numbers grounded", "tests": [

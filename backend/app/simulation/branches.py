@@ -25,22 +25,21 @@ from __future__ import annotations
 
 import copy
 import dataclasses
-import hashlib
-import json
-from collections.abc import Mapping
+import sqlite3
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Self
 
-from sqlalchemy import delete, func, insert, select, text
+from sqlalchemy import delete, func, insert, select, text, update
 
 from ..finance.models import branch_meta, metadata, postings
 from ..finance.schemas import Snapshot
-from ..finance.store import LedgerStore
+from ..finance.store import LedgerStore, _naive
 from .memory import BranchMemory, MemorySnapshot, namespace_for
 from .transcripts import ModelCall, Transcript
-from .world import Capture, ModelFactory, World
+from .world import Capture, ModelFactory, World, _digest
 
 __all__ = ["Branch", "BranchMismatch", "Checkpoint", "checkpoint", "fork", "ledger_hash",
            "replay"]
@@ -53,9 +52,7 @@ class BranchMismatch(RuntimeError):
 
 
 def _hash_rows(rows: Mapping[str, list[dict]]) -> str:
-    money = {name: table for name, table in rows.items() if name not in LINEAGE_TABLES}
-    body = json.dumps(money, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(body.encode()).hexdigest()
+    return _digest({name: table for name, table in rows.items() if name not in LINEAGE_TABLES})
 
 
 def ledger_hash(store: LedgerStore) -> str:
@@ -94,6 +91,13 @@ class Checkpoint:
         return self.capture.transcript
 
     @property
+    def lineage(self) -> frozenset[str]:
+        """This branch and every branch it descends from, as its ledger records them."""
+        rows = self.ledger_state.get(branch_meta.name, [])
+        return frozenset({self.branch_id} | {r["branch_id"] for r in rows}
+                         | {r["parent_branch_id"] for r in rows if r["parent_branch_id"]})
+
+    @property
     def event_cursor(self) -> int:
         return self.capture.state.event_cursor
 
@@ -121,9 +125,14 @@ def checkpoint(world: World, memory: BranchMemory | None = None) -> Checkpoint:
         raise BranchMismatch(f"{memory.namespace} is not the memory of "
                              f"{namespace_for(world.world_id, world.branch_id)}")
     capture = world.capture()  # refuses a non-empty queue
-    capture = dataclasses.replace(capture, memory=copy.deepcopy(capture.memory),
+    # The capture's SQLite copy is bound to this thread; a checkpoint is read from any.
+    sqlite_copy = sqlite3.connect(":memory:", check_same_thread=False)
+    capture.sqlite.backup(sqlite_copy)
+    capture.sqlite.close()
+    capture = dataclasses.replace(capture, sqlite=sqlite_copy,
+                                  memory=copy.deepcopy(capture.memory),
                                   agents=copy.deepcopy(capture.agents))
-    rows = copy.deepcopy(world.store.dump())
+    rows = world.store.dump()  # fresh dicts, shared with nothing
     return Checkpoint(
         world_id=world.world_id,
         branch_id=world.branch_id,
@@ -149,7 +158,7 @@ class Branch:
 
     world: World
     memory: BranchMemory | None
-    parent: str
+    parent: str | None
     checkpoint_round: int
     replay: bool = False
 
@@ -177,7 +186,7 @@ def _copy_ledger(rows: Mapping[str, list[dict]], store: LedgerStore) -> None:
             conn.execute(delete(table))
         for table in metadata.sorted_tables:
             if rows.get(table.name):
-                conn.execute(insert(table), copy.deepcopy(rows[table.name]))
+                conn.execute(insert(table), rows[table.name])
         if conn.dialect.name == "postgresql":  # explicit ids do not move the sequence
             top = conn.execute(select(func.max(postings.c.posting_id))).scalar()
             if top is not None:
@@ -185,15 +194,26 @@ def _copy_ledger(rows: Mapping[str, list[dict]], store: LedgerStore) -> None:
                                   "'posting_id'), :top)"), {"top": top})
 
 
-def _write_lineage(store: LedgerStore, cp: Checkpoint, branch_id: str, replay: bool) -> None:
-    """The child's ``branch_meta`` row, stamped in simulated time (a replay overwrites its
-    branch's row)."""
+def _write_lineage(store: LedgerStore, cp: Checkpoint, branch_id: str,
+                   replay: bool) -> tuple[str | None, int]:
+    """The child's ``branch_meta`` row, stamped in simulated time; returns its parent and
+    checkpoint round.
+
+    A replay of a branch whose row the checkpoint already holds keeps that row's parent and
+    round and only marks it a replay; a replay of a root branch has no parent.
+    """
     with store.engine.begin() as conn:
-        conn.execute(delete(branch_meta).where(branch_meta.c.branch_id == branch_id))
+        mine = branch_meta.c.branch_id == branch_id
+        row = conn.execute(select(branch_meta.c.parent_branch_id,
+                                  branch_meta.c.checkpoint_round).where(mine)).first()
+        if row is not None:
+            conn.execute(update(branch_meta).where(mine).values(replay=replay))
+            return row.parent_branch_id, row.checkpoint_round
+        parent = None if branch_id == cp.branch_id else cp.branch_id
         conn.execute(insert(branch_meta).values(
-            branch_id=branch_id, world_id=cp.world_id, parent_branch_id=cp.branch_id,
-            checkpoint_round=cp.round, replay=replay,
-            created_at=cp.created_at.replace(tzinfo=None)))
+            branch_id=branch_id, world_id=cp.world_id, parent_branch_id=parent,
+            checkpoint_round=cp.round, replay=replay, created_at=_naive(cp.created_at)))
+        return parent, cp.round
 
 
 async def fork(
@@ -205,20 +225,35 @@ async def fork(
     memory_client: Any = None,
     store: LedgerStore | None = None,
     coordinator: Any = None,
-    replay: bool = False,
+    scenario: Sequence[Mapping[str, Any]] = (),
 ) -> Branch:
     """A new, started branch restored from ``cp``; the parent is not touched.
 
     ``model(actor_id, world)`` gives each rebuilt agent its backend. With ``memory_client`` the
-    branch gets its own ``BranchMemory`` holding the checkpoint's pinned records.
+    branch gets its own ``BranchMemory`` holding the checkpoint's pinned records. ``scenario``
+    adds events after the checkpoint (one naming a ``branch`` only in that branch) to the ones
+    the checkpoint inherited. A fork that fails removes the platform file it created.
     """
-    if branch_id == cp.branch_id and not replay:
-        raise BranchMismatch(f"a fork needs its own id, not its parent's {branch_id!r}")
+    return await _fork(cp, branch_id, model=model, workdir=workdir, memory_client=memory_client,
+                       store=store, coordinator=coordinator, scenario=scenario, replay=False)
+
+
+async def _fork(cp: Checkpoint, branch_id: str, *, model: ModelFactory, workdir: str | Path,
+                memory_client: Any, store: LedgerStore | None, coordinator: Any,
+                scenario: Sequence[Mapping[str, Any]], replay: bool) -> Branch:
+    """``fork``, or with ``replay`` the same branch re-run under its own id."""
+    if not replay and branch_id in cp.lineage:
+        raise BranchMismatch(f"a fork needs its own id; {branch_id!r} is the checkpoint's "
+                             f"branch or an ancestor of it")
+    early = [e for e in scenario if e["round"] <= cp.round]
+    if early:
+        raise ValueError(f"a fork's own events come after the checkpoint (round {cp.round}): "
+                         f"{early}")
     world = World(cp.world_id, branch_id, cp.snapshot.model_copy(deep=True),
                   copy.deepcopy(list(cp.actors)), model=model, workdir=workdir,
-                  scenario=copy.deepcopy(list(cp.events)), store=store, seed=cp.seed,
+                  scenario=copy.deepcopy([*cp.events, *scenario]), store=store, seed=cp.seed,
                   epoch=cp.epoch, coordinator=coordinator)
-    await world.start()
+    await world.start()  # refuses an existing file; from here on the file is this fork's
     try:
         if set(world.agents) != set(cp.capture.agents):
             raise BranchMismatch(f"{branch_id}'s model actors differ from the checkpoint's")
@@ -230,7 +265,7 @@ async def fork(
             agents=copy.deepcopy(cp.capture.agents), models=fresh))
         world.committed_round = cp.round
         _copy_ledger(cp.ledger_state, world.store)
-        _write_lineage(world.store, cp, branch_id, replay)
+        parent, checkpoint_round = _write_lineage(world.store, cp, branch_id, replay)
         live = {**world.fingerprint(), "ledger": ledger_hash(world.store)}
         differs = sorted(k for k, v in cp.fingerprint().items() if live.get(k) != v)
         if differs:
@@ -243,8 +278,9 @@ async def fork(
                 cp.memory.restore_into(memory)
     except BaseException:
         await world.close()
+        world.db_path.unlink(missing_ok=True)
         raise
-    return Branch(world, memory, cp.branch_id, cp.round, replay)
+    return Branch(world, memory, parent, checkpoint_round, replay)
 
 
 async def replay(
@@ -254,17 +290,22 @@ async def replay(
     workdir: str | Path,
     rounds: int | None = None,
     store: LedgerStore | None = None,
+    coordinator: Any = None,
+    memory_client: Any = None,
+    scenario: Sequence[Mapping[str, Any]] = (),
 ) -> Branch:
     """Re-run ``transcript``'s branch from ``cp`` with recorded answers only.
 
     The transcript must begin with the checkpoint's calls; ``rounds`` defaults to every round it
-    recorded after the checkpoint. The returned branch has run them and is labelled a replay.
+    recorded after the checkpoint. ``coordinator``, ``memory_client`` and ``scenario`` are the
+    branch's own, as it was forked. The returned branch has run and is labelled a replay.
     """
     start = cp.transcript_cursor
-    if transcript.world_id != cp.world_id or transcript.calls()[:start] != cp.transcript_calls:
+    calls = transcript.calls()
+    if transcript.world_id != cp.world_id or calls[:start] != cp.transcript_calls:
         raise BranchMismatch(f"{transcript.namespace} does not descend from {cp.memory_ns} "
                              f"at round {cp.round}")
-    later = transcript.calls(start)
+    later = calls[start:]
     if rounds is None:
         rounds = later[-1].round - cp.round if later else 0
 
@@ -273,8 +314,9 @@ async def replay(
             actor_id, lambda: world.clock.round,
             lambda: world.agents[actor_id].observation.obs_hash, start=start)
 
-    branch = await fork(cp, transcript.branch_id, model=model, workdir=workdir, store=store,
-                        replay=True)
+    branch = await _fork(cp, transcript.branch_id, model=model, workdir=workdir, store=store,
+                         coordinator=coordinator, memory_client=memory_client,
+                         scenario=scenario, replay=True)
     try:
         await branch.world.run(rounds)
     except BaseException:

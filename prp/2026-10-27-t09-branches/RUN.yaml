@@ -1,6 +1,6 @@
 task: T09 · Branches with isolated memory and exact replay
 tier: Brief
-reviewer_pack: none (node run, unattended)
+reviewer_pack: none
 scope_source: briefs/T09.md (REQ) + design/modules/agent-world/fixtures/branch-isolation.json (REQ)
 prove: one fresh-eyes pass in the author's context (feasibility, failure-modes, simplicity); panel and reviewer sim skipped, because this is the Brief tier and no reviewer is present
-publish: not published; publishing needs the owner's tap
+publish: not published
