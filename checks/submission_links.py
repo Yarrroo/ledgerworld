@@ -104,12 +104,13 @@ def iso_seconds(value: str) -> int | None:
 
 def page_seconds(html: str) -> int | None:
     """A duration a page states about itself, or None; never an estimate."""
-    found = re.search(r'"lengthSeconds"\s*:\s*"(\d+)"', html)
-    if found:
-        return int(found[1])
     found = re.search(r'itemprop="duration"\s+content="(PT[^"]+)"', html)
     if found:
         return iso_seconds(found[1])
+    # Only the player's own videoDetails: recommendations carry lengthSeconds of other videos.
+    found = re.search(r'"videoDetails"\s*:\s*\{[^{}]*?"lengthSeconds"\s*:\s*"(\d+)"', html)
+    if found:
+        return int(found[1])
     found = re.search(r'property="(?:og:)?video:duration"\s+content="(\d+)"', html)
     return int(found[1]) if found else None
 

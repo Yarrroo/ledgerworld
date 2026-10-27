@@ -182,3 +182,8 @@ def test_cli_without_a_mode_is_bad_usage():
                             capture_output=True, text=True, check=False, timeout=10)
     assert result.returncode == 2
     assert "--video" in result.stderr
+
+
+def test_page_length_is_the_videos_own_not_a_recommendations():
+    page = (FIXTURES / "youtube_watch_with_recommendation.html").read_text(encoding="utf-8")
+    assert submission_links.page_seconds(page) == 253
