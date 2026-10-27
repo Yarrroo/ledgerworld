@@ -55,9 +55,12 @@ with an uncertain outcome are queried before any retry, then reconciled into the
 - **Fake provider:** local tests use FakeTransport. Its receipts are not Airwallex sandbox receipts.
   A sandbox receipt does not prove that any actor used a live model. No production money moves.
 
-These are supported paths, not claims that a particular sandbox run succeeded. No sandbox receipt
-is committed here. Record the actual provider mode, connected-account mode, request IDs, provider
-IDs and reconciliation result from the recording's own run.
+These are supported paths, not claims that every sandbox run succeeds. One sandbox receipt is
+committed as evidence: [docs/evidence/sandbox-receipt.json](evidence/sandbox-receipt.json), run
+`demo-20261027T190757Z-9674` on 2026-10-27, Mode B, scripted model, 3/3 checkpoints live
+([what it is](evidence/README.md)). It is the command-line demo store's run, not the public API
+deployment's. For the recording, record the provider mode, connected-account mode, request IDs,
+provider IDs and reconciliation result from that recording's own run.
 
 ## Testing instructions
 

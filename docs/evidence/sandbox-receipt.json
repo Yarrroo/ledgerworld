@@ -1,0 +1,341 @@
+{
+ "run_id": "demo-20261027T190757Z-9674",
+ "started_at": "2026-10-27T19:07:57Z",
+ "finished_at": "2026-10-27T19:08:23Z",
+ "mode": "sandbox",
+ "connected": false,
+ "model": "scripted",
+ "seed": 101,
+ "beats": [
+  "state",
+  "world",
+  "shock",
+  "fork",
+  "break",
+  "execute",
+  "reconcile"
+ ],
+ "setup": [],
+ "checkpoints": {
+  "fresh_branch": {
+   "branch_id": "demo-20261027T190757Z-9674-shock-integrated",
+   "created_at": "2026-10-27T19:08:13Z",
+   "rounds": 16,
+   "model_calls": 80,
+   "parent_snapshot_id": "demo-world",
+   "cached": false,
+   "mode": "sandbox"
+  },
+  "advance_reconciled": {
+   "leg_id": "4a5a1f998c49-1-advance",
+   "request_id": "4a5a1f998c49-1-advance",
+   "provider_id": "e7c4579c-9388-4191-93ac-67d80bc435ae",
+   "label": "advance inflow (sandbox simulation)",
+   "status": "SETTLED",
+   "journal_id": "j-adv-a-disburse",
+   "reconciled": true,
+   "mode": "sandbox",
+   "at": "2026-10-27T19:08:22Z"
+  },
+  "payout_reconciled": {
+   "leg_id": "4a5a1f998c49-2-payout",
+   "request_id": "4a5a1f998c49-2-payout",
+   "provider_id": "3e8e7a6d-620c-466b-98f9-e76c101ce8a5",
+   "label": "payout from the operator account",
+   "status": "PAID",
+   "journal_id": "j-4a5a1f998c49-2-payout",
+   "reconciled": true,
+   "mode": "sandbox",
+   "at": "2026-10-27T19:08:23Z"
+  }
+ },
+ "incidents_open": 0,
+ "story": {
+  "state": {
+   "snapshot_id": "demo-world",
+   "as_of": "2026-01-01T00:00:00+00:00",
+   "accounts": [
+    {
+     "id": "treasury/operating",
+     "settled": 7000000,
+     "reserved": 5000000
+    },
+    {
+     "id": "lender/operating",
+     "settled": 4500000,
+     "reserved": 1000000
+    },
+    {
+     "id": "lender/venue",
+     "settled": 1500000,
+     "reserved": 0
+    },
+    {
+     "id": "borrower-b/operating",
+     "settled": 900000,
+     "reserved": 0
+    },
+    {
+     "id": "borrower-c/operating",
+     "settled": 400000,
+     "reserved": 0
+    }
+   ],
+   "floor": 3000000,
+   "obligations": [
+    {
+     "id": "payroll-1",
+     "amount": 5000000,
+     "due_at": "2026-01-02T16:00:00+00:00"
+    }
+   ],
+   "lender_K_p": 4200000
+  },
+  "world": {
+   "actors": [
+    {
+     "actor_id": "treasury",
+     "name": "Northwind Parts treasury (synthetic)",
+     "on_model": true
+    },
+    {
+     "actor_id": "lender",
+     "name": "Harbourline Credit pool (synthetic)",
+     "on_model": true
+    },
+    {
+     "actor_id": "borrower-b",
+     "name": "Bellfield Kitchens (synthetic)",
+     "on_model": true
+    },
+    {
+     "actor_id": "borrower-c",
+     "name": "Cobalt Courier Co. (synthetic)",
+     "on_model": true
+    },
+    {
+     "actor_id": "payroll",
+     "name": "Northwind payroll bureau (synthetic)",
+     "on_model": false
+    },
+    {
+     "actor_id": "venue",
+     "name": "Quayside Exchange (synthetic)",
+     "on_model": true
+    },
+    {
+     "actor_id": "market-maker",
+     "name": "Tidemark Quotes (synthetic)",
+     "on_model": false
+    },
+    {
+     "actor_id": "feed",
+     "name": "Ledger Street Wire (synthetic)",
+     "on_model": true
+    }
+   ],
+   "focus": {
+    "actor_id": "treasury",
+    "objective": "meet every obligation and keep the 30,000.00 reserve floor at least cost",
+    "tools": [
+     "request_advance",
+     "convert",
+     "pay",
+     "defer",
+     "no_action"
+    ],
+    "sees": [
+     "own_accounts",
+     "own_contracts",
+     "messages_to_me",
+     "public_posts",
+     "public_prices",
+     "memory"
+    ]
+   }
+  },
+  "shock": {
+   "events": [
+    {
+     "round": 3,
+     "kind": "delay_receipt",
+     "flow_id": "receivable-1",
+     "delay_h": 240,
+     "id": "delay-receivable-1"
+    },
+    {
+     "round": 3,
+     "kind": "public_post",
+     "post_id": "p-r3-1",
+     "author": "feed",
+     "text": "Unconfirmed: the exchange venue may pause withdrawals this week."
+    }
+   ],
+   "checkpoint": {
+    "branch": "base",
+    "round": 2,
+    "snapshot_id": "demo-world"
+   }
+  },
+  "fork": {
+   "policies": [
+    {
+     "id": "no-action",
+     "branch_id": "demo-20261027T190757Z-9674-shock-no-action",
+     "feasible": false,
+     "actions": [],
+     "lender_K_p_by_round": {
+      "3": 4200000,
+      "4": 4200000,
+      "5": 3000000,
+      "6": 3000000,
+      "7": 3000000,
+      "8": 3000000,
+      "9": 3000000,
+      "10": 3000000,
+      "11": 3000000,
+      "12": 3000000,
+      "13": 3000000,
+      "14": 3000000,
+      "15": 3000000,
+      "16": 3000000,
+      "17": 3000000,
+      "18": 3000000
+     },
+     "treasury_model_calls": 0
+    },
+    {
+     "id": "fixed-reserve",
+     "branch_id": "demo-20261027T190757Z-9674-shock-fixed-reserve",
+     "feasible": false,
+     "actions": [],
+     "lender_K_p_by_round": {
+      "3": 4200000,
+      "4": 4200000,
+      "5": 3000000,
+      "6": 3000000,
+      "7": 3000000,
+      "8": 3000000,
+      "9": 3000000,
+      "10": 3000000,
+      "11": 3000000,
+      "12": 3000000,
+      "13": 3000000,
+      "14": 3000000,
+      "15": 3000000,
+      "16": 3000000,
+      "17": 3000000,
+      "18": 3000000
+     },
+     "treasury_model_calls": 0
+    },
+    {
+     "id": "integrated",
+     "branch_id": "demo-20261027T190757Z-9674-shock-integrated",
+     "feasible": true,
+     "actions": [
+      {
+       "round": 3,
+       "type": "request_advance",
+       "facility": "adv-a",
+       "amount_minor": 1000000
+      }
+     ],
+     "lender_K_p_by_round": {
+      "3": 3200000,
+      "4": 3200000,
+      "5": 2000000,
+      "6": 2000000,
+      "7": 2000000,
+      "8": 2000000,
+      "9": 2000000,
+      "10": 2000000,
+      "11": 2000000,
+      "12": 2000000,
+      "13": 2000000,
+      "14": 2000000,
+      "15": 2000000,
+      "16": 2000000,
+      "17": 2000000,
+      "18": 2000000
+     },
+     "treasury_model_calls": 0
+    }
+   ],
+   "ranking": [
+    "integrated",
+    "no-action",
+    "fixed-reserve"
+   ],
+   "selected": "integrated",
+   "status": "selected",
+   "label": "integrated keeps every obligation and the floor on 1 scenario; a decision, not an approval",
+   "escalation": null
+  },
+  "break": [
+   {
+    "policy": "no-action",
+    "floor": {
+     "min_cash": 2000000,
+     "at_h": 40,
+     "short_minor": 1000000,
+     "breach_h": [
+      40,
+      48
+     ]
+    },
+    "obligations": []
+   },
+   {
+    "policy": "fixed-reserve",
+    "floor": {
+     "min_cash": 2000000,
+     "at_h": 40,
+     "short_minor": 1000000,
+     "breach_h": [
+      40,
+      48
+     ]
+    },
+    "obligations": []
+   }
+  ],
+  "execute": {
+   "simulated_now": "2026-01-01T12:00:00+00:00",
+   "observed_snapshot_id": "obs-demo-r3-demo-20261027T190757Z-9674",
+   "leg_mode": "B",
+   "approval": {
+    "approval_id": "apr-4a5a1f998c49",
+    "plan_hash": "4a5a1f998c49fda5b5490dc16877c94c1aa3bd3c9e6e1b3c95f29bdc2c250047",
+    "legs": [
+     {
+      "index": 1,
+      "kind": "advance",
+      "amount": {
+       "minor": 1000000,
+       "currency": "USD"
+      },
+      "source": "lender/operating",
+      "counterparty": "treasury/operating",
+      "after": [],
+      "facility_id": "adv-a"
+     },
+     {
+      "index": 2,
+      "kind": "payout",
+      "amount": {
+       "minor": 5000000,
+       "currency": "USD"
+      },
+      "source": "treasury/operating",
+      "counterparty": "f938575d-ff77-4aca-bcd7-5f4e0b15b5b3",
+      "funded_by": "reservation:payroll-hold",
+      "after": [
+       1
+      ]
+     }
+    ]
+   }
+  }
+ }
+}
