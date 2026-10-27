@@ -43,7 +43,11 @@
         <p v-if="forkWhy" id="fork-why" class="lw-live__note" data-test="fork-why">{{ forkWhy }}</p>
         <p v-if="!compareTarget" id="compare-why" class="lw-live__note" data-test="compare-why">{{ compareWhy }}</p>
         <p v-if="forked" class="lw-live__note" role="status" data-test="forked">
-          Fork accepted at round {{ forked.round }}: {{ forked.branch_ids.join(', ') }}
+          Fork accepted at round {{ forked.round }}: {{ forked.branch_ids.join(', ') }} ·
+          {{ forked.done ? 'branches and cash paths loaded' : 'running; its branches appear here when it finishes' }}
+        </p>
+        <p v-if="forked?.lag" class="lw-live__note" data-test="fork-lag">
+          Fork progress not read: {{ forked.lag }}; still checking
         </p>
         <p v-if="forkError" class="lw-alert" role="alert" data-test="fork-error">{{ forkError }}</p>
       </section>
@@ -106,7 +110,8 @@
  * branch's first cash point plus its `t_hours`, and a cash point matches only at that instant.
  * Pause stops local playback; the job keeps running and keeps being polled. Fork and the
  * read-only interview carry the selected round and need the demo token, which lives in this
- * component's memory only — never storage, the URL, the export or a log. No POST is retried.
+ * component's memory only — never storage, the URL, the export or a log. An accepted fork is
+ * followed until its branches arrive or it fails. No POST is retried.
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
@@ -311,6 +316,7 @@ watch(() => phase.value.running, (running) => {
 onBeforeUnmount(() => {
   clearInterval(player)
   clearInterval(poller)
+  clearTimeout(forkTimer)
 })
 
 // --------------------------------------------------------------------- fork, interview
@@ -329,6 +335,7 @@ watch(runId, () => {
   actor.value = null
   forked.value = answer.value = null
   forkError.value = interviewError.value = ''
+  follow()
   pause()
   paused.value = false
   reload()
@@ -356,13 +363,54 @@ async function fork () {
       method: 'POST', token: token.value, body: { checkpoint_round: round, policies: POLICIES }
     })
     if (run !== runId.value) return // answered for a run no longer on screen
-    forked.value = { round, branch_ids: accepted?.branch_ids ?? [] }
+    forked.value = { round, branch_ids: accepted?.branch_ids ?? [], decided: false, done: false, lag: '' }
     reload() // the new branches and their cash paths
+    follow()
   } catch (error) {
     if (run === runId.value) forkError.value = `Fork not accepted: ${error.message}`
   } finally {
     forking.value = false
   }
+}
+
+// An accepted fork is its own job, run after the run is done: the run's status never moves, so
+// the fork is followed on its own. Its decisions are read until they leave `pending` (a failed or
+// lost worker answers 409 fork_failed), then the run until every accepted branch has its branch
+// and cash path. Only reads are repeated; an unreachable API is said and checked again.
+let forkTimer = null
+
+function follow () {
+  clearTimeout(forkTimer)
+  forkTimer = forked.value && !forked.value.done ? setTimeout(checkFork, POLL_MS) : null
+}
+
+async function checkFork () {
+  const f = forked.value
+  if (!f) return
+  try {
+    if (!f.decided) {
+      const decided = await request(`/decisions/${encodeURIComponent(runId.value)}`)
+      if (forked.value !== f) return // another fork or run took the screen
+      f.decided = decided.status !== 'pending'
+    }
+    if (f.decided) {
+      await poll()
+      if (forked.value !== f) return
+      const has = (list, id) => (list ?? []).some((x) => x.branch_id === id)
+      f.done = currentRun.value &&
+        f.branch_ids.every((id) => has(body.value.branches, id) && has(body.value.cash_paths, id))
+    }
+    f.lag = ''
+  } catch (error) {
+    if (forked.value !== f) return
+    if (error.status === 0 || error.status >= 500) {
+      f.lag = error.message
+    } else {
+      forked.value = null
+      forkError.value = `Fork failed: ${error.message}`
+    }
+  }
+  follow()
 }
 
 const interviewWhy = computed(() => {
