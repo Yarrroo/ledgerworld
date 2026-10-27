@@ -81,6 +81,11 @@ def test_deploy_checks_current_freeze_after_build_before_activation():
     assert step["env"]["FREEZE_READ_TOKEN"] == "${{ secrets.LEDGERWORLD_FREEZE_READ_TOKEN }}"
 
 
+def test_missing_freeze_reader_is_rejected_before_image_build():
+    shell = workflow("deploy.yml")["jobs"]["deploy"]["steps"][-1]["run"]
+    assert shell.index('${FREEZE_READ_TOKEN:?') < shell.index(" build\n")
+
+
 @pytest.mark.parametrize("value,allowed", [("0", True), ("1", False), ("", False), (None, False)])
 def test_deploy_live_freeze_refuses_changes_after_admission(monkeypatch, value, allowed):
     monkeypatch.setenv("FREEZE_READ_TOKEN", "offline-placeholder")

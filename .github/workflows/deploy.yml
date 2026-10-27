@@ -69,6 +69,7 @@ jobs:
           FREEZE_READ_TOKEN: ${{ secrets.LEDGERWORLD_FREEZE_READ_TOKEN }}
         run: |
           set -euo pipefail
+          : "${FREEZE_READ_TOKEN:?Deployment refused: freeze reader is not configured}"
           docker compose --project-name ledgerworld -f deploy/compose.yml \
             --env-file "$LEDGERWORLD_ENV_FILE" build
           python3 - <<'PY'
