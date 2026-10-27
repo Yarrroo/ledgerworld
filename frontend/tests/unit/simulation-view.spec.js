@@ -432,6 +432,16 @@ describe('review findings, each pinned', () => {
     expect(exported.cash.every((c) => c.replay === true)).toBe(true)
   })
 
+  it('an export whose base branch carries no replay flag never claims a fresh run', async () => {
+    const body = run()
+    delete body.branches[0].replay
+    const { wrapper: w } = await open(body)
+    const exported = JSON.parse(decodeURIComponent(w.get('[data-test="export"]').attributes('href').split(',').slice(1).join(',')))
+    expect(exported.round_label).toBe('Provenance not loaded')
+    expect(exported.label).toBe('Provenance not loaded')
+    expect(exported.cash[0]).toMatchObject({ replay: null, label: 'Provenance not loaded' })
+  })
+
   it('a reload asked for while a poll is in flight shows as loading, not as a quiet poll', async () => {
     vi.useFakeTimers()
     const body = run()

@@ -414,12 +414,16 @@ const exportHref = computed(() => {
   if (!current.value) return null
   const b = shellReading.value.body
   const meta = new Map((b.branches ?? []).map((x) => [x.branch_id, x]))
+  const replayOf = (id) => {
+    const replay = meta.get(id)?.replay
+    return typeof replay === 'boolean' ? replay : null
+  }
   const cash = (b.cash_paths ?? []).map((p) => {
     const branch = meta.get(p.branch_id)
-    const replay = typeof branch?.replay === 'boolean' ? branch.replay : null
+    const replay = replayOf(p.branch_id)
     return {
       branch_id: p.branch_id,
-      parent_branch_id: branch ? branch.parent_branch_id : null,
+      parent_branch_id: branch?.parent_branch_id ?? null,
       checkpoint_round: branch?.checkpoint_round ?? null,
       policy: branch?.policy ?? null,
       replay,
@@ -428,7 +432,7 @@ const exportHref = computed(() => {
       value: p.points.find((x) => Date.parse(x.t) === roundAt.value)?.value ?? null
     }
   })
-  const roundLabel = provenance(Boolean(base.value.replay))
+  const roundLabel = provenance(replayOf(base.value.branch_id))
   const labels = [...new Set([roundLabel, ...cash.map((c) => c.label)])]
   const doc = {
     label: labels.length === 1 ? labels[0] : `Mixed: ${labels.join(' + ')}`,
