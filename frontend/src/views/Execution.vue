@@ -258,6 +258,12 @@ const opener = shallowRef(null)
 const heading = shallowRef(null)
 const now = shallowRef(Date.now())
 let clock = null
+// The screen is gone: a late answer, success or failure, applies nothing to it and starts no
+// timer; an unknown outcome is still held in tab memory, so coming back restores its block. A
+// POST is never aborted (its effect stands either way); the polled status read is, since
+// nothing will show it.
+let disposed = false
+const reads = new AbortController()
 
 /** Why nothing can be approved from this screen right now, or '' when it can. */
 const authority = computed(() => {
@@ -350,6 +356,7 @@ async function confirmApproval () {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { run_id: state.body.run_id, policy: policy.value }
     })
+    if (disposed) return
     flow.approval = answer.approval
     flow.serverAt = Date.parse(answer.as_of)
     flow.receivedAt = Date.now()
@@ -360,8 +367,8 @@ async function confirmApproval () {
   } catch (error) {
     if (unanswered(error)) {
       hold(runId, { blocked: APPROVAL_UNKNOWN })
-      if (here(runId)) flow.blocked = APPROVAL_UNKNOWN
-    } else flow.message = refusal(error)
+      if (!disposed && here(runId)) flow.blocked = APPROVAL_UNKNOWN
+    } else if (!disposed) flow.message = refusal(error)
   } finally {
     flow.submitting = false
   }
@@ -379,18 +386,21 @@ async function executePlan () {
       body: { approval_id: id }
     })
     hold(runId, { followedId: answer.execution_id })
+    if (disposed) return
     if (here(runId)) {
       flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
       follow(answer.execution_id)
     }
   } catch (error) {
     if (!unanswered(error)) {
+      if (disposed) return
       flow.submitting = false
       flow.invalid = refusal(error)
       return
     }
     const blocked = `Execution outcome unknown; reading its status by approval id ${id}. Do not send again.`
     hold(runId, { blocked, followedId: id, readBy: id })
+    if (disposed) return
     if (here(runId)) {
       flow.blocked = blocked
       follow(id)
@@ -424,6 +434,7 @@ const moving = (body) => !body.legs.length ||
  */
 function schedule () {
   clearTimeout(timer)
+  if (disposed) return
   const body = execution.value
   const keep = followed ? (!body || moving(body)) : Boolean(body && moving(body))
   timer = keep ? setTimeout(poll, POLL_MS) : null
@@ -437,15 +448,16 @@ function answered (generation) {
 /** Read an execution's state by id; out-of-order or other-execution answers are dropped. */
 async function poll () {
   const id = activeId.value
-  if (!id) return
+  if (!id || disposed) return
   const ticket = guard.issue()
   try {
-    const body = await request(`/executions/${enc(id)}`)
-    if (!guard.accept(ticket, id)) return
+    const body = await request(`/executions/${enc(id)}`, { signal: reads.signal })
+    if (disposed || !guard.accept(ticket, id)) return
     execution.value = body
     notFound.value = false
     answered(ticket.generation)
   } catch (error) {
+    if (disposed) return
     if (error.status === 404) {
       if (!guard.accept(ticket, id)) return
       execution.value = null // the server has no record: no earlier reading stands beside that
@@ -528,6 +540,8 @@ watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
 })
 
 onUnmounted(() => {
+  disposed = true
+  reads.abort()
   clearTimeout(timer)
   clearInterval(clock)
 })
