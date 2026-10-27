@@ -327,7 +327,8 @@ def connect(mode: str, connected_account: str | None) -> tuple[Any, str]:
     return client, leg_mode
 
 
-def fund_wallet(client: Any, plan: dict) -> list[dict]:
+def fund_wallet(client: Any, plan: dict, *, setup: list[dict] | None = None,
+                run_id: str | None = None) -> list[dict]:
     """Mode B, sandbox: top the platform wallet up to the payouts, one setup deposit for each
     currency it is short in, into that currency's Global Account."""
     need: dict[str, int] = defaultdict(int)
@@ -340,17 +341,30 @@ def fund_wallet(client: Any, plan: dict) -> list[dict]:
     if not short:
         return []
     from ..connectors.airwallex.client import global_accounts_by_currency
+    from ..connectors.airwallex.errors import ProviderError
 
     accounts = global_accounts_by_currency(client.global_accounts())
-    setup = []
+    setup = [] if setup is None else setup
     for currency, minor in short.items():
         if currency not in accounts:
             raise DemoFailed(f"no {currency} Global Account to fund the sandbox wallet from")
         amount = Money(minor=minor, currency=currency)
-        obj = client.simulate_deposit(amount=amount, global_account_id=accounts[currency],
-                                      reference=SETUP_LABEL)
-        setup.append({"kind": "wallet_funding", "label": SETUP_LABEL,
-                      "provider_id": obj.provider_id, "amount": to_provider_decimal(amount)})
+        reference = f"{SETUP_LABEL} {run_id} {currency}" if run_id else SETUP_LABEL
+        entry = {"kind": "wallet_funding", "label": SETUP_LABEL,
+                 "provider_id": None, "amount": to_provider_decimal(amount),
+                 "status": "UNKNOWN", "reference": reference}
+        setup.append(entry)  # the attempt survives even when the POST's answer is lost
+        try:
+            obj = client.simulate_deposit(amount=amount, global_account_id=accounts[currency],
+                                          reference=reference)
+        except ProviderError:
+            entry["status"] = "FAILED"
+            raise
+        entry.update(provider_id=obj.provider_id, status=obj.status)
+        obj = client.wait_for_deposit(obj.provider_id)
+        entry["status"] = obj.status
+        if obj.status != "SETTLED":
+            raise DemoFailed(f"sandbox wallet funding {obj.provider_id} is {obj.status}")
     return setup
 
 
@@ -390,7 +404,7 @@ def execute(selected: str, mode: str, *, client: Any, leg_mode: str, run_id: str
         raise DemoFailed(f"{selected} proposes nothing on {observed.snapshot_id}")
     into.update(connected=leg_mode == "A", setup=[], legs=[], incidents_open=0)
     if mode == "sandbox" and leg_mode == "B":
-        into["setup"] = fund_wallet(client, plan)
+        fund_wallet(client, plan, setup=into["setup"], run_id=run_id)
     store = LedgerStore("sqlite://")
     from_snapshot(store, observed)
     gateway = Gateway(store, client, mode=mode, leg_mode=leg_mode, beneficiaries=[beneficiary],

@@ -375,7 +375,8 @@ class ContractPass:
         deposit = self.client.simulate_deposit(
             amount=ADVANCE, global_account_id=self._need("global_account"),
             reference=f"advance inflow (sandbox simulation) canon-{self.run_id}")
-        self._observe()
+        self._observe()  # compare this create, not the final page of unrelated deposits
+        deposit = self.client.wait_for_deposit(deposit.provider_id)
         delta = self._usd() - before
         ok = deposit.status == "SETTLED" and delta == ADVANCE.minor
         return ok, deposit.provider_id, (
@@ -409,7 +410,10 @@ def diff(sandbox: ContractPass, fake: ContractPass) -> tuple[list[str], list[str
         if real.http != double.http:
             failing.append(f"{check.name}: http sandbox {real.http}, fake {double.http}")
         # A status only one side carries is a key difference, reported below.
-        if None not in (real.status, double.status) and real.status != double.status:
+        initial_deposit = (check.name == "advance" and sandbox.mode == fake.mode == "B"
+                           and {real.status, double.status} <= {"PENDING", "SETTLED"})
+        if None not in (real.status, double.status) and real.status != double.status \
+                and not initial_deposit:
             failing.append(f"{check.name}: status sandbox {real.status}, fake {double.status}")
         if invented := sorted(double.keys - real.keys):
             failing.append(f"{check.name}: only the fake returns {', '.join(invented)}")

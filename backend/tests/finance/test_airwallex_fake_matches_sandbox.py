@@ -112,7 +112,10 @@ def test_a_global_account_carries_no_currency_key():
     assert accounts and all("currency" not in account for account in accounts)
     usd = global_accounts_by_currency(client.global_accounts())["USD"]
     deposit = client.simulate_deposit(amount=USD_1, global_account_id=usd)
-    assert deposit.currency == "USD"
+    assert (deposit.status, deposit.currency) == ("PENDING", "USD")
+    assert transport.available("USD") == 10000000
+    deposit = client.wait_for_deposit(deposit.provider_id)
+    assert (deposit.status, deposit.currency) == ("SETTLED", "USD")
     assert transport.available("USD") == 10000000 + 100
 
 
@@ -124,7 +127,10 @@ def test_a_deposit_lands_in_the_currency_the_client_reads_off_the_account(accoun
     transport, _, client = fake()
     transport.global_accounts.append(account)
     deposit = client.simulate_deposit(amount=EUR_100, global_account_id="ga-eur-1")
-    assert (deposit.currency, transport.available("EUR")) == ("EUR", 10000)
+    assert (deposit.status, deposit.currency, transport.available("EUR")) == ("PENDING", "EUR", 0)
+    deposit = client.wait_for_deposit(deposit.provider_id)
+    assert (deposit.status, deposit.currency, transport.available("EUR")) == (
+        "SETTLED", "EUR", 10000)
 
 
 def test_a_replayed_charge_keeps_the_documented_code():

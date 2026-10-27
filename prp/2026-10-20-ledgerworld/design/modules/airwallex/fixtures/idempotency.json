@@ -27,7 +27,7 @@
   {"id": "conversion-replay",
    "calls": [
     {"op": "create_conversion", "request_id": "leg-fx-1", "result": {"http": 201, "status": "SETTLED"}},
-    {"op": "create_conversion", "request_id": "leg-fx-1", "result": {"http": 400, "code": "invalid_argument", "note": "the sandbox (run 2): message \"request_id '…' has been used in the past\"; the fake answers the same"}}
+    {"op": "create_conversion", "request_id": "leg-fx-1", "result": {"http": 400, "code": "invalid_argument", "note": "sandbox rejects a reused request_id with a has been used message"}}
    ],
    "then": {"op": "find_conversion(request_id=leg-fx-1)", "returns": {"count": 1}},
    "movements": 1},

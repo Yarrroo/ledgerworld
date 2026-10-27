@@ -227,7 +227,11 @@ In a policy branch the policy drives the treasury and the treasury model is not 
   in the sandbox by default**; Airwallex enables them on request.
 - [FACT] Deposit simulation (sandbox only): `POST /api/v1/simulation/deposit/create` with
   `{amount, global_account_id, reference?, status?}`; `status` defaults to `SETTLED` and a settled
-  deposit adds to `balances/current`. It needs a Global Account in the advance currency
+  deposit adds to `balances/current`. The create can answer `PENDING` while settlement is
+  asynchronous; confirm `SETTLED` via `GET /api/v1/deposits?page_num=0&page_size=N` (both page
+  parameters required), following pagination and matching the deposit id. A bounded wait that
+  cannot confirm settlement never books an advance or releases dependent legs. It needs a Global
+  Account in the advance currency
   (`GET /api/v1/global_accounts`). The `deposits/{id}/settle|reverse` endpoints are for direct
   debits and are not used.
 - [FACT] Transfer status simulation: `POST /api/v1/simulation/transfers/{id}/transition`

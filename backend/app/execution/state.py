@@ -29,7 +29,7 @@ if not ALLOWED.isdisjoint(FORBIDDEN) or {s for pair in ALLOWED for s in pair} - 
 
 # Provider statuses a `GET` reports (system brief §10): terminal success, terminal failure.
 SETTLED_STATUSES = frozenset({"PAID", "SETTLED"})
-FAILED_STATUSES = frozenset({"FAILED", "CANCELLED"})
+FAILED_STATUSES = frozenset({"FAILED", "CANCELLED", "REVERSED"})
 
 
 class IllegalTransition(ValueError):

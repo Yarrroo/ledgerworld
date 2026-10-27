@@ -311,7 +311,11 @@ class _Client:
 
     def simulate_deposit(self, *, amount, global_account_id, reference):
         self.deposits.append((amount.currency, amount.minor, global_account_id, reference))
-        return SimpleNamespace(provider_id=f"dep-{amount.currency}")
+        return SimpleNamespace(provider_id=f"dep-{amount.currency}", status="PENDING")
+
+    def wait_for_deposit(self, provider_id):
+        self.moves.append(provider_id)
+        return SimpleNamespace(provider_id=provider_id, status="SETTLED")
 
 
 @pytest.mark.parametrize(("status", "moves"), [
@@ -334,3 +338,4 @@ def test_the_wallet_is_funded_per_currency_and_listed_as_setup():
     assert [(s["provider_id"], s["amount"]) for s in setup] == [
         ("dep-EUR", "3000.00"), ("dep-USD", "30000.00")]
     assert all(s["label"] == run.SETUP_LABEL for s in setup)
+    assert client.moves == ["dep-EUR", "dep-USD"]

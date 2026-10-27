@@ -17,6 +17,8 @@ What it pins, because the gateway's tests rely on it:
 - a quote answers 200 and ends at `valid_to_at`; a Global Account carries no `currency` key, its
   currencies are in `required_features` / `supported_features`;
 - request amounts are decimal strings, the deposit simulation's `amount` a JSON number.
+- deposit create answers PENDING; its paginated list observes SETTLED and credits once
+  (an explicitly requested PENDING deposit stays pending).
 
 Scenarios arm the next request(s) (`times`, None for every one): `happy`, `timeout_after_accept`
 (stored, then no answer), `timeout_before_send` (nothing stored), `insufficient_funds`,
@@ -288,6 +290,24 @@ class FakeTransport:
                 self._need_connected()
                 return 200, {"items": [{"id": CONNECTED_ACCOUNT, "status": "ACTIVE"}],
                              "has_more": False}
+            if route == "/api/v1/deposits":
+                try:
+                    page, size = int(query["page_num"]), int(query["page_size"])
+                    if page < 0 or not 1 <= size <= 100:
+                        raise ValueError
+                except (KeyError, ValueError):
+                    raise _Refuse(400, "invalid_argument",
+                                  "page_num and page_size are required") from None
+                for deposit in self.objects["deposits"].values():
+                    if deposit["status"] == "PENDING" and deposit["_settle_on_lookup"]:
+                        deposit["status"] = "SETTLED"
+                        self._credit(PLATFORM, deposit["currency"],
+                                     _to_minor(Decimal(deposit["amount"]),
+                                               deposit["currency"], None))
+                items = list(self.objects["deposits"].values())
+                start = page * size
+                return 200, {"items": [self._public(d) for d in items[start:start + size]],
+                             "has_more": start + size < len(items)}
             for collection, base in COLLECTION_PATHS.items():
                 if route != base and not route.startswith(f"{base}/"):
                     continue
@@ -490,15 +510,14 @@ class FakeTransport:
         status = body.get("status") or "SETTLED"
         if status not in ("SETTLED", "PENDING"):
             raise _Refuse(400, "invalid_argument", "status is SETTLED or PENDING", "status")
-        if status == "SETTLED":
-            self._credit(PLATFORM, currency, minor)
         self._serial += 1
-        deposit = {"id": f"deposit-{self._serial}", "request_id": None, "status": status,
+        deposit = {"id": f"deposit-{self._serial}", "request_id": None, "status": "PENDING",
+                   "_settle_on_lookup": status == "SETTLED",
                    "global_account_id": account["id"], "amount": _number(minor, currency),
                    "currency": currency, "reference": body.get("reference"),
                    "created_at": _iso(self.clock())}
         self.objects["deposits"][deposit["id"]] = deposit
-        return dict(deposit)
+        return self._public(deposit)
 
     def _transition(self, transfer_id: str, body: Mapping) -> dict:
         transfer = self._get("transfers", transfer_id)

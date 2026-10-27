@@ -11,11 +11,9 @@ from decimal import Decimal
 from sqlalchemy import insert, select, update
 from sqlalchemy.exc import IntegrityError
 
-from ..connectors.airwallex.client import AirwallexClient, ProviderObject
+from ..connectors.airwallex.client import AirwallexClient
 from ..connectors.airwallex.fake import FakeTransport
 from ..connectors.airwallex.transport import Response, decode_body, encode_body
-from ..execution import outbox
-from ..execution.gateway import ConnectorProvider, Gateway, deposit_reference
 from ..jobs.store import JobStore, records
 
 
@@ -84,34 +82,6 @@ class PreparedTransport(FakeTransport):
         with self.jobs.engine.begin() as conn:
             self._restore(conn.execute(select(records.c.body).where(*self.where)).scalar_one())
         return [self._public(obj) for obj in self.objects["deposits"].values()]
-
-
-class PreparedProvider(ConnectorProvider):
-    """Only the durable local fake can authoritatively look up Mode B deposits.
-
-    The real sandbox connector deliberately retains its no-lookup/no-blind-retry rule.
-    """
-    def find(self, leg):
-        if leg.kind != "advance" or self.leg_mode != "B":
-            return super().find(leg)
-        return [self._ours(leg, ProviderObject.parse("deposit", raw))
-                for raw in self.client.transport.deposits()
-                if raw.get("reference") == deposit_reference(leg)]
-
-    def get(self, leg):
-        if leg.kind != "advance" or self.leg_mode != "B":
-            return super().get(leg)
-        for obj in self.find(leg):
-            if obj.provider_id == leg.provider_id:
-                return obj
-        raise outbox.LookupFailed("the local fake has no matching deposit")
-
-
-class PreparedGateway(Gateway):
-    def __init__(self, store, client, **kwargs):
-        super().__init__(store, client, **kwargs)
-        self.provider = PreparedProvider(client, self.leg_mode,
-                                         target=lambda leg: self.bound(leg).to_currency)
 
 
 def client_for(jobs: JobStore, run_id: str) -> AirwallexClient:

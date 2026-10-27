@@ -89,7 +89,7 @@ def orphans(gateway: Gateway) -> list[str]:
     flagged = []
     for kind, path in sorted(kinds):
         if kind == "deposit":
-            continue  # no list to read (see the gateway); the operator owns deposits
+            continue  # no request_id; exact leg references are resolved by the gateway
         try:
             found = gateway.provider.list_all(kind, path)
         except AirwallexError:

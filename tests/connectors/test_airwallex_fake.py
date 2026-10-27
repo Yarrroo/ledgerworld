@@ -316,7 +316,10 @@ def test_deposit_simulation_sends_a_number_from_the_converter():
     assert '"amount":10000.00' in sent.wire
     assert isinstance(sent.body["amount"], Decimal)
     assert deposit.status == sim["expect"]["status"]
-    assert transport.available("USD") - before == sim["expect"]["USD_available_minor_delta"]
+    assert transport.available("USD") == before
+    deposit = client.wait_for_deposit(deposit.provider_id)
+    assert deposit.status == sim["settled"]["status"]
+    assert transport.available("USD") - before == sim["settled"]["USD_available_minor_delta"]
 
 
 # --------------------------------------------------------------------------- idempotency
@@ -639,6 +642,8 @@ def test_lf2_advance_on_the_wire_in_both_modes():
     before = transport.available("USD")
     deposit = client.simulate_deposit(amount=principal, global_account_id="ga-usd-1",
                                       reference=LEG_PLAN["B"]["advance"].label)
+    assert deposit.status == "PENDING"
+    deposit = client.wait_for_deposit(deposit.provider_id)
     receipt = deposit.receipt(leg_kind="advance", label=LEG_PLAN["B"]["advance"].label,
                               mode=client.mode, observed_at=now, request_id=leg_id)
     want = lf2["mode_B_receipt"]

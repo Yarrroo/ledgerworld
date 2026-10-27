@@ -59,7 +59,8 @@
   "call": "POST /api/v1/simulation/deposit/create",
   "body": {"global_account_id": "ga-usd-1", "amount": 10000.00, "reference": "advance inflow (sandbox simulation) adv-a"},
   "from_minor": 1000000,
-  "expect": {"status": "SETTLED", "USD_available_minor_delta": 1000000},
+  "expect": {"status": "PENDING", "USD_available_minor_delta": 0},
+  "settled": {"status": "SETTLED", "USD_available_minor_delta": 1000000},
   "note": "amount is a JSON number per the docs, derived from the converter's string (Decimal, never float arithmetic); T15 records whether the sandbox also accepts a string"
  }
 }

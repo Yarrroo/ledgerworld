@@ -343,3 +343,31 @@ def test_local_fake_deposit_reference_is_idempotent_across_clients(deployed):
     right = second.simulate_deposit(**args)
     assert left.provider_id == right.provider_id
     assert len(second.transport.deposits()) == 1
+
+
+def test_prepared_gateway_reads_fresh_deposit_settlement_after_reload(deployed):
+    from types import SimpleNamespace
+
+    from app.demo.provider import client_for
+
+    services, _ = deployed
+    first = client_for(services.jobs, "async-prepared-deposit")
+    before = next(b.available.minor for b in first.balances() if b.currency == "USD")
+    gateway = prepare.Gateway(services.store, first, mode="fake", leg_mode="B",
+                              beneficiaries=set(), clock=services.now)
+    leg = SimpleNamespace(kind="advance", amount_minor=100, currency="USD",
+                          request_id="async-prepared-leg", leg_id="async-prepared-leg",
+                          receipt_label="advance inflow (sandbox simulation)", provider_id=None)
+    created = gateway.provider.send(leg)
+    assert created.status == "PENDING"
+    leg.provider_id = created.provider_id
+
+    reloaded = client_for(services.jobs, "async-prepared-deposit")
+    gateway = prepare.Gateway(services.store, reloaded, mode="fake", leg_mode="B",
+                              beneficiaries=set(), clock=services.now)
+    found = gateway.provider.find(leg)
+    assert len(found) == 1 and found[0].status == "SETTLED"
+    assert gateway.provider.get(leg).status == "SETTLED"
+    assert len(reloaded.transport.deposits()) == 1
+    after = next(b.available.minor for b in reloaded.balances() if b.currency == "USD")
+    assert after - before == 100
