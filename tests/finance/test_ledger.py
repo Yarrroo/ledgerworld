@@ -580,6 +580,41 @@ def test_upgrade_adds_the_one_obligation_per_reservation_index(tmp_path):
         i["name"] for i in inspect(create_engine(url)).get_indexes("obligations")}
 
 
+def test_upgrade_names_obligations_already_sharing_a_reservation(tmp_path):
+    url = f"sqlite:///{tmp_path / 'old.db'}"
+    store = lifecycle_world(url)
+    with store.engine.begin() as c:
+        c.exec_driver_sql("DROP INDEX obligations_one_per_reservation")
+    for n in ("one", "two"):
+        store.add_obligation(n, "a/operating", 500, h(1), kind="payroll", reservation_id="r1",
+                             state="met")
+    with pytest.raises(ValueError, match=r"\('r1', 'one'\), \('r1', 'two'\)"):
+        LedgerStore(url)
+
+
+def test_a_refused_second_backer_leaves_the_callers_transaction_usable():
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="r1")
+    with store.transaction() as c:
+        store.add_obligation("one", "a/operating", 500, h(1), kind="payroll",
+                             reservation_id="r1", conn=c)
+        with pytest.raises(ValueError, match="already backs obligation one"):
+            store.add_obligation("two", "a/operating", 500, h(1), kind="payroll",
+                                 reservation_id="r1", conn=c)
+        store.add_obligation("two", "a/operating", 500, h(1), kind="payroll", conn=c)
+    assert [o["obligation_id"] for o in store.rows("obligations")] == ["one", "two"]
+
+
+def test_a_duplicate_obligation_id_is_not_read_as_a_shared_reservation():
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="r1")
+    store.hold("a/operating", 500, now=T0, reservation_id="r2")
+    store.add_obligation("one", "a/operating", 500, h(1), kind="payroll", reservation_id="r1")
+    with pytest.raises(IntegrityError):
+        store.add_obligation("one", "a/operating", 500, h(1), kind="payroll",
+                             reservation_id="r2")
+
+
 def test_a_snapshot_cannot_pay_two_obligations_from_one_reservation():
     snap = lf1_snapshot()
     snap["accounts"][0]["buckets"]["reserved"]["minor"] = 0
