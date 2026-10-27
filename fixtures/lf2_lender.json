@@ -1,0 +1,316 @@
+{
+  "fixture": "lf2_lender",
+  "about": "LF-2 (system brief 6): the lender pool on the same clock as LF-1 as a C5 snapshot, the same snapshot under the venue freeze, and the expected results. USD minor units. The expected block is the ledger design fixture lf2-lender.json unchanged; fixtures/README.md does the arithmetic by hand.",
+  "t0": "2026-01-05T00:00:00Z",
+  "horizon_h": 72,
+  "snapshot": {
+    "snapshot_id": "lf2",
+    "as_of": "2026-01-05T00:00:00Z",
+    "entities": [
+      {
+        "entity_id": "lender",
+        "name": "Harbor Pool (synthetic)",
+        "kind": "lender pool"
+      },
+      {
+        "entity_id": "borrower-a",
+        "name": "Northwind Parts (synthetic)",
+        "kind": "treasury",
+        "escalation": "treasury operator"
+      },
+      {
+        "entity_id": "borrower-b",
+        "name": "Juniper Freight (synthetic)",
+        "kind": "borrower"
+      }
+    ],
+    "accounts": [
+      {
+        "id": "lender/operating",
+        "entity": "lender",
+        "currency": "USD",
+        "observability": "known",
+        "as_of": "2026-01-05T00:00:00Z",
+        "buckets": {
+          "settled": {
+            "minor": 4500000,
+            "currency": "USD"
+          },
+          "reserved": {
+            "minor": 1000000,
+            "currency": "USD"
+          },
+          "pledged": {
+            "minor": 0,
+            "currency": "USD"
+          },
+          "pending_in": [],
+          "pending_out": []
+        }
+      },
+      {
+        "id": "lender/venue",
+        "entity": "lender",
+        "currency": "USD",
+        "venue": "exchange-venue",
+        "observability": "known",
+        "as_of": "2026-01-05T00:00:00Z",
+        "buckets": {
+          "settled": {
+            "minor": 1500000,
+            "currency": "USD"
+          },
+          "reserved": {
+            "minor": 0,
+            "currency": "USD"
+          },
+          "pledged": {
+            "minor": 0,
+            "currency": "USD"
+          },
+          "pending_in": [],
+          "pending_out": []
+        }
+      }
+    ],
+    "obligations": [],
+    "contracts": [
+      {
+        "contract_id": "line-b",
+        "kind": "committed_line",
+        "lender": "lender",
+        "borrower": "borrower-b",
+        "limit": {
+          "minor": 1000000,
+          "currency": "USD"
+        },
+        "drawn": {
+          "minor": 0,
+          "currency": "USD"
+        },
+        "state": "active",
+        "reservation_id": "res-line-b",
+        "reserved_on": "lender/operating"
+      },
+      {
+        "contract_id": "adv-a",
+        "kind": "revenue_advance",
+        "lender": "lender",
+        "borrower": "borrower-a",
+        "principal": {
+          "minor": 1000000,
+          "currency": "USD"
+        },
+        "fee_bps": 800,
+        "repay_share_bps": 1500,
+        "state": "offered"
+      }
+    ],
+    "exposures": [
+      {
+        "exposure_id": "venue-1",
+        "venue": "exchange-venue",
+        "account": "lender/venue",
+        "shared_with": [
+          "borrower-a"
+        ]
+      }
+    ],
+    "pools": [
+      {
+        "entity": "lender",
+        "floor": {
+          "minor": 800000,
+          "currency": "USD"
+        }
+      }
+    ]
+  },
+  "stressed": {
+    "venue_freeze": {
+      "snapshot_id": "lf2",
+      "as_of": "2026-01-05T00:00:00Z",
+      "entities": [
+        {
+          "entity_id": "lender",
+          "name": "Harbor Pool (synthetic)",
+          "kind": "lender pool"
+        },
+        {
+          "entity_id": "borrower-a",
+          "name": "Northwind Parts (synthetic)",
+          "kind": "treasury",
+          "escalation": "treasury operator"
+        },
+        {
+          "entity_id": "borrower-b",
+          "name": "Juniper Freight (synthetic)",
+          "kind": "borrower"
+        }
+      ],
+      "accounts": [
+        {
+          "id": "lender/operating",
+          "entity": "lender",
+          "currency": "USD",
+          "observability": "known",
+          "as_of": "2026-01-05T00:00:00Z",
+          "buckets": {
+            "settled": {
+              "minor": 4500000,
+              "currency": "USD"
+            },
+            "reserved": {
+              "minor": 1000000,
+              "currency": "USD"
+            },
+            "pledged": {
+              "minor": 0,
+              "currency": "USD"
+            },
+            "pending_in": [],
+            "pending_out": []
+          }
+        },
+        {
+          "id": "lender/venue",
+          "entity": "lender",
+          "currency": "USD",
+          "venue": "exchange-venue",
+          "observability": "unknown",
+          "as_of": "2026-01-05T00:00:00Z",
+          "buckets": {
+            "settled": null,
+            "reserved": {
+              "minor": 0,
+              "currency": "USD"
+            },
+            "pledged": {
+              "minor": 0,
+              "currency": "USD"
+            },
+            "pending_in": [],
+            "pending_out": []
+          }
+        }
+      ],
+      "obligations": [],
+      "contracts": [
+        {
+          "contract_id": "line-b",
+          "kind": "committed_line",
+          "lender": "lender",
+          "borrower": "borrower-b",
+          "limit": {
+            "minor": 1000000,
+            "currency": "USD"
+          },
+          "drawn": {
+            "minor": 0,
+            "currency": "USD"
+          },
+          "state": "active",
+          "reservation_id": "res-line-b",
+          "reserved_on": "lender/operating"
+        },
+        {
+          "contract_id": "adv-a",
+          "kind": "revenue_advance",
+          "lender": "lender",
+          "borrower": "borrower-a",
+          "principal": {
+            "minor": 1000000,
+            "currency": "USD"
+          },
+          "fee_bps": 800,
+          "repay_share_bps": 1500,
+          "state": "offered"
+        }
+      ],
+      "exposures": [
+        {
+          "exposure_id": "venue-1",
+          "venue": "exchange-venue",
+          "account": "lender/venue",
+          "shared_with": [
+            "borrower-a"
+          ]
+        }
+      ],
+      "pools": [
+        {
+          "entity": "lender",
+          "floor": {
+            "minor": 800000,
+            "currency": "USD"
+          }
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "K_p": "sum(settled of known, non-stale pool accounts) - committed undrawn - pledged - sum(pool obligations due within the horizon; none in LF-2) - pool floor",
+    "repayment": "floor(observed_revenue_minor * repay_share_bps / 10000), capped at outstanding; rounding is down, in the borrower's favour",
+    "fee": "principal * fee_bps / 10000, exact or rounded down"
+  },
+  "expected": {
+    "K_p_before": {
+      "value": 4200000,
+      "hand": "60,000 - 10,000 - 8,000 = 42,000"
+    },
+    "stress_venue_freeze": {
+      "lender/venue": "unknown",
+      "K_p": 2700000,
+      "authority": "reduced",
+      "hand": "45,000 - 10,000 - 8,000 = 27,000; the 15,000 at the venue is unknown, not zero"
+    },
+    "draw_30k_under_stress": {
+      "status": "rejected",
+      "reason": "beyond_capacity",
+      "binding": "K_p = 27,000.00",
+      "K_p_minor": 2700000
+    },
+    "draw_30k_no_stress": {
+      "status": "accepted",
+      "K_p_after": 1200000
+    },
+    "advance": {
+      "disburse": {
+        "principal": 1000000,
+        "fee": 80000,
+        "owed": 1080000,
+        "K_p_after": 3200000
+      },
+      "week_1": {
+        "observed_revenue": 2400000,
+        "repayment": 360000,
+        "outstanding": 720000
+      },
+      "week_2_forecast_only": {
+        "forecast_revenue": 3000000,
+        "observed_revenue": null,
+        "repayment": 0,
+        "outstanding": 720000,
+        "note": "no observation, no repayment: forecast revenue is never used"
+      },
+      "week_3": {
+        "observed_revenue": 333333,
+        "repayment": 49999,
+        "outstanding": 670001,
+        "note": "333,333 x 15% = 49,999.95, rounded down"
+      },
+      "week_4": {
+        "observed_revenue": 10000000,
+        "repayment": 670001,
+        "outstanding": 0,
+        "note": "15% would be 1,500,000; capped at outstanding"
+      }
+    },
+    "committed_line_draw": {
+      "borrower": "borrower-b",
+      "amount": 1000000,
+      "K_p_after": 4200000,
+      "note": "a draw on the committed line moves settled and committed undrawn together: K_p does not change"
+    }
+  }
+}
