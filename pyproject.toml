@@ -33,7 +33,9 @@ oasis-finance = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "checks/tests", "deploy/tests", "backend/tests"]
-pythonpath = ["."]
+# The tree under test's own sources come first, ahead of any editable install of the workspace
+# members, which may point at another checkout of this repo.
+pythonpath = [".", "backend", "packages/oasis-finance/src"]
 addopts = "-m 'not live and not pg' --ignore=tests/test_local_star_count_fetch.py"
 markers = [
     "live: calls a real provider, model or hosted service; never run by the merge gate",
