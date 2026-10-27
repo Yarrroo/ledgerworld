@@ -2,7 +2,7 @@
 
 `refmodel/world_ref.py` (stdlib only) runs the coupled round of system brief §7.2 against the three
 agent-world fixtures, loaded unchanged from `prp/…/agent-world/fixtures/`. Check:
-`python -m unittest discover -s refmodel -p test_world_ref.py` — 28 tests, green on 2026-10-27
+`python -m unittest discover -s refmodel -p test_world_ref.py` — 31 tests, green on 2026-10-27
 (Python 3.12). Mutating out the queue sort, the restore, the writer-epoch bump or the task cancel
 each turns tests red. Fixture paths below are relative to that directory; money is USD minor units.
 

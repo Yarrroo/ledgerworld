@@ -426,6 +426,48 @@ class Guards(unittest.TestCase):
                 res = self.pay(dict(params), actor="lender" if params.get("type") == "disburse" else "borrower-b")
                 self.assertEqual((res["status"], res["reason"]), ("rejected", reason))
 
+    def test_malformed_params_are_rejected(self):
+        cases = [({"type": "accept", "request": ["a"]}, "malformed_field"),
+                 ({"amount_minor": 100, "currency": "USD", "to": 7}, "malformed_field")]
+        for params, reason in cases:
+            with self.subTest(params=params):
+                actor = "lender" if params.get("type") == "accept" else "borrower-b"
+                res = self.pay(dict(params), actor=actor)
+                self.assertEqual((res["status"], res["reason"]), ("rejected", reason))
+        it = {"intent_id": "i-r0-lender-1", "actor_id": "lender", "priority_class": 1, "sim_minute": 0,
+              "type": "accept", "params": None}
+        self.assertEqual(wr.validate(it, MANDATES), "malformed_params")
+
+    def run_with_children(self, *children):
+        w = self.world()
+
+        async def hook(world, writer, actor):
+            for make in children:
+                writer.spawn(make())
+        w.actor_hooks["feed"] = hook
+        return w
+
+    def test_cancelled_child_fails_the_round_not_the_caller(self):
+        async def cancelled():
+            raise asyncio.CancelledError()
+        w = self.run_with_children(cancelled)
+        with self.assertRaises(wr.RoundFailed):
+            asyncio.run(w.run_round())
+        self.assertEqual(w.diagnostics[-1]["status"], "failed")
+
+    def test_failing_child_aborts_while_sibling_child_waits(self):
+        async def fails():
+            raise ValueError("child")
+
+        async def waits():
+            await asyncio.Event().wait()
+        w = self.run_with_children(fails, waits)
+
+        async def go():
+            await asyncio.wait_for(w.run_round(), 5)
+        with self.assertRaises(wr.RoundFailed):
+            asyncio.run(go())
+
     def test_disburse_without_pool_is_rejected(self):
         led = wr.new_ledger()
         wr.account(led, "lender/operating")["settled"] = 900_000
@@ -493,8 +535,13 @@ class Guards(unittest.TestCase):
             coord = asyncio.ensure_future(w.run_round())
             await stuck.wait()
             coord.cancel()
-            while not any(e[0] == "admission_closed" for e in w.lifecycle):
+            for _ in range(1000):                       # bounded: a regression fails, never hangs
+                if any(e[0] == "admission_closed" for e in w.lifecycle):
+                    break
                 await asyncio.sleep(0)
+            else:
+                release.set()
+                self.fail("the first cancel never reached the abort")
             coord.cancel()
             try:
                 with self.assertRaises(asyncio.CancelledError):

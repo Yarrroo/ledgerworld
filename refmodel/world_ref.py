@@ -146,7 +146,10 @@ def drain(queue: list) -> list:
 
 
 def _amount(params: dict):
+    """(minor, currency) from either money shape; a malformed amount yields (None, None)."""
     if "amount" in params:
+        if not isinstance(params["amount"], dict):
+            return None, None
         return params["amount"].get("minor"), params["amount"].get("currency")
     if "amount_minor" in params:
         return params["amount_minor"], params.get("currency")
@@ -168,8 +171,8 @@ def validate(intent: dict, mandates: dict) -> str | None:
     if intent["type"] not in REQUIRED:
         return "unsupported_type"
     prm = intent["params"]
-    if "amount" in prm and not isinstance(prm["amount"], dict):
-        return "amount_not_integer_minor"
+    if not isinstance(prm, dict):
+        return "malformed_params"
     minor, currency = _amount(prm)
     if minor is not None or "amount" in prm:
         if not is_minor(minor):
@@ -181,6 +184,8 @@ def validate(intent: dict, mandates: dict) -> str | None:
     for field in REQUIRED[intent["type"]]:
         if (minor is None) if field == "amount" else (field not in prm):
             return "missing_field"
+        if field != "amount" and not isinstance(prm[field], str):
+            return "malformed_field"
     return None
 
 
@@ -435,11 +440,9 @@ class World:
         self.lifecycle.append(("admission_closed", rnd))
         for task in self.round_tasks:                          # 2 cancel and join, children included
             task.cancel()
-        try:
-            while self.round_tasks and not all(t.done() for t in self.round_tasks):
-                _, pending = await asyncio.wait(self.round_tasks, timeout=self.quiesce_timeout)
-                if pending:                                    # tasks spawned while cancelling are joined too
-                    break
+        try:                                                   # admission is closed: the set cannot grow
+            if self.round_tasks:
+                await asyncio.wait(self.round_tasks, timeout=self.quiesce_timeout)
         except asyncio.CancelledError:                         # cancelled again mid-abort: nothing proved
             self.unusable = True
             self.diagnostics.append({"round": rnd, "status": "unusable", "error": "cancelled during abort"})
@@ -457,6 +460,21 @@ class World:
         self.round_tasks = []
         self.admission_open = True                             # 5 retry allowed after restoration
         self.diagnostics.append({"round": rnd, "status": status, "error": repr(exc)})
+
+    @staticmethod
+    async def _join(tasks: list):
+        """Wait until every task (the list may grow) is done; the first failure or
+        self-cancellation of one is raised at once, so the abort can stop the rest."""
+        while True:
+            for task in tasks:
+                if task.done() and task.cancelled():
+                    raise RuntimeError("a round-owned task was cancelled from inside the round")
+                if task.done() and task.exception():
+                    raise task.exception()
+            live = [t for t in tasks if not t.done()]
+            if not live:
+                return
+            await asyncio.wait(live, return_when=asyncio.FIRST_EXCEPTION)
 
     async def _steps(self) -> dict:
         # 1 advance the clock
@@ -491,16 +509,9 @@ class World:
         tasks = [writer.spawn(self._actor_step(writer, a, r, obs[a][1], obs[a][2])) for a in self.llm_actors]
         # wait, not gather: a cancelled gather waits on its children, so one actor that refuses
         # to stop would hold the coordinator before _abort could cancel, join and detect it.
-        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
-        for task in tasks:
-            if task in done and task.exception():
-                raise task.exception()
+        await self._join(tasks)
         calls = [task.result() for task in tasks]
-        while not all(t.done() for t in self.round_tasks):     # round-owned children finish in-round
-            await asyncio.wait(self.round_tasks)
-        for task in self.round_tasks:
-            if task.exception():
-                raise task.exception()
+        await self._join(self.round_tasks)                     # round-owned children finish in-round
         self.oasis["time_step"] += 1
         if self.oasis["time_step"] != r + 1:
             raise RuntimeError("OASIS clock drifted from the world clock")
