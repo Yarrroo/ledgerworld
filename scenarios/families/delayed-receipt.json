@@ -1,0 +1,77 @@
+{
+ "id": "delayed-receipt",
+ "about": "The treasury's receivable is delayed; P(t=40) after payroll falls below the reserve floor (LF-1 shock) and the treasury asks the lender for an advance, which the lender accepts and disburses.",
+ "seed": 101,
+ "starts_round": 3,
+ "rounds": 3,
+ "params": {
+  "flow_id": "receivable-1",
+  "delay_h": 240,
+  "at_round": 3
+ },
+ "expect_cleared": "treasury request_advance or defer",
+ "cleared": [
+  [
+   "treasury",
+   "request_advance"
+  ],
+  [
+   "lender",
+   "accept"
+  ],
+  [
+   "lender",
+   "disburse"
+  ]
+ ],
+ "script": [
+  {
+   "actor_id": "treasury",
+   "round": 3,
+   "tool_calls": [
+    {
+     "name": "request_advance",
+     "args": {
+      "amount_minor": 1000000,
+      "currency": "USD",
+      "reason": "the receivable is late and P(t=40) breaches the floor",
+      "from": "lender"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "lender",
+   "round": 4,
+   "when_seen": [
+    "req:treasury:r3"
+   ],
+   "tool_calls": [
+    {
+     "name": "accept",
+     "args": {
+      "request": "req:treasury:r3"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "lender",
+   "round": 5,
+   "when_seen": [
+    "req:treasury:r3"
+   ],
+   "tool_calls": [
+    {
+     "name": "disburse",
+     "args": {
+      "request": "req:treasury:r3",
+      "amount_minor": 1000000,
+      "currency": "USD",
+      "from_account": "lender/operating"
+     }
+    }
+   ]
+  }
+ ]
+}

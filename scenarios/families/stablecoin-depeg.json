@@ -1,0 +1,85 @@
+{
+ "id": "stablecoin-depeg",
+ "about": "A USDC redemption the treasury expects (a USD pending_in at par) loses its peg on the market-maker's public prices and settles late. The round world has no deferrable contract, so the treasury's deferral is refused and it asks the lender for an advance instead.",
+ "seed": 103,
+ "starts_round": 4,
+ "rounds": 3,
+ "params": {
+  "asset": "USDC",
+  "pending_in_minor": 1500000,
+  "expected_h": 20,
+  "price_path": [
+   "1.00",
+   "0.97",
+   "0.95",
+   "0.98"
+  ],
+  "path_from_round": 3,
+  "settle_delay_h": 24
+ },
+ "expect_cleared": "treasury convert or defer",
+ "cleared": [
+  [
+   "treasury",
+   "request_advance"
+  ],
+  [
+   "lender",
+   "accept"
+  ]
+ ],
+ "refused": {
+  "defer": "not_deferrable"
+ },
+ "script": [
+  {
+   "actor_id": "treasury",
+   "round": 4,
+   "when_seen": [
+    "px-usdc-r4"
+   ],
+   "tool_calls": [
+    {
+     "name": "defer",
+     "args": {
+      "obligation_id": "payroll-1",
+      "reason": "the USDC redemption is trading below par"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "treasury",
+   "round": 5,
+   "when_seen": [
+    "px-usdc-r5"
+   ],
+   "tool_calls": [
+    {
+     "name": "request_advance",
+     "args": {
+      "amount_minor": 1500000,
+      "currency": "USD",
+      "reason": "the USDC redemption is late and below par",
+      "from": "lender"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "lender",
+   "round": 6,
+   "when_seen": [
+    "req:treasury:r5"
+   ],
+   "tool_calls": [
+    {
+     "name": "accept",
+     "args": {
+      "request": "req:treasury:r5"
+     }
+    }
+   ]
+  }
+ ]
+}
