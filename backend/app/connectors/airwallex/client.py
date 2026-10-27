@@ -126,12 +126,13 @@ class ProviderObject:
     raw: dict
 
     @classmethod
-    def parse(cls, kind: str, raw: Any) -> ProviderObject:
+    def parse(cls, kind: str, raw: Any, request_id: str | None = None) -> ProviderObject:
+        """`request_id` is the one sent, so an unreadable answer names it."""
         if not isinstance(raw, dict):
-            raise OutcomeUnknown(None, f"{kind} answer is not an object")
+            raise OutcomeUnknown(request_id, f"{kind} answer is not an object")
         provider_id = raw.get("id") or raw.get(f"{kind}_id")
         if not isinstance(provider_id, str):
-            raise OutcomeUnknown(raw.get("request_id"), f"{kind} answer has no id")
+            raise OutcomeUnknown(request_id, f"{kind} answer has no id")
         amount_key, currency_key = AMOUNT_KEYS[kind]
         currency = raw.get(currency_key)
         amount = raw.get(amount_key)
@@ -172,25 +173,27 @@ class ProviderObject:
 
 
 def provider_amount(value: Any, currency: str | None) -> str:
-    """A provider amount (JSON number or string) as the canonical decimal string."""
+    """A provider amount (JSON number or string) as the canonical decimal string; an amount
+    with more places than its currency has is refused, never rounded."""
     if isinstance(value, bool) or not isinstance(value, int | str | Decimal):
         raise OutcomeUnknown(None, "a provider amount is not a number")
     try:
         number = Decimal(str(value))
-        if currency in EXPONENT:
-            number = number.quantize(Decimal(1).scaleb(-EXPONENT[currency]))
     except InvalidOperation:
         raise OutcomeUnknown(None, "a provider amount does not parse") from None
     if not number.is_finite():
         raise OutcomeUnknown(None, "a provider amount is not finite")
+    if currency in EXPONENT:
+        scaled = number.scaleb(EXPONENT[currency])
+        if scaled != scaled.to_integral_value():
+            raise OutcomeUnknown(None, f"a {currency} amount has more places than the currency")
+        number = scaled.to_integral_value().scaleb(-EXPONENT[currency])
     return format(number, "f")
 
 
 def to_money(value: Any, currency: str) -> Money:
     """A provider amount in minor units; one that does not fit the currency is refused."""
     number = Decimal(provider_amount(value, currency)).scaleb(EXPONENT[currency])
-    if number != number.to_integral_value():
-        raise OutcomeUnknown(None, f"a {currency} amount has more places than the currency")
     return Money(minor=int(number), currency=currency)
 
 
@@ -241,9 +244,9 @@ class AirwallexClient:
         if answer.status in (401, 403):
             raise ProviderError("auth_fail", answer.status)
         if not 200 <= answer.status < 300:
-            code = body.get("code") if isinstance(body.get("code"), str) else None
             retryable = answer.status == 429 or answer.status >= 500
-            raise ProviderError(code or f"http_{answer.status}", answer.status, retryable=retryable)
+            raise ProviderError(_text(body, "code") or f"http_{answer.status}", answer.status,
+                                retryable=retryable)
         token = body.get("token")
         if not isinstance(token, str) or not token:
             raise ProviderError("malformed_body", answer.status, retryable=True)
@@ -283,11 +286,10 @@ class AirwallexClient:
                 if method != "GET":
                     reason = "timeout after send" if lost.after_send else "timeout"
                     raise OutcomeUnknown(request_id, reason) from None
-                failures += 1
-                if failures < MAX_ATTEMPTS:
-                    self._backoff(failures)
-                    continue
-                raise ProviderError("timeout", None, retryable=True) from None
+                answer = None
+            if answer is None:  # a GET moves nothing, so it is sent again
+                failures = self._retry(failures, ProviderError("timeout", None, retryable=True))
+                continue
             status = answer.status
             log.info("airwallex %s %s request_id=%s -> %s", method, path, request_id, status)
             if 200 <= status < 300:
@@ -295,13 +297,11 @@ class AirwallexClient:
                     return answer.json
                 if method != "GET":
                     raise OutcomeUnknown(request_id, f"unreadable {status} body")
-                failures += 1
-                if failures < MAX_ATTEMPTS:
-                    self._backoff(failures)
-                    continue
-                raise ProviderError("malformed_body", status, retryable=True)
+                failures = self._retry(
+                    failures, ProviderError("malformed_body", status, retryable=True))
+                continue
             envelope = answer.json if isinstance(answer.json, dict) else {}
-            code = envelope.get("code") if isinstance(envelope.get("code"), str) else None
+            code = _text(envelope, "code")
             if status == 401:
                 if relogged:
                     raise ProviderError("auth_fail", 401)
@@ -315,21 +315,25 @@ class AirwallexClient:
             if status >= 500 and method != "GET":
                 raise OutcomeUnknown(request_id, f"http {status}")
             if status == 429 or status >= 500:
-                failures += 1
-                if failures < MAX_ATTEMPTS:
-                    self._backoff(failures)
-                    continue
                 fallback = "too_many_requests" if status == 429 else "server_error"
-                raise ProviderError(code or fallback, status, retryable=True)
-            message = envelope.get("message")
+                failures = self._retry(
+                    failures, ProviderError(code or fallback, status, retryable=True))
+                continue
             raise ProviderError(
                 code or f"http_{status}",
                 status,
-                message=self._scrub(message) if isinstance(message, str) else "",
-                source=envelope.get("source") if isinstance(envelope.get("source"), str) else None,
-                trace_id=(envelope.get("trace_id")
-                          if isinstance(envelope.get("trace_id"), str) else None),
+                message=self._scrub(_text(envelope, "message") or ""),
+                source=_text(envelope, "source"),
+                trace_id=_text(envelope, "trace_id"),
             )
+
+    def _retry(self, failures: int, spent: ProviderError) -> int:
+        """Back off before the next attempt, or raise `spent` once the attempts are used up."""
+        failures += 1
+        if failures >= MAX_ATTEMPTS:
+            raise spent
+        self._backoff(failures)
+        return failures
 
     def _backoff(self, failures: int) -> None:
         delay = BACKOFF_BASE_S * 2 ** (failures - 1)
@@ -362,6 +366,8 @@ class AirwallexClient:
         setting = setting or connected_setting()
         if setting == "off":
             return "B"
+        if self._token is None or self.clock() >= self._renew_at:
+            self.login()  # bad credentials fail the start; they are not an unclear probe
         try:
             self._request("GET", CONNECTED_PROBE_PATH)
             return "A"
@@ -480,14 +486,16 @@ class AirwallexClient:
         headers: Mapping[str, str] | None = None,
     ) -> ProviderObject:
         raw = self._request("POST", path, body, request_id=request_id, headers=headers)
-        try:
-            return ProviderObject.parse(kind, raw)
-        except OutcomeUnknown as unreadable:
-            raise OutcomeUnknown(request_id, unreadable.reason) from None
+        return ProviderObject.parse(kind, raw, request_id)
 
     def _find(self, kind: str, path: str, request_id: str) -> list[ProviderObject]:
         answer = self._request("GET", f"{path}?request_id={urlquote(request_id, safe='')}")
         return [ProviderObject.parse(kind, item) for item in self._items(answer)]
+
+
+def _text(envelope: Mapping[str, Any], key: str) -> str | None:
+    value = envelope.get(key)
+    return value if isinstance(value, str) else None
 
 
 def _side(amount: Money, sell_currency: str, buy_currency: str) -> dict[str, str]:
@@ -508,5 +516,7 @@ def client_from_env(
 ) -> AirwallexClient:
     """The one switch: the transport `AIRWALLEX_MODE` names, the pinned API version."""
     env = os.environ if env is None else env
+    if clock is not None:
+        fake_options.setdefault("clock", clock)
     transport = select_transport(env, **fake_options)
     return AirwallexClient(transport, clock, api_version=api_version_from(env))

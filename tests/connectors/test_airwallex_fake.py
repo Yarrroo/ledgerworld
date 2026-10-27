@@ -13,6 +13,7 @@ from decimal import Decimal
 from functools import cache
 from pathlib import Path
 
+import httpx
 import pytest
 from app.connectors.airwallex import fake as fake_module
 from app.connectors.airwallex.client import (
@@ -20,7 +21,9 @@ from app.connectors.airwallex.client import (
     LEG_PLAN,
     AirwallexClient,
     client_from_env,
+    leg_plan,
     provider_amount,
+    to_money,
 )
 from app.connectors.airwallex.errors import (
     ConfigError,
@@ -34,8 +37,11 @@ from app.connectors.airwallex.live import LiveTransport
 from app.connectors.airwallex.transport import (
     BANNERS,
     CREDENTIAL_VARS,
+    SANDBOX_BASE_URL,
     Credentials,
+    TransportTimeout,
     check_base_url,
+    decode_body,
     encode_body,
     select_transport,
 )
@@ -314,8 +320,7 @@ def test_deposit_simulation_sends_a_number_from_the_converter():
         amount=usd(sim["from_minor"]), global_account_id=sim["body"]["global_account_id"],
         reference=sim["body"]["reference"])
     sent = posts(transport, sim["call"].split()[1])[0]
-    assert json.loads(sent.wire, parse_float=Decimal) == json.loads(
-        json.dumps(sim["body"]), parse_float=Decimal)
+    assert decode_body(sent.wire) == decode_body(json.dumps(sim["body"]))
     assert '"amount":10000.00' in sent.wire
     assert isinstance(sent.body["amount"], Decimal)
     assert deposit.status == sim["expect"]["status"]
@@ -615,7 +620,7 @@ def test_probe(case):
 @pytest.mark.parametrize("leg", fixture("leg-mapping")["legs"], ids=lambda leg: leg["kind"])
 def test_leg_plan(leg):
     for mode in ("A", "B"):
-        spec, planned = leg[f"mode_{mode}"], LEG_PLAN[mode][leg["kind"]]
+        spec, planned = leg[f"mode_{mode}"], leg_plan(mode)[leg["kind"]]
         if spec["op"] == "same as A":
             spec = {**leg["mode_A"], **{k: v for k, v in spec.items() if k != "op"}}
         assert (planned.op, planned.label) == (spec["op"], spec["label"])
@@ -663,3 +668,71 @@ def test_the_fake_loads_no_other_connector_module_on_import():
             assert node.level == 0 and "airwallex" not in (node.module or ""), node.module
         if isinstance(node, ast.Import):
             assert not any("airwallex" in a.name for a in node.names)
+
+
+# ------------------------------------------------------------------- review regressions
+
+
+def test_an_over_precise_provider_amount_is_refused_not_rounded():
+    with pytest.raises(OutcomeUnknown):
+        to_money("1.005", "USD")
+    assert to_money("1.5", "USD") == usd(150)
+
+
+def test_a_reply_that_cannot_be_read_is_a_timeout_after_send():
+    def broken(request):
+        raise httpx.DecodingError("corrupt content-encoding", request=request)
+
+    live = LiveTransport(SANDBOX_BASE_URL, Credentials(PLACEHOLDER, PLACEHOLDER),
+                         http_transport=httpx.MockTransport(broken))
+    with pytest.raises(TransportTimeout) as lost:
+        live.send("POST", "/api/v1/transfers/create", {"request_id": "leg-x"})
+    assert lost.value.after_send is True
+
+
+def test_a_conversion_on_behalf_of_a_connected_account_settles_and_refunds_there():
+    transport, client = make(connected=True)
+    transport.balances[CONNECTED_ACCOUNT]["USD"] = 100000
+    body = {"request_id": "leg-c-1", "sell_currency": "USD", "buy_currency": "EUR",
+            "sell_amount": "1000.00"}
+    conv = client._request("POST", "/api/v1/conversions/create", body, request_id="leg-c-1",
+                           headers={"x-on-behalf-of": CONNECTED_ACCOUNT})
+    transport.cancel_conversion(conv["id"])
+    assert transport.available("USD", CONNECTED_ACCOUNT) == 100000
+    assert transport.available("USD") == 10000000
+
+
+def test_bad_credentials_fail_the_probe_instead_of_choosing_mode_b():
+    _, client = make("auth_fail")
+    with pytest.raises(ProviderError) as failed:
+        client.probe_connected("auto")
+    assert failed.value.code == "auth_fail"
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_a_non_finite_number_in_a_reply_is_unreadable(constant):
+    assert decode_body(f'{{"client_rate": {constant}}}') is None
+
+
+def test_client_from_env_shares_its_clock_with_the_fake():
+    clock = FakeClock()
+    client = client_from_env({}, clock=clock)
+    assert client.transport.clock is clock
+
+
+def test_an_injected_answer_does_not_spend_an_armed_scenario():
+    transport, client = make("server_error")
+    transport.respond_next(200, [])
+    client.balances()  # answered by the injection
+    tried = len(transport.requests)
+    client.balances()  # the armed 500 still fires: one 500, then the retry
+    assert len(transport.requests) - tried == 2
+
+
+def test_the_fake_refuses_an_amount_with_a_trailing_newline():
+    _, client = make()
+    body = {"request_id": "leg-n-1", "beneficiary_id": "ben-payroll-1",
+            "transfer_currency": "USD", "transfer_amount": "10.00\n"}
+    with pytest.raises(ProviderError) as refused:
+        client._request("POST", "/api/v1/transfers/create", body, request_id="leg-n-1")
+    assert refused.value.http == 400

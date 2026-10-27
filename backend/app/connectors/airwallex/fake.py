@@ -32,7 +32,7 @@ from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from app.finance.schemas import EXPONENT
+from app.finance.schemas import EXPONENT, Money, to_decimal
 
 SCENARIOS = (
     "happy", "timeout_after_accept", "timeout_before_send", "insufficient_funds",
@@ -69,7 +69,7 @@ MONEY_CREATES = (
     "/api/v1/connected_account_transfers/create", "/api/v1/charges/create",
 )
 LOGIN = "/api/v1/authentication/login"
-DECIMAL_STRING = re.compile(r"^[0-9]+(\.[0-9]+)?$")
+DECIMAL_STRING = re.compile(r"[0-9]+(\.[0-9]+)?")
 
 
 class FakeClock:
@@ -114,17 +114,14 @@ class FakeTransport:
         connected: bool = False,
         *,
         times: int | None = 1,
-        api_version: str = "2024-06-30",
     ) -> None:
         from .transport import Credentials
 
         self.seed = seed
         self.clock = clock or FakeClock()
         self.connected = connected
-        self.api_version = api_version
         self.credentials = Credentials("fake-client", "fake-key")
         self.requests: list[Recorded] = []
-        self._scenario, self._times = "happy", None
         self.arm(scenario, times)
         self._inject: list[tuple[int, Any]] = []
         self._held: set[str] = set()
@@ -174,19 +171,19 @@ class FakeTransport:
         self._tick()
 
     def settle_conversion(self, conversion_id: str) -> dict:
-        conv = self._get("conversions", conversion_id)
-        if conv["status"] not in ("SCHEDULED", "OVERDUE"):
-            raise ValueError(f"conversion {conversion_id} is {conv['status']}")
-        self._credit(PLATFORM, conv["buy_currency"], conv["_buy_minor"])
-        self._set_status(conv, "SETTLED")
-        return self._public(conv)
+        """The buy side arrives in the account the conversion was made for."""
+        return self._finish_conversion(conversion_id, "buy", "SETTLED")
 
     def cancel_conversion(self, conversion_id: str) -> dict:
+        """The sell side returns to the account the conversion was made for."""
+        return self._finish_conversion(conversion_id, "sell", "CANCELLED")
+
+    def _finish_conversion(self, conversion_id: str, side: str, status: str) -> dict:
         conv = self._get("conversions", conversion_id)
         if conv["status"] not in ("SCHEDULED", "OVERDUE"):
             raise ValueError(f"conversion {conversion_id} is {conv['status']}")
-        self._credit(PLATFORM, conv["sell_currency"], conv["_sell_minor"])
-        self._set_status(conv, "CANCELLED")
+        self._credit(conv["_account"], conv[f"{side}_currency"], conv[f"_{side}_minor"])
+        self._set_status(conv, status)
         return self._public(conv)
 
     def available(self, currency: str, account: str = PLATFORM) -> int:
@@ -217,11 +214,11 @@ class FakeTransport:
             text = encode_body(payload).decode() if payload is not None else ""
             return Response(status, decode_body(text), {"content-type": "application/json"}, text)
 
+        if route != LOGIN and self._inject:
+            return answer(*self._inject.pop(0))
         scenario = self._fires(method, route)
         if scenario == "timeout_before_send":
             raise TransportTimeout(after_send=False)
-        if route != LOGIN and self._inject:
-            return answer(*self._inject.pop(0))
         try:
             if scenario == "auth_fail":
                 raise _Refuse(401, "credentials_invalid", "Invalid credentials")
@@ -369,9 +366,10 @@ class FakeTransport:
         request_id = body.get("request_id")
         if not isinstance(request_id, str) or not request_id:
             raise _Refuse(400, "invalid_argument", "request_id is required", "request_id")
-        if request_id in self._held and self.count(collection, request_id):
+        used = self.count(collection, request_id)
+        if used and request_id in self._held:
             raise _Refuse(409, None, "A request with this request_id is in progress")
-        if self.count(collection, request_id):
+        if used:
             code = ("request_id_duplicate" if collection == "connected_account_transfers"
                     else "duplicate_request_id")
             raise _Refuse(400, code, "The request_id has been used", "request_id")
@@ -415,7 +413,7 @@ class FakeTransport:
         return {"status": "SCHEDULED", "sell_currency": sell, "buy_currency": buy,
                 "sell_amount": _number(sell_minor, sell), "buy_amount": _number(buy_minor, buy),
                 "client_rate": rate, "quote_id": body.get("quote_id"),
-                "_sell_minor": sell_minor, "_buy_minor": buy_minor}
+                "_account": account, "_sell_minor": sell_minor, "_buy_minor": buy_minor}
 
     def _new_connected_account_transfers(self, body: Mapping, account: str) -> dict:
         self._need_connected()
@@ -522,10 +520,9 @@ class FakeTransport:
 
     def _envelope(self, refusal: _Refuse) -> dict:
         self._serial += 1
-        envelope = {"code": refusal.code, "message": refusal.message,
-                    "trace_id": f"fake-trace-{self._serial}"}
-        if refusal.code is None:
-            del envelope["code"]
+        envelope = {"message": refusal.message, "trace_id": f"fake-trace-{self._serial}"}
+        if refusal.code is not None:
+            envelope["code"] = refusal.code
         if refusal.source:
             envelope["source"] = refusal.source
         return envelope
@@ -553,7 +550,7 @@ def _currency(body: Mapping, key: str) -> str:
 def _minor(body: Mapping, key: str, currency: str) -> int:
     """A request amount: a decimal string with at most the currency's digits, positive."""
     value = body.get(key)
-    if not isinstance(value, str) or not DECIMAL_STRING.match(value):
+    if not isinstance(value, str) or not DECIMAL_STRING.fullmatch(value):
         raise _Refuse(400, "invalid_argument", f"{key} is a decimal string", key)
     minor = _to_minor(Decimal(value), currency, None)
     if minor <= 0:
@@ -579,9 +576,9 @@ def _value(minor: int, currency: str) -> Decimal:
 
 
 def _string(minor: int, currency: str) -> str:
-    return format(_value(minor, currency).quantize(Decimal(1).scaleb(-EXPONENT[currency])), "f")
+    return to_decimal(Money(minor=minor, currency=currency))
 
 
 def _number(minor: int, currency: str) -> Decimal:
     """A response amount: the provider answers with JSON numbers."""
-    return Decimal(_string(minor, currency))
+    return _value(minor, currency)

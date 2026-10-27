@@ -3,8 +3,9 @@
 Built only by `select_transport` under `AIRWALLEX_MODE=sandbox`. It re-checks the host, never
 follows a redirect, and reports a lost answer as `TransportTimeout(after_send=...)`:
 `after_send` is false only when the connection was never made, so a caller treats every other
-loss as "may have arrived". A simulation process never imports this module (system brief §4).
-Not exercised by merge-gate tests.
+loss, an unreadable reply included, as "may have arrived". A simulation process never imports
+this module (system brief §4). Merge-gate tests reach the sandbox never; one drives the error
+mapping through an in-process `httpx.MockTransport`.
 """
 
 from __future__ import annotations
@@ -29,11 +30,19 @@ TIMEOUT_S = 30.0
 class LiveTransport:
     mode = "sandbox"
 
-    def __init__(self, base_url: str, credentials: Credentials, *, timeout_s: float = TIMEOUT_S):
+    def __init__(
+        self,
+        base_url: str,
+        credentials: Credentials,
+        *,
+        timeout_s: float = TIMEOUT_S,
+        http_transport: httpx.BaseTransport | None = None,
+    ):
         self.base_url = check_base_url(base_url)
         self.credentials = credentials
         self._http = httpx.Client(
-            base_url=self.base_url, timeout=timeout_s, follow_redirects=False
+            base_url=self.base_url, timeout=timeout_s, follow_redirects=False,
+            transport=http_transport,
         )
 
     def __repr__(self) -> str:
@@ -53,7 +62,7 @@ class LiveTransport:
             answer = self._http.request(method, path, content=content, headers=dict(headers or {}))
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
             raise TransportTimeout(after_send=False) from None
-        except httpx.TransportError:
+        except httpx.RequestError:  # a lost or unreadable reply: it may have arrived
             raise TransportTimeout(after_send=True) from None
         return Response(
             status=answer.status_code,

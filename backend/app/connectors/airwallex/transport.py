@@ -104,13 +104,18 @@ def encode_body(body: Any) -> bytes:
 
 
 def decode_body(text: str) -> Any:
-    """The parsed body with every non-integer number as `Decimal`; None when not JSON."""
+    """The parsed body with every non-integer number as `Decimal`; None when not JSON or when
+    it carries NaN or Infinity."""
     if not text.strip():
         return None
     try:
-        return json.loads(text, parse_float=Decimal)
+        return json.loads(text, parse_float=Decimal, parse_constant=_refuse_constant)
     except ValueError:
         return None
+
+
+def _refuse_constant(name: str) -> None:
+    raise ValueError(f"{name} is not a provider number")
 
 
 def check_base_url(base_url: str) -> str:

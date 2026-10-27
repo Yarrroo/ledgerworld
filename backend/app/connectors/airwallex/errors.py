@@ -30,6 +30,8 @@ class HostRefused(AirwallexError):
 class ProviderError(AirwallexError):
     """The provider refused the request; `retryable` says whether a later attempt may succeed."""
 
+    outcome = "rejected"  # nothing moved
+
     def __init__(
         self,
         code: str,
@@ -43,7 +45,6 @@ class ProviderError(AirwallexError):
         self.code = code
         self.http = http
         self.retryable = retryable
-        self.outcome = "rejected"
         self.message = message
         self.source = source
         self.trace_id = trace_id
