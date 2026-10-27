@@ -296,6 +296,8 @@ class World:
                 "settled_minor": view.settled_minor if known else None,
                 "reserved_minor": view.reserved_minor, "pledged_minor": view.pledged_minor,
                 "floor_minor": view.floor_minor,
+                # Promised times err on the cautious side: an inflow is due at the next whole
+                # hour, an outflow or obligation at the hour it falls in.
                 "pending_in": [{"flow_id": f.flow_id, "amount_minor": f.amount_minor,
                                 "expected_h": self.state.expected_h.get(
                                     f.flow_id, due_hour(f.at, epoch)),

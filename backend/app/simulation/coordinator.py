@@ -55,14 +55,22 @@ from sqlalchemy import Connection, select
 
 from ..finance import ledger, lending
 from ..finance.contracts import (
-    ensure_account,
     facility,
     pool_facilities,
     register,
+    repay_journal_id,
     set_facility,
 )
-from ..finance.models import Journal, LedgerRefusal, accounts, expected_flows, journals
+from ..finance.models import (
+    EPOCH,
+    Journal,
+    LedgerRefusal,
+    accounts,
+    expected_flows,
+    journals,
+)
 from ..finance.schemas import ActionIntent, Amount, ClearedAction, RevenueAdvance
+from ..finance.store import EXTERNAL_ENTITY
 from .clock import ROUND_HOURS
 from .world import TRANSIT, World, WorldUnusable
 
@@ -141,6 +149,7 @@ def validate_intents(
     """§7.2 step 6: the intents that may clear, and a rejection for each that may not."""
     round_ = world.clock.round
     valid, rejected = [], []
+    seen: set[str] = set()
     for n, item in enumerate(intents, 1):
         if not isinstance(item, ActionIntent):
             try:
@@ -164,10 +173,13 @@ def validate_intents(
             reason = "unknown_actor"
         elif item.type != "no_action" and item.type not in spec["tools"]:
             reason = "not_in_mandate"
+        elif item.intent_id in seen or item.intent_id in world.state.intents:
+            reason = "duplicate_intent"
         elif len(item.intent_id) > journals.c.source_intent_id.type.length:
             reason = "intent_id_too_long"  # its journal could not name it
         elif not _fits_its_tool(item):
             reason = "malformed_intent"
+        seen.add(item.intent_id)
         if reason is None:
             valid.append(item)
         else:
@@ -286,8 +298,9 @@ def _cash_of(c: Connection, account_id: str, entity: str, currency: str, what: s
 
 def _pay(world: World, c: Connection, intent: ActionIntent) -> Journal:
     """A payment to another entity's operating account, to a cash account named by id, or out
-    of the world (a counterparty the world does not hold); never into a loan, payable or
-    in-transit account, and never of an obligation, which settles when due (step 8)."""
+    of the world (a counterparty the world does not hold, or the outside account by its id);
+    never into a loan, payable or in-transit account, never to an account id the world does
+    not hold, and never of an obligation, which settles when due (step 8)."""
     amount, currency = _money(intent)
     if _param(intent, "obligation_id") is not None:
         raise Rejected("obligation_settles_when_due",
@@ -298,10 +311,16 @@ def _pay(world: World, c: Connection, intent: ActionIntent) -> Journal:
     if _account(c, world.operating(to)) is not None:
         payee = world.operating(to)
         _cash_of(c, payee, to, currency, "payee_not_cash")
-    elif (row := _account(c, to)) is not None:
+    elif (row := _account(c, to)) is not None and row.entity_id == EXTERNAL_ENTITY:
+        payee = to  # the outside world, by its own id
+        if row.currency != currency:
+            raise Rejected("currency_mismatch", f"{to} holds {row.currency}, not {currency}")
+    elif row is not None:
         payee = to
         _cash_of(c, payee, row.entity_id, currency, "payee_not_cash")
-    else:
+    elif "/" in to:
+        raise Rejected("unknown_payee", f"{to} names no account of this world")
+    else:  # a counterparty outside the world (a supplier)
         payee = world.store.external_account(currency, conn=c)
     if payee == source:
         raise Rejected("payee_is_payer")
@@ -330,8 +349,8 @@ def _advance_parties(world: World, c: Connection, lender: str, borrower: str,
     _cash_of(c, world.operating(borrower), borrower, currency, "unknown_counterparty")
 
 
-# A facility's longest derived id is its arrival's settlement journal, settle:arrive:<facility>.
-FACILITY_ID_MAX = journals.c.journal_id.type.length - len("settle:arrive:")
+# A facility's longest derived id is a repayment's journal, repay:<facility>:<period end>.
+FACILITY_ID_MAX = journals.c.journal_id.type.length - len(repay_journal_id("", EPOCH))
 
 
 def _facility_id(base: str) -> str:
@@ -360,7 +379,11 @@ def _disburse(world: World, c: Connection, facility_id: str, intent: ActionInten
     if from_account is not None:
         _cash_of(c, from_account, f.pool, f.currency, "not_own_account")
     transit = f"{f.borrower}/{TRANSIT}"
-    ensure_account(store, transit, f.borrower, f.currency, "cash", c)
+    held = _account(c, transit)
+    if held is None:
+        store.open_account(transit, f.borrower, f.currency, as_of=now, conn=c)
+    elif (held.entity_id, held.currency, held.kind) != (f.borrower, f.currency, "cash"):
+        raise Rejected("invalid_reference", f"{transit} is not {f.borrower}'s {f.currency} cash")
     journal = lending.disburse(store, facility_id, now=now, from_account=from_account,
                                borrower_account=transit, journal_id=_journal_id(intent.intent_id),
                                round=intent.round, source_intent_id=intent.intent_id, conn=c)

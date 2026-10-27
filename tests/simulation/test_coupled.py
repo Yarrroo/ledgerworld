@@ -951,3 +951,55 @@ def test_an_intent_is_held_to_its_tools_schema_whoever_queued_it(tmp_path):
     assert verdict(out["i-r1-lender-1"]) == ("rejected", "malformed_intent")
     assert verdict(out["i-r1-borrower-c-2"]) == ("rejected", "malformed_intent")
     assert world.committed_round == 0 and settled(world, "borrower-c/operating") == 400_000
+
+
+# ------------------------------------------------------------------- vet round 2 regressions
+
+
+def test_a_long_intent_id_still_offers_a_facility_whose_ids_fit(tmp_path):
+    from app.finance.contracts import repay_journal_id
+    from app.finance.models import EPOCH
+
+    world = ledger_world(tmp_path, "fid")
+    long_id = "i-r1-lender-" + "4" * 30  # 42 characters
+    out = clear(world, 1, ("lender", "offer", {"amount": usd(100_000), "to": "borrower-c"},
+                           long_id))
+    assert out[long_id].c2.status == "accepted"
+    (fac,) = [f for f in world.store.rows("facilities") if f["facility_id"] != "line-b"]
+    assert len(repay_journal_id(fac["facility_id"], EPOCH)) <= 64
+
+
+def test_a_repeated_intent_id_is_a_rejection(tmp_path):
+    world = ledger_world(tmp_path, "dup")
+    pay = {"amount": usd(1_000), "to": "supplier-2"}
+    out = clear(world, 1, ("borrower-c", "pay", pay, "i-r1-borrower-c-1"),
+                ("borrower-b", "pay", pay, "i-r1-borrower-c-1"))
+    (second,) = out.values()  # one id: the rejection of the second answers for it
+    assert (second.actor_id, *verdict(second)) == ("borrower-b", "rejected", "duplicate_intent")
+    assert settled(world, "borrower-c/operating") == 400_000 - 1_000
+    assert settled(world, "borrower-b/operating") == 900_000
+    world.state.intents["i-r1-borrower-c-1"] = {}  # as a committed round records it
+    again = clear(world, 2, ("borrower-c", "pay", pay, "i-r1-borrower-c-1"))
+    assert verdict(again["i-r1-borrower-c-1"]) == ("rejected", "duplicate_intent")
+
+
+def test_the_in_transit_account_is_observed_from_the_disbursal(tmp_path):
+    world = ledger_world(tmp_path, "transit")
+    clear(world, 1, ("lender", "offer", {"amount": usd(100_000), "to": "borrower-c"}))
+    clear(world, 2, ("borrower-c", "request_advance",
+                     {"amount": usd(100_000), "from": "lender",
+                      "facility_id": "adv:i-r1-lender-1"}))
+    (obs,) = [o for o in world.store.rows("account_observations")
+              if o["account_id"] == "borrower-c/in-transit"]
+    assert obs["as_of"] == world.clock.now.replace(tzinfo=None)
+
+
+def test_the_outside_world_is_payable_by_its_id_and_a_mistyped_account_is_not(tmp_path):
+    world = ledger_world(tmp_path, "outside")
+    with world.store.engine.begin() as conn:
+        world.store.external_account("USD", conn=conn)
+    out = clear(world, 1,
+                ("borrower-c", "pay", {"amount": usd(1_000), "to": "external/USD"}),
+                ("borrower-b", "pay", {"amount": usd(1_000), "to": "borrower-c/operatin"}))
+    assert verdict(out["i-r1-borrower-c-1"]) == ("accepted", None)
+    assert verdict(out["i-r1-borrower-b-2"]) == ("rejected", "unknown_payee")
