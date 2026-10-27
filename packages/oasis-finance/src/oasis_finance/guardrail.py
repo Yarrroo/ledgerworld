@@ -6,7 +6,8 @@ not validate (a float amount, a missing field) or the response calls no tool, no
 and the model is asked once more with the errors named. If the repair is refused too, the actor
 queues one ``no_action`` and the turn carries an alert. A malformed response never raises, so
 the round goes on to its mandatory settlements; an error from the model call itself does raise
-(that is a round failure, not malformed output).
+(that is a round failure, not malformed output). The turn ends when the driver returns or
+raises, so a tool the actor still holds refuses any later call.
 
 Upstream ``SocialAgent.perform_action_by_llm`` returns exceptions instead of raising
 (oasis-seam.md S5), so the guardrail inspects every call before any tool runs rather than relying
@@ -100,30 +101,26 @@ def _check(calls: Sequence[RawCall], actor: FinanceActor) -> tuple[list, list[To
         refused.append(ToolCallError("", "no_tool_call",
                                      "the response called no tool; call no_action to wait"))
     for call in calls:
-        args = call.arguments
-        if isinstance(args, str):
-            try:
-                args = json.loads(args) if args.strip() else {}
-            except json.JSONDecodeError as error:
-                refused.append(ToolCallError(call.name, "malformed_tool_args",
-                                             f"{call.name}: arguments are not JSON ({error})"))
-                continue
-        result = parse_tool_call(call.name, args, actor.tools)
+        result = parse_tool_call(call.name, call.arguments, actor.tools)
         (refused if isinstance(result, ToolCallError) else parsed).append(result)
     return parsed, refused
 
 
 def _assistant(calls: Sequence[RawCall], round: int, actor_id: str) -> Messages:
     """The refused response and one tool result per call, as a chat API expects them."""
+    if not calls:
+        return []
     ids = [c.call_id or f"refused-r{round}-{actor_id}-{n}" for n, c in enumerate(calls, 1)]
-    turn: Messages = [{"role": "assistant", "content": None, "tool_calls": [
+    tool_calls = [
         {"id": i, "type": "function", "function": {
             "name": c.name,
             "arguments": c.arguments if isinstance(c.arguments, str)
             else json.dumps(c.arguments, sort_keys=True, default=str)}}
-        for i, c in zip(ids, calls, strict=True)]}] if calls else []
-    return turn + [{"role": "tool", "tool_call_id": i, "content": "refused; nothing was queued"}
-                   for i in ids]
+        for i, c in zip(ids, calls, strict=True)
+    ]
+    results = [{"role": "tool", "tool_call_id": i, "content": "refused; nothing was queued"}
+               for i in ids]
+    return [{"role": "assistant", "content": None, "tool_calls": tool_calls}, *results]
 
 
 def _turn(
@@ -162,13 +159,11 @@ def _turn(
         first = refused[0]
         alert = Alert(actor.actor_id, actor.branch_id, round, first.code,
                       "; ".join(e.detail for e in refused))
-        fallback = submit(queue, actor, FinancialActionType.NO_ACTION,
-                          NoActionArgs(reason=f"fallback after repair: {first.code}"))
-        return TurnResult((fallback,), repairs, alert, tuple(refused), ())
-    intents = tuple(
-        submit(queue, actor, FinancialActionType(call.name), args)
-        for call, args in zip(calls, parsed, strict=True)
-    )
+        fallback = submit(queue, actor, [(FinancialActionType.NO_ACTION, NoActionArgs(
+            reason=f"fallback after repair: {first.code}"))])
+        return TurnResult(fallback, repairs, alert, tuple(refused), ())
+    intents = submit(queue, actor, [
+        (FinancialActionType(call.name), args) for call, args in zip(calls, parsed, strict=True)])
     return TurnResult(intents, repairs, None, (), tuple(calls))
 
 
@@ -183,12 +178,14 @@ def run_turn(
 ) -> TurnResult:
     """Run one actor's turn and queue its intents; see the module docstring."""
     turn = _turn(queue, actor, observation, sim_minute, social_prompt)
-    request = next(turn)
-    while True:
-        try:
+    try:
+        request = next(turn)
+        while True:
             request = turn.send(respond(*request))
-        except StopIteration as done:
-            return done.value
+    except StopIteration as done:
+        return done.value
+    finally:
+        actor.end_turn()
 
 
 async def arun_turn(
@@ -202,9 +199,11 @@ async def arun_turn(
 ) -> TurnResult:
     """``run_turn`` for a coordinator that runs every actor at once."""
     turn = _turn(queue, actor, observation, sim_minute, social_prompt)
-    request = next(turn)
-    while True:
-        try:
+    try:
+        request = next(turn)
+        while True:
             request = turn.send(await respond(*request))
-        except StopIteration as done:
-            return done.value
+    except StopIteration as done:
+        return done.value
+    finally:
+        actor.end_turn()

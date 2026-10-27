@@ -13,13 +13,14 @@ string or a bool in ``amount_minor`` is a validation error, never rounded.
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Annotated, Any, get_args
+from typing import Annotated, Any
 
-from app.finance.schemas import ActionIntent, Currency, IntentType
+from app.finance.schemas import MINOR_MAX, ActionIntent, Amount, Bps, Currency, Text
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -28,6 +29,7 @@ from pydantic import (
     StrictStr,
     StringConstraints,
     ValidationError,
+    model_validator,
 )
 
 
@@ -47,7 +49,15 @@ class FinancialActionType(StrEnum):
     NO_ACTION = "no_action"
 
 
-assert [a.value for a in FinancialActionType] == list(get_args(IntentType))
+# camel-oasis 0.2.5 ``ActionType`` values: an actor's social tools, handed to ``SocialAgent``.
+SOCIAL_TOOLS = frozenset({
+    "exit", "refresh", "search_user", "search_posts", "create_post", "like_post", "unlike_post",
+    "dislike_post", "undo_dislike_post", "report_post", "follow", "unfollow", "mute", "unmute",
+    "trend", "sign_up", "repost", "quote_post", "update_rec_table", "create_comment",
+    "like_comment", "unlike_comment", "dislike_comment", "undo_dislike_comment", "do_nothing",
+    "purchase_product", "interview", "join_group", "leave_group", "send_to_group", "create_group",
+    "listen_from_group",
+})
 
 # ---------------------------------------------------------------------------- tool arguments
 
@@ -57,12 +67,12 @@ Ref = Annotated[StrictStr, StringConstraints(min_length=1, max_length=128)]
 class _Args(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    reason: StrictStr | None = Field(None, max_length=1000, description="why, in a sentence")
+    reason: Text | None = Field(None, description="why, in a sentence")
 
 
 class _MoneyArgs(_Args):
     amount_minor: StrictInt = Field(
-        gt=0, le=2**63 - 1, description="integer minor units (cents for USD), never a decimal"
+        gt=0, le=MINOR_MAX, description="integer minor units (cents for USD), never a decimal"
     )
     currency: Currency
 
@@ -75,7 +85,7 @@ class RequestAdvanceArgs(_MoneyArgs):
 class OfferArgs(_MoneyArgs):
     to: Ref
     request: Ref | None = None
-    fee_bps: StrictInt | None = Field(None, ge=0, le=10000)
+    fee_bps: Bps | None = None
 
 
 class AcceptArgs(_Args):
@@ -94,6 +104,12 @@ class RepayArgs(_MoneyArgs):
 
 class ConvertArgs(_MoneyArgs):
     to_currency: Currency
+
+    @model_validator(mode="after")
+    def _into_another_currency(self) -> ConvertArgs:
+        if self.to_currency == self.currency:
+            raise ValueError("a conversion goes into another currency")
+        return self
 
 
 class PayArgs(_MoneyArgs):
@@ -166,11 +182,21 @@ class ToolCallError:
 def parse_tool_call(
     name: str, args: Any, mandate: Iterable[FinancialActionType]
 ) -> _Args | ToolCallError:
-    """Validate one tool call against the actor's mandate and the tool's argument schema."""
+    """Validate one tool call against the actor's mandate and the tool's argument schema.
+
+    ``args`` is an object or the JSON text a model wrote; anything that does not decode to an
+    object (bad JSON, an integer too long to parse, nesting too deep) is malformed, never raised.
+    """
     allowed = {a.value for a in mandate}
     if name not in allowed:
         return ToolCallError(name, "tool_not_in_mandate",
                              f"{name!r} is not one of your tools {sorted(allowed)}")
+    if isinstance(args, str):
+        try:
+            args = json.loads(args) if args.strip() else {}
+        except (ValueError, RecursionError) as error:  # JSONDecodeError is a ValueError
+            return ToolCallError(name, "malformed_tool_args",
+                                 f"{name}: arguments are not JSON ({str(error)[:200]})")
     if not isinstance(args, Mapping):
         return ToolCallError(name, "malformed_tool_args", f"{name}: arguments are not an object")
     try:
@@ -187,7 +213,8 @@ def intent_params(args: _Args) -> dict[str, Any]:
     """C1 ``params``: the amount as Money, every other argument as given, nothing unset."""
     raw = args.model_dump(by_alias=True, exclude_none=True)
     if "amount_minor" in raw:
-        raw["amount"] = {"minor": raw.pop("amount_minor"), "currency": raw.pop("currency")}
+        amount = Amount(minor=raw.pop("amount_minor"), currency=raw.pop("currency"))
+        raw["amount"] = amount.model_dump()
     return raw
 
 
@@ -195,41 +222,45 @@ def intent_params(args: _Args) -> dict[str, Any]:
 
 
 def clearing_key(intent: ActionIntent) -> tuple:
-    return (intent.priority_class, intent.sim_minute, intent.actor_id, intent.intent_id)
+    # An actor's ids differ only in their call number, so the shorter id is the earlier call:
+    # "i-r4-x-2" clears before "i-r4-x-10".
+    return (intent.priority_class, intent.sim_minute, intent.actor_id,
+            len(intent.intent_id), intent.intent_id)
 
 
 class IntentQueue:
     """One branch's intents for the current round; thread- and task-safe.
 
-    ``drain`` returns them sorted by (priority class, simulated minute, actor, intent id), so the
+    ``drain`` returns them sorted by (priority class, simulated minute, actor, call order), so the
     cleared order never depends on which agent answered first. An intent of another branch, or
     without a priority class and simulated minute, is refused.
     """
 
     def __init__(self, branch_id: str) -> None:
         self.branch_id = branch_id
-        self._items: list[ActionIntent] = []
-        self._ids: set[str] = set()
+        self._items: dict[str, ActionIntent] = {}
         self._lock = threading.Lock()
 
-    def put(self, intent: ActionIntent) -> None:
-        if intent.branch_id != self.branch_id:
-            raise ValueError(
-                f"intent {intent.intent_id} of branch {intent.branch_id!r} offered to the queue "
-                f"of branch {self.branch_id!r}"
-            )
-        if intent.priority_class is None or intent.sim_minute is None:
-            raise ValueError(f"intent {intent.intent_id} has no priority class or minute")
+    def put(self, *intents: ActionIntent) -> None:
+        """Queue every intent given, or none of them."""
+        for intent in intents:
+            if intent.branch_id != self.branch_id:
+                raise ValueError(
+                    f"intent {intent.intent_id} of branch {intent.branch_id!r} offered to the "
+                    f"queue of branch {self.branch_id!r}"
+                )
+            if intent.priority_class is None or intent.sim_minute is None:
+                raise ValueError(f"intent {intent.intent_id} has no priority class or minute")
+        ids = [i.intent_id for i in intents]
         with self._lock:
-            if intent.intent_id in self._ids:
-                raise ValueError(f"intent {intent.intent_id} queued twice")
-            self._ids.add(intent.intent_id)
-            self._items.append(intent)
+            if len(set(ids)) != len(ids) or any(i in self._items for i in ids):
+                raise ValueError(f"an intent of {ids} is queued twice")
+            self._items.update(zip(ids, intents, strict=True))
 
     def drain(self) -> list[ActionIntent]:
         with self._lock:
-            items, self._items, self._ids = self._items, [], set()
-        return sorted(items, key=clearing_key)
+            items, self._items = self._items, {}
+        return sorted(items.values(), key=clearing_key)
 
     def __len__(self) -> int:
         with self._lock:
@@ -263,43 +294,65 @@ class FinanceActor:
 
     @classmethod
     def from_spec(cls, spec: Mapping[str, Any], branch_id: str) -> FinanceActor:
-        """From an ``actors.json`` entry; its social tools (``create_post``) are not finance."""
-        finance = {a.value for a in FinancialActionType}
-        tools = tuple(FinancialActionType(t) for t in spec["tools"] if t in finance)
+        """From an ``actors.json`` entry; its social tools go to ``SocialAgent``, not here."""
+        unknown = [t for t in spec["tools"]
+                   if t not in SOCIAL_TOOLS and t not in FinancialActionType]
+        if unknown:
+            raise ValueError(f"{spec['actor_id']} names unknown tools {unknown}")
+        tools = tuple(FinancialActionType(t) for t in spec["tools"] if t in FinancialActionType)
         return cls(spec["actor_id"], branch_id, tools, int(spec["priority_class"]))
 
     def begin_turn(self, turn: Turn) -> None:
         with self._lock:
             self.turn, self._n = turn, 0
 
-    def next_intent_id(self) -> str:
+    def end_turn(self) -> None:
+        """Close the turn: a tool called after it (a late or failed-round writer) is refused."""
+        with self._lock:
+            self.turn = None
+
+    def stamp(self, count: int = 1) -> tuple[Turn, list[str]]:
+        """The current turn and the next ``count`` intent ids, read in one step."""
         with self._lock:
             if self.turn is None:
                 raise RuntimeError(f"{self.actor_id} called a tool outside a turn")
-            self._n += 1
-            return f"i-r{self.turn.round}-{self.actor_id}-{self._n}"
+            first, self._n = self._n + 1, self._n + count
+            return self.turn, [f"i-r{self.turn.round}-{self.actor_id}-{n}"
+                               for n in range(first, self._n + 1)]
 
 
-def submit(queue: IntentQueue, actor: FinanceActor, action: FinancialActionType,
-           args: _Args) -> ActionIntent:
-    """The handler: one validated tool call becomes one C1 intent on the branch's queue."""
-    turn = actor.turn
-    if turn is None:
-        raise RuntimeError(f"{actor.actor_id} called a tool outside a turn")
-    intent = ActionIntent(
-        intent_id=actor.next_intent_id(),
-        branch_id=actor.branch_id,
-        round=turn.round,
-        actor_id=actor.actor_id,
-        type=action.value,
-        params=intent_params(args),
-        evidence_ids=list(turn.evidence_ids),
-        obs_hash=turn.obs_hash,
-        priority_class=actor.priority_class,
-        sim_minute=turn.sim_minute,
+def submit(
+    queue: IntentQueue,
+    actor: FinanceActor,
+    calls: Iterable[tuple[FinancialActionType, _Args]],
+) -> tuple[ActionIntent, ...]:
+    """The handler: validated tool calls become C1 intents on the branch's queue, all or none.
+
+    An act outside the actor's mandate is refused here, whoever the caller; ``no_action`` is
+    always allowed, being the fallback.
+    """
+    calls = list(calls)
+    for action, _ in calls:
+        if action not in actor.tools and action is not FinancialActionType.NO_ACTION:
+            raise ValueError(f"{action.value} is not in {actor.actor_id}'s mandate")
+    turn, ids = actor.stamp(len(calls))
+    intents = tuple(
+        ActionIntent(
+            intent_id=intent_id,
+            branch_id=actor.branch_id,
+            round=turn.round,
+            actor_id=actor.actor_id,
+            type=action.value,
+            params=intent_params(args),
+            evidence_ids=list(turn.evidence_ids),
+            obs_hash=turn.obs_hash,
+            priority_class=actor.priority_class,
+            sim_minute=turn.sim_minute,
+        )
+        for intent_id, (action, args) in zip(ids, calls, strict=True)
     )
-    queue.put(intent)
-    return intent
+    queue.put(*intents)
+    return intents
 
 
 FinanceTool = Callable[..., str]
@@ -311,7 +364,9 @@ def make_finance_tools(queue: IntentQueue, actor: FinanceActor) -> dict[str, Fin
     A call returns ``"queued <intent_id>"`` or a structured refusal string (camel feeds a raised
     error back to the model as text anyway: oasis-seam.md S7); the guardrail validates a response
     with ``parse_tool_call`` before calling any tool, so its alert never depends on that string.
-    The closures hold the queue, the actor and the action, and nothing else.
+    A tool takes ``**kwargs`` (``from`` is a Python keyword), so camel cannot read its schema
+    off the signature: each carries ``openai_tool_schema`` for ``FunctionTool``. The closures
+    hold the queue, the actor and the action, and nothing else.
     """
     if queue.branch_id != actor.branch_id:
         raise ValueError(f"{actor.actor_id} of branch {actor.branch_id!r} bound to the queue "
@@ -322,10 +377,12 @@ def make_finance_tools(queue: IntentQueue, actor: FinanceActor) -> dict[str, Fin
             parsed = parse_tool_call(action.value, kwargs, actor.tools)
             if isinstance(parsed, ToolCallError):
                 return f"rejected {parsed.code}: {parsed.detail}"
-            return f"queued {submit(queue, actor, action, parsed).intent_id}"
+            (intent,) = submit(queue, actor, [(action, parsed)])
+            return f"queued {intent.intent_id}"
 
         tool.__name__ = action.value
         tool.__doc__ = DESCRIPTIONS[action]
+        tool.openai_tool_schema = tool_schema(action)
         return tool
 
     return {a.value: bind(a) for a in actor.tools}

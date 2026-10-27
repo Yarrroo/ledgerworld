@@ -33,7 +33,7 @@ SCOPES: dict[str, tuple[frozenset[str], str | None]] = {
 
 
 def _canonical(value: Any, path: str = "$") -> Any:
-    if isinstance(value, bool) or value is None or isinstance(value, int | str):
+    if value is None or isinstance(value, int | str):  # a bool is an int
         return value
     if isinstance(value, float):
         raise TypeError(f"a float at {path} in an observation: money is integer minor units, "
@@ -54,8 +54,12 @@ def canonical_json(value: Any) -> str:
                       ensure_ascii=False)
 
 
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
 def sha256_of(value: Any) -> str:
-    return hashlib.sha256(canonical_json(value).encode()).hexdigest()
+    return _sha256(canonical_json(value))
 
 
 def visible(item: Mapping[str, Any], actor_id: str, sees: Iterable[str], t_hours: int) -> bool:
@@ -64,6 +68,8 @@ def visible(item: Mapping[str, Any], actor_id: str, sees: Iterable[str], t_hours
     if isinstance(shown_from, bool) or not isinstance(shown_from, int) or shown_from > t_hours:
         return False
     kind = item.get("kind")
+    if not isinstance(kind, str):
+        return False
     for scope in sees:
         kinds, mine = SCOPES.get(scope, (frozenset(), None))
         if kind not in kinds:
@@ -71,7 +77,9 @@ def visible(item: Mapping[str, Any], actor_id: str, sees: Iterable[str], t_hours
         if mine is None:
             return True
         if mine == "party":
-            if item.get("owner") == actor_id or actor_id in item.get("parties", ()):
+            parties = item.get("parties", ())
+            if item.get("owner") == actor_id or (
+                    isinstance(parties, list | tuple) and actor_id in parties):
                 return True
         elif item.get(mine) == actor_id:
             return True
@@ -81,13 +89,14 @@ def visible(item: Mapping[str, Any], actor_id: str, sees: Iterable[str], t_hours
 @dataclass(frozen=True)
 class Observation:
     body: dict[str, Any]
+    text: str  # the canonical JSON that obs_hash hashes
     obs_hash: str
     evidence_ids: tuple[str, ...]
 
     def to_prompt(self) -> str:
         """The financial block, placed before the social feed in the actor's prompt."""
         return ("Your financial observation (only what you may see now; money in integer "
-                f"minor units):\n{canonical_json(self.body)}")
+                f"minor units):\n{self.text}")
 
 
 def build_observation(
@@ -101,13 +110,20 @@ def build_observation(
 
     Every item carries an ``id``, a ``kind`` and ``visible_from_h``; the evidence ids are the
     included items' ids, sorted, so building twice gives one hash and an excluded item added to
-    the world changes nothing.
+    the world changes nothing. A shown id must be one an intent can cite (C1: 1 to 128
+    characters), or every intent of the actor would fail, its fallback included.
     """
     sees = tuple(sees)
-    shown = sorted((dict(i) for i in items if visible(i, actor_id, sees, t_hours)),
-                   key=lambda i: str(i["id"]))
-    ids = [str(i["id"]) for i in shown]
+    shown = [i for i in items if visible(i, actor_id, sees, t_hours)]
+    for item in shown:
+        item_id = item.get("id")
+        if not isinstance(item_id, str) or not 1 <= len(item_id) <= 128:
+            raise ValueError(f"evidence id {item_id!r} in {actor_id}'s observation is not a "
+                             "string of 1 to 128 characters")
+    shown.sort(key=lambda i: i["id"])
+    ids = [i["id"] for i in shown]
     if len(set(ids)) != len(ids):
         raise ValueError(f"item ids repeat in {actor_id}'s observation")
-    body = {"actor_id": actor_id, "round": round, "t_hours": t_hours, "items": shown}
-    return Observation(_canonical(body), sha256_of(body), tuple(ids))
+    body = _canonical({"actor_id": actor_id, "round": round, "t_hours": t_hours, "items": shown})
+    text = canonical_json(body)
+    return Observation(body, text, _sha256(text), tuple(ids))

@@ -35,6 +35,7 @@ from oasis_finance import (
     repair_marker,
     run_turn,
     sha256_of,
+    submit,
     tool_schema,
 )
 from pydantic import BaseModel
@@ -64,8 +65,8 @@ VALID = {
 }
 
 
-def actor_with_all_tools(branch="shock", actor_id="tester", priority=1):
-    actor = FinanceActor(actor_id, branch, tuple(FinancialActionType), priority)
+def actor_with_all_tools(branch="shock"):
+    actor = FinanceActor("tester", branch, tuple(FinancialActionType), 1)
     actor.begin_turn(Turn(round=4, sim_minute=960, obs_hash=HASH, evidence_ids=("p-r3-1",)))
     return actor
 
@@ -92,8 +93,8 @@ def test_every_tool_call_queues_exactly_one_c1_intent():
         assert tools[name](**args) == f"queued i-r4-tester-{n}"
         assert len(queue) == n
     intents = queue.drain()
-    assert [i.type for i in sorted(intents, key=lambda i: int(i.intent_id.rsplit("-", 1)[1]))] \
-        == list(VALID)
+    assert {i.intent_id: i.type for i in intents} == {
+        f"i-r4-tester-{n}": name for n, name in enumerate(VALID, 1)}
     for intent in intents:
         # Each is a valid C1 document, stamped with the turn it was proposed in.
         assert ActionIntent.model_validate(json.loads(intent.model_dump_json())) == intent
@@ -269,24 +270,15 @@ def test_an_observation_refuses_a_float():
 # ---------------------------------------------------------------- one repair, then no_action
 
 
-def _plan_for(case, actor_id, rnd):
-    return ScriptedPlan([
-        {"actor_id": actor_id, "round": rnd, "tool_calls": [case["first"]]},
-        {"actor_id": actor_id, "round": rnd, "when_seen": [repair_marker(actor_id, rnd)],
-         "tool_calls": [case["repair"]]},
-    ], source=f"malformed-output.json#{case['id']}")
-
-
 class _ListResponder:
     """For a tool the agent never offers: ScriptedModel itself refuses to answer with one."""
 
     def __init__(self, *responses):
-        self.responses, self.prompts = list(responses), []
+        self.responses = list(responses)
 
     def __call__(self, messages, tools):
-        self.prompts.append(messages)
         call = self.responses.pop(0)
-        return [RawCall(call["name"], json.dumps(call["args"]), f"c{len(self.prompts)}")]
+        return [RawCall(call["name"], json.dumps(call["args"]))]
 
 
 @pytest.mark.parametrize("case", MALFORMED["cases"], ids=lambda c: c["id"])
@@ -295,19 +287,25 @@ def test_malformed_output_gets_one_repair_then_no_action(case):
     queue = IntentQueue("shock")
     actor = FinanceActor.from_spec(ACTORS[actor_id], "shock")
     observation = scope_observation()
-    offered = {a.value for a in actor.tools}
-    if case["first"]["name"] in offered:
-        plan = _plan_for(case, actor_id, rnd)
-        respond = model_responder(plan.model(actor_id, lambda: rnd))
-        prompts = None
+    if case["first"]["name"] in {a.value for a in actor.tools}:
+        plan = ScriptedPlan([
+            {"actor_id": actor_id, "round": rnd, "tool_calls": [case["first"]]},
+            {"actor_id": actor_id, "round": rnd, "when_seen": [repair_marker(actor_id, rnd)],
+             "tool_calls": [case["repair"]]},
+        ], source=f"malformed-output.json#{case['id']}")
+        responder = model_responder(plan.model(actor_id, lambda: rnd))
     else:
-        respond = prompts = _ListResponder(case["first"], case["repair"])
+        responder = _ListResponder(case["first"], case["repair"])
+    prompts = []
+
+    def respond(messages, tools):
+        prompts.append(messages)
+        return responder(messages, tools)
 
     result = run_turn(respond, queue, actor, observation)  # never raises: the round goes on
 
     expect = case["expect"]
-    calls = plan.calls if prompts is None else prompts.prompts
-    assert len(calls) == 1 + MALFORMED["expect_all"]["max_repair_attempts"]
+    assert len(prompts) == 1 + MALFORMED["expect_all"]["max_repair_attempts"]
     assert result.repair_attempts == expect["repair_attempts"]
     queued = queue.drain()
     assert queued == list(result.intents) and len(queued) == 1
@@ -323,7 +321,7 @@ def test_malformed_output_gets_one_repair_then_no_action(case):
         assert type(intent.params.amount.minor) is int
         assert intent.params.amount.minor == expect["posted_amount_minor"]
     # The repair prompt names the schema error of the first response.
-    repair_prompt = (calls[1].messages if prompts is None else calls[1])[-1]["content"]
+    repair_prompt = prompts[1][-1]["content"]
     first = parse_tool_call(case["first"]["name"], case["first"]["args"], actor.tools)
     assert repair_marker(actor_id, rnd) in repair_prompt
     assert first.detail in repair_prompt
@@ -371,11 +369,11 @@ def _chain_turns(branch):
         model = plan.model(actor_id, lambda rnd=rnd: rnd)
         results[actor_id] = run_turn(model_responder(model), queue, actor, observation)
         assert results[actor_id].alert is None
-    return results, queue
+    return results
 
 
 def test_the_coupled_chain_plan_crosses_the_boundary_as_intents():
-    shock, _ = _chain_turns("shock")
+    shock = _chain_turns("shock")
     expect = COUPLED["expect"]["shock"]
     (request,) = shock["borrower-c"].intents
     assert (request.intent_id, request.type) == (expect["round_4"]["intent"],
@@ -388,7 +386,7 @@ def test_the_coupled_chain_plan_crosses_the_boundary_as_intents():
     # Evidence is the whole scoped observation; the lender also sees the public rumour.
     assert all(set(expect["round_5"]["evidence_ids"]) <= set(i.evidence_ids) for i in lender)
 
-    control, _ = _chain_turns("control")
+    control = _chain_turns("control")
     assert [i.type for i in control["borrower-c"].intents] == ["no_action"]
     assert [i.type for i in control["lender"].intents] == ["no_action"]
 
@@ -411,3 +409,120 @@ def test_concurrent_async_turns_drain_in_one_order():
     first = asyncio.run(round_of(actors))
     assert first == asyncio.run(round_of(list(reversed(actors))))
     assert first == sorted((ACTORS[a]["priority_class"], a) for a in actors)
+
+
+# ------------------------------------------------------------------- vet round 1 regressions
+
+
+def test_an_actors_tenth_intent_clears_after_its_second():
+    queue = IntentQueue("shock")
+    tools = make_finance_tools(queue, actor_with_all_tools())
+    for _ in range(10):
+        tools["no_action"]()
+    assert [i.intent_id for i in queue.drain()] == [f"i-r4-tester-{n}" for n in range(1, 11)]
+
+
+def test_a_finished_turn_refuses_late_tool_calls():
+    actor = FinanceActor.from_spec(ACTORS["treasury"], "shock")
+    queue = IntentQueue("shock")
+    tools = make_finance_tools(queue, actor)
+    observation = build_observation("treasury", ACTORS["treasury"]["sees"], 4, 16, [])
+    run_turn(lambda m, t: [RawCall("no_action", "{}")], queue, actor, observation)
+    with pytest.raises(RuntimeError, match="outside a turn"):
+        tools["no_action"]()
+    assert len(queue) == 1
+
+
+def test_a_response_that_cannot_be_built_queues_nothing():
+    """The tenth intent id outgrows the C1 id: none of the response is queued."""
+    actor_id = "a" * 121  # "i-r4-<id>-9" is 128 characters, "-10" is 129
+    actor = FinanceActor(actor_id, "shock", (FinancialActionType.NO_ACTION,), 1)
+    queue = IntentQueue("shock")
+    observation = build_observation(actor_id, [], 4, 16, [])
+    with pytest.raises(ValueError):
+        run_turn(lambda m, t: [RawCall("no_action", "{}")] * 10, queue, actor, observation)
+    assert len(queue) == 0
+
+
+@pytest.mark.parametrize("bad_id", ["", "x" * 129, 7], ids=["empty", "long", "int"])
+def test_an_observation_refuses_an_id_no_intent_can_cite(bad_id):
+    item = {"id": bad_id, "kind": "public_post", "visible_from_h": 0}
+    with pytest.raises(ValueError, match="evidence id"):
+        scope_observation([item])
+
+
+def test_each_tool_carries_its_schema_for_camel():
+    """camel's FunctionTool cannot read a schema off **kwargs; the tool hands it over."""
+    tools = make_finance_tools(IntentQueue("shock"), actor_with_all_tools())
+    for action in FinancialActionType:
+        assert tools[action.value].openai_tool_schema == tool_schema(action)
+
+
+class _SwitchTurnOnLock:
+    """A lock that starts round 5 the first time it is taken: a begin_turn racing a tool."""
+
+    def __init__(self, actor):
+        self.actor, self.fired = actor, False
+
+    def __enter__(self):
+        if not self.fired:
+            self.fired = True
+            self.actor.turn, self.actor._n = Turn(5, 1200, "1" * 64, ("p-r5-1",)), 0
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_an_intent_is_stamped_from_one_turn():
+    actor = actor_with_all_tools()
+    actor._lock = _SwitchTurnOnLock(actor)
+    queue = IntentQueue("shock")
+    make_finance_tools(queue, actor)["no_action"]()
+    (intent,) = queue.drain()
+    assert intent.intent_id == f"i-r{intent.round}-tester-1"
+    assert (intent.round, intent.obs_hash) == (5, "1" * 64)
+
+
+def test_parties_must_be_a_list_and_a_strange_kind_is_unseen():
+    items = [
+        {"id": "c:string-parties", "kind": "contract", "owner": "lender",
+         "parties": "lender,borrower-cc", "visible_from_h": 0},
+        {"id": "c:list-kind", "kind": ["account"], "owner": "borrower-c", "visible_from_h": 0},
+    ]
+    assert scope_observation(items).evidence_ids == ()
+
+
+@pytest.mark.parametrize("arguments", [
+    '{"amount_minor": ' + "1" * 5000 + ', "currency": "USD", "to": "supplier-1"}',
+    "[" * 100000 + "]" * 100000,
+], ids=["huge-int", "deep-nesting"])
+def test_unparseable_arguments_fall_back_instead_of_raising(arguments):
+    actor = FinanceActor.from_spec(ACTORS["treasury"], "shock")
+    queue = IntentQueue("shock")
+    observation = build_observation("treasury", ACTORS["treasury"]["sees"], 4, 16, [])
+    result = run_turn(lambda m, t: [RawCall("pay", arguments)], queue, actor, observation)
+    assert result.alert.reason == "malformed_tool_args"
+    assert [i.type for i in queue.drain()] == ["no_action"]
+
+
+def test_a_conversion_goes_into_another_currency():
+    refused = parse_tool_call("convert", {"amount_minor": 500000, "currency": "USD",
+                                          "to_currency": "USD"}, tuple(FinancialActionType))
+    assert isinstance(refused, ToolCallError) and refused.code == "malformed_tool_args"
+
+
+def test_submit_refuses_an_act_outside_the_mandate_whoever_calls_it():
+    actor = FinanceActor.from_spec(ACTORS["borrower-c"], "shock")
+    actor.begin_turn(Turn(4, 960, HASH, ()))
+    queue = IntentQueue("shock")
+    disburse = parse_tool_call("disburse", VALID["disburse"], tuple(FinancialActionType))
+    with pytest.raises(ValueError, match="mandate"):
+        submit(queue, actor, [(FinancialActionType.DISBURSE, disburse)])
+    assert len(queue) == 0
+
+
+def test_a_mandate_naming_an_unknown_tool_is_refused():
+    spec = {**ACTORS["treasury"], "tools": ["pay", "reapy", "no_action"]}
+    with pytest.raises(ValueError, match="reapy"):
+        FinanceActor.from_spec(spec, "shock")
