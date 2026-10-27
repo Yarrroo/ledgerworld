@@ -45,7 +45,7 @@
     {"op": "create_transfer", "request_id": "leg-4", "amount_minor": 100000, "result": "the fake stores the transfer, then the transport raises TransportTimeout(after_send=true)"}
    ],
    "client_raises": {"OutcomeUnknown": {"request_id": "leg-4"}},
-   "then": {"op": "find_transfer(request_id=leg-4)", "returns": {"count": 1, "status": "SCHEDULED"}},
+   "then": {"op": "find_transfer(request_id=leg-4)", "returns": {"count": 1, "status": "PROCESSING"}},
    "movements": 1,
    "note": "no automatic retry of the POST; state unknown until the lookup"},
   {"id": "timeout-before-send",

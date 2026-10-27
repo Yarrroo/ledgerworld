@@ -620,7 +620,8 @@ def test_an_fx_leg_recorded_by_another_process_runs():
     world.gateway.record(approval)
     done = worker.execute(approval, current_snapshot_id=OBSERVED)
     assert isinstance(done, Execution)
-    assert done.legs[0].state == "submitted" and done.legs[0].provider_id is not None
+    # the provider settles a conversion at create, so the leg is settled by the same run
+    assert done.legs[0].state == "settled" and done.legs[0].provider_id is not None
 
 
 def test_a_repayment_shares_spendable_cash_with_the_other_legs():

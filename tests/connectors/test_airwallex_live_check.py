@@ -106,9 +106,9 @@ def test_diff_fails_a_key_only_the_fake_returns_and_lists_one_only_the_sandbox_r
     payout.shape = live.Shape(payout.shape.http, payout.shape.keys - {"reference"} | {"fee"},
                               payout.shape.status)
     quote = next(c for c in sandbox.checks if c.name == "fx-conversion")
-    quote.shape = live.Shape(quote.shape.http, quote.shape.keys, "SETTLED")
+    quote.shape = live.Shape(quote.shape.http, quote.shape.keys, "SCHEDULED")
     failing, listed = live.diff(sandbox, fake)
-    assert failing == ["fx-conversion: status sandbox SETTLED, fake SCHEDULED",
+    assert failing == ["fx-conversion: status sandbox SCHEDULED, fake SETTLED",
                        "payout: only the fake returns reference"]
     assert listed == ["payout: only the sandbox returns fee"]
 
@@ -144,8 +144,8 @@ def test_bad_configuration_exits_2(name: str, value: str, capsys) -> None:
 def test_a_status_only_one_side_carries_is_a_listed_key_not_a_failing_status() -> None:
     fake = _pass(FakeTransport())
     sandbox = _pass(FakeTransport())
-    accounts = next(c for c in sandbox.checks if c.name == "global-accounts")
-    accounts.shape = live.Shape(accounts.shape.http, accounts.shape.keys | {"status"}, "ACTIVE")
+    accounts = next(c for c in fake.checks if c.name == "global-accounts")  # both carry it now
+    accounts.shape = live.Shape(accounts.shape.http, accounts.shape.keys - {"status"}, None)
     assert live.diff(sandbox, fake) == ([], ["global-accounts: only the sandbox returns status"])
 
 

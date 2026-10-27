@@ -14,8 +14,7 @@
     "create": {"request_id": "leg-payroll-1", "beneficiary_id": "ben-payroll-1", "transfer_amount_minor": 5000000, "currency": "USD"},
     "wire_amount": "50000.00",
     "steps": [
-     {"do": "create", "status": "SCHEDULED", "available_minor": 5000000},
-     {"do": "read", "status": "PROCESSING", "note": "the sandbox moves a fresh payout on by itself"},
+     {"do": "create", "answer": "SCHEDULED", "status": "PROCESSING", "available_minor": 5000000, "note": "the create answers SCHEDULED; the sandbox moves a fresh payout on by itself"},
      {"do": "transition SENT", "status": "SENT"},
      {"do": "transition PAID", "status": "PAID", "available_minor": 5000000}
     ],
@@ -23,8 +22,7 @@
    {"id": "paid-then-failed",
     "create": {"request_id": "leg-payroll-2", "beneficiary_id": "ben-payroll-1", "transfer_amount_minor": 1000000, "currency": "USD"},
     "steps": [
-     {"do": "create", "status": "SCHEDULED", "available_minor": 9000000},
-     {"do": "read", "status": "PROCESSING"},
+     {"do": "create", "answer": "SCHEDULED", "status": "PROCESSING", "available_minor": 9000000},
      {"do": "transition SENT", "status": "SENT"},
      {"do": "transition PAID", "status": "PAID"},
      {"do": "transition FAILED failure_type=INVALID_ACCOUNT_NAME_OR_NUMBER", "status": "FAILED"},
@@ -34,7 +32,7 @@
    {"id": "skip-is-refused",
     "create": {"request_id": "leg-payroll-3", "beneficiary_id": "ben-payroll-1", "transfer_amount_minor": 100000, "currency": "USD"},
     "steps": [
-     {"do": "create", "status": "SCHEDULED"},
+     {"do": "create", "answer": "SCHEDULED", "status": "PROCESSING"},
      {"do": "transition PAID", "refused": {"http": 400, "note": "the requested status must be the next valid one"}, "status": "PROCESSING"}
     ]},
    {"id": "unfunded-refused",

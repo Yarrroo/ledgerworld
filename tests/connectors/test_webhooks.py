@@ -304,6 +304,7 @@ def test_signed_failed_hint_reads_the_actual_provider_instead_of_changing_state(
         amount=Money(minor=100_000, currency="USD"),
     )
     before = list(transport.requests)
+    held = transport.objects["transfers"][created.provider_id]["status"]  # what the provider has
     observed = []
 
     def reconcile(hint):
@@ -317,7 +318,7 @@ def test_signed_failed_hint_reads_the_actual_provider_instead_of_changing_state(
     verifier = WebhookVerifier(FIXTURE["secret"], store, reconcile)
     assert verifier.verify_and_ingest(signed(raw), raw, NOW) == 200
     assert len(observed) == 1
-    assert observed[0].status == created.status != "FAILED"
+    assert observed[0].status == held != "FAILED"
     new_calls = transport.requests[len(before):]
     assert [(call.method, call.path) for call in new_calls] == [
         ("GET", f"/api/v1/transfers/{created.provider_id}")

@@ -35,3 +35,13 @@
   client reads it back as made (one refused call per payout).
 - The conversion replay's `trace_id` and the charge/connected-account replay codes were not
   observed on run 2; they keep their previous shapes.
+
+## Red return (landing train, 12 tests)
+- The first landing missed `tests/` at the repo root: 12 tests there still pinned the old fake
+  (a payout reading `SCHEDULED`, an unsettled conversion and the settle/cancel controls, the
+  renamed `errors.json` scenarios, the diff tests' status and key mutations).
+- Fixed in the tests and fixtures, not in callers: a payout create step asserts the answer
+  `SCHEDULED` and the read `PROCESSING`; an fx leg is settled by the run that submits it; the
+  connected-account conversion settles on that account; `errors.json` keeps its scenario names.
+- Re-run: `tests/connectors tests/execution tests/demo tests/api tests/hunt backend/tests
+  checks/tests`: 728 passed, 1 skipped.
