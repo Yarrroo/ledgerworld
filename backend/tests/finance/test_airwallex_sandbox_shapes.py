@@ -201,4 +201,4 @@ def test_the_fake_quote_lasts_as_long_as_its_validity():
     quote = client.quote(sell_currency="USD", buy_currency="EUR",
                          amount=Money(minor=100, currency="EUR"))
     assert quote["validity"] == QUOTE_VALIDITY
-    assert quote["valid_to"] == fake_iso(transport.clock() + 15 * 60)
+    assert quote["valid_to_at"] == fake_iso(transport.clock() + 15 * 60)

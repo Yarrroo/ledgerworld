@@ -4,12 +4,17 @@ It speaks the same paths, bodies and envelopes as the sandbox (system brief §10
 body through the wire encoding, and keeps state: balances per account, global accounts,
 beneficiaries, quotes, conversions, transfers, connected-account transfers, charges and deposits.
 What it pins, because the gateway's tests rely on it:
-- a replayed `request_id` is REJECTED — `400 duplicate_request_id` (`request_id_duplicate` on
-  connected-account transfers), `409` while the first call is held open — never answered with
-  the original; the original is found by list-by-`request_id`;
-- transfer `SCHEDULED → PROCESSING → SENT → PAID`, `PAID` is not final (`FAILED`, then
+- a replayed `request_id` is REJECTED — `400 request_id_duplicate` with no `trace_id` (a
+  conversion: `400 invalid_argument` "request_id '…' has been used in the past"), `409` while the
+  first call is held open — never answered with the original; the original is found by
+  list-by-`request_id`;
+- transfer `SCHEDULED → PROCESSING → SENT → PAID`: the create answers `SCHEDULED` and the fake
+  moves it to `PROCESSING` at once, as the sandbox does; `PAID` is not final (`FAILED`, then
   `CANCELLED` five seconds later with the funds back); a skipped transition is refused;
-- conversion `SCHEDULED → SETTLED | CANCELLED`, the sell side debited at create;
+- a conversion settles at create (`SETTLED`, both sides moved) and is named by `conversion_id`,
+  with no `id` key;
+- a quote answers 200 and ends at `valid_to_at`; a Global Account carries no `currency` key, its
+  currencies are in `required_features` / `supported_features`;
 - request amounts are decimal strings, the deposit simulation's `amount` a JSON number.
 
 Scenarios arm the next request(s) (`times`, None for every one): `happy`, `timeout_after_accept`
@@ -49,7 +54,11 @@ START = {
         {"currency": "USD", "available_minor": 10000000},
         {"currency": "EUR", "available_minor": 0},
     ],
-    "global_accounts": [{"id": "ga-usd-1", "currency": "USD"}],
+    "global_accounts": [{
+        "id": "ga-usd-1", "status": "ACTIVE",
+        "required_features": [{"currency": "USD", "transfer_method": "LOCAL"}],
+        "supported_features": [{"currency": "USD", "transfer_method": "LOCAL", "type": "DEPOSIT"}],
+    }],
     "beneficiaries": [{"id": "ben-payroll-1", "currency": "USD", "allowlisted": True}],
 }
 TRANSFER_EDGES = frozenset({
@@ -106,8 +115,10 @@ class Recorded:
 
 
 class _Refuse(Exception):
-    def __init__(self, status: int, code: str | None, message: str, source: str | None = None):
+    def __init__(self, status: int, code: str | None, message: str, source: str | None = None,
+                 *, traced: bool = True):
         self.status, self.code, self.message, self.source = status, code, message, source
+        self.traced = traced
 
 
 class FakeTransport:
@@ -178,22 +189,6 @@ class FakeTransport:
         """Move the fake's clock (a `FakeClock`) and run what fell due."""
         self.clock.advance(seconds)
         self._tick()
-
-    def settle_conversion(self, conversion_id: str) -> dict:
-        """The buy side arrives in the account the conversion was made for."""
-        return self._finish_conversion(conversion_id, "buy", "SETTLED")
-
-    def cancel_conversion(self, conversion_id: str) -> dict:
-        """The sell side returns to the account the conversion was made for."""
-        return self._finish_conversion(conversion_id, "sell", "CANCELLED")
-
-    def _finish_conversion(self, conversion_id: str, side: str, status: str) -> dict:
-        conv = self._get("conversions", conversion_id)
-        if conv["status"] not in ("SCHEDULED", "OVERDUE"):
-            raise ValueError(f"conversion {conversion_id} is {conv['status']}")
-        self._credit(conv["_account"], conv[f"{side}_currency"], conv[f"_{side}_minor"])
-        self._set_status(conv, status)
-        return self._public(conv)
 
     def available(self, currency: str, account: str = PLATFORM) -> int:
         return self.balances.get(account, {}).get(currency, 0)
@@ -296,7 +291,7 @@ class FakeTransport:
                 return 200, self._list(collection, query.get("request_id"))
         if method == "POST" and isinstance(body, Mapping):
             if route == "/api/v1/fx/quotes/create":
-                return 201, self._quote(body)
+                return 200, self._quote(body)
             if route in MONEY_CREATES:
                 return 201, self._create(MONEY_CREATES[route], body, account)
             if route == "/api/v1/simulation/deposit/create":
@@ -356,7 +351,7 @@ class FakeTransport:
                  "sell_currency": sell, "buy_currency": buy,
                  "sell_amount": _string(sell_minor, sell), "buy_amount": _string(buy_minor, buy),
                  "validity": body["validity"],
-                 "valid_to": _iso(self.clock() + QUOTE_VALIDITIES[body["validity"]])}
+                 "valid_to_at": _iso(self.clock() + QUOTE_VALIDITIES[body["validity"]])}
         self.quotes[quote["quote_id"]] = quote
         return dict(quote)
 
@@ -388,19 +383,23 @@ class FakeTransport:
         used = self.count(collection, request_id)
         if used and request_id in self._held:
             raise _Refuse(409, None, "A request with this request_id is in progress")
+        if used and collection == "conversions":
+            raise _Refuse(400, "invalid_argument",
+                          f"request_id '{request_id}' has been used in the past", "request_id")
         if used:
-            code = ("request_id_duplicate" if collection == "connected_account_transfers"
-                    else "duplicate_request_id")
-            raise _Refuse(400, code, "The request_id has been used", "request_id")
+            raise _Refuse(400, "request_id_duplicate", "The request_id has been used",
+                          "request_id", traced=collection != "transfers")
         obj = getattr(self, f"_new_{collection}")(body, account)
         self._serial += 1
-        obj.update(id=f"{collection[:-1].replace('_', '-')}-{self._serial}",
-                   request_id=request_id, created_at=_iso(self.clock()),
+        object_id = f"{collection[:-1].replace('_', '-')}-{self._serial}"
+        obj["conversion_id" if collection == "conversions" else "id"] = object_id
+        obj.update(request_id=request_id, created_at=_iso(self.clock()),
                    updated_at=_iso(self.clock()))
-        if collection == "conversions":
-            obj["conversion_id"] = obj["id"]
-        self.objects[collection][obj["id"]] = obj
-        return self._public(obj)
+        self.objects[collection][object_id] = obj
+        answer = self._public(obj)
+        if collection == "transfers":
+            obj["status"] = "PROCESSING"  # the sandbox moves a payout on by itself
+        return answer
 
     def _new_transfers(self, body: Mapping, account: str) -> dict:
         beneficiary = self.beneficiaries.get(body.get("beneficiary_id"))
@@ -433,10 +432,10 @@ class FakeTransport:
             rate = quote["client_rate"]
         sell_minor, buy_minor, rate = self._price(sell, buy, body, rate)
         self._debit(account, sell, sell_minor, "sell_amount")
-        return {"status": "SCHEDULED", "sell_currency": sell, "buy_currency": buy,
+        self._credit(account, buy, buy_minor)
+        return {"status": "SETTLED", "sell_currency": sell, "buy_currency": buy,
                 "sell_amount": _number(sell_minor, sell), "buy_amount": _number(buy_minor, buy),
-                "client_rate": rate, "quote_id": body.get("quote_id"),
-                "_account": account, "_sell_minor": sell_minor, "_buy_minor": buy_minor}
+                "client_rate": rate, "quote_id": body.get("quote_id")}
 
     def _new_connected_account_transfers(self, body: Mapping, account: str) -> dict:
         self._need_connected()
@@ -470,7 +469,7 @@ class FakeTransport:
         amount = body.get("amount")
         if isinstance(amount, bool) or not isinstance(amount, int | Decimal):
             raise _Refuse(400, "invalid_argument", "amount is a number", "amount")
-        currency = account["currency"]
+        currency = account["required_features"][0]["currency"]
         minor = _to_minor(Decimal(amount), currency, None)
         if minor <= 0:
             raise _Refuse(400, "invalid_argument", "amount is positive", "amount")
@@ -543,7 +542,9 @@ class FakeTransport:
 
     def _envelope(self, refusal: _Refuse) -> dict:
         self._serial += 1
-        envelope = {"message": refusal.message, "trace_id": f"fake-trace-{self._serial}"}
+        envelope = {"message": refusal.message}
+        if refusal.traced:
+            envelope["trace_id"] = f"fake-trace-{self._serial}"
         if refusal.code is not None:
             envelope["code"] = refusal.code
         if refusal.source:

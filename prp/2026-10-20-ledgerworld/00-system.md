@@ -237,7 +237,7 @@ In a policy branch the policy drives the treasury and the treasury model is not 
   `/api/v1/transfers` is the connected-account transfer and the sandbox refuses a payout there.
 - [FACT] Airwallex's lending API is a partner API for lender apps; it is not used.
 - Every request carries a deterministic `request_id` (leg id); a replay with the same id must not
-  move money twice. [FACT] The provider **rejects** a duplicate id (`duplicate_request_id`, or
+  move money twice. [FACT] The provider **rejects** a duplicate id (`request_id_duplicate` on transfers, `invalid_argument` "request_id … has been used" on conversions, or
   `409` while the first is in flight); it does not return the original. The gateway resolves both
   by `GET /api/v1/transfers?request_id=…` (or `conversions?request_id=…`) and adopts what it
   finds; it never resubmits under a new id, and the fake reproduces the rejection.
