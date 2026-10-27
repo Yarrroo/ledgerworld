@@ -125,7 +125,22 @@
       "tests/execution/test_import_fence.py::test_fence_ignores_what_runs_only_when_a_reached_function_is_called",
       "tests/execution/test_import_fence.py::test_fence_passes_clean_simulation_code"
     ]},
-    {"id": "money_safety_hunts", "name": "the eight money-safety hunts", "tests": []}
+    {"id": "money_safety_hunts", "name": "the eight money-safety hunts", "tests": [
+      "tests/hunt/test_money_safety.py::test_every_hunt_is_carried",
+      "tests/hunt/test_money_safety.py::test_spend_beyond_cash",
+      "tests/hunt/test_money_safety.py::test_double_pledge",
+      "tests/hunt/test_money_safety.py::test_one_reservation_never_funds_two_legs",
+      "tests/hunt/test_money_safety.py::test_one_advance_is_never_sent_twice",
+      "tests/hunt/test_money_safety.py::test_a_pools_draws_in_one_approval_share_its_capacity",
+      "tests/hunt/test_money_safety.py::test_a_settled_advance_lands_no_overdue_arrival",
+      "tests/hunt/test_money_safety.py::test_obligation_removed_by_inaction",
+      "tests/hunt/test_money_safety.py::test_withdrawal_after_deadline_counted",
+      "tests/hunt/test_money_safety.py::test_delayed_receivable_credited_early",
+      "tests/hunt/test_money_safety.py::test_an_overdue_receivable_is_never_spent_by_an_execution",
+      "tests/hunt/test_money_safety.py::test_stale_balance_executed",
+      "tests/hunt/test_money_safety.py::test_timeout_retried_blindly",
+      "tests/hunt/test_money_safety.py::test_floor_relaxed_when_infeasible"
+    ]}
   ],
   "g2": [
     {"id": "actions_only_through_tools", "name": "actions only through tools", "tests": [

@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 from urllib.parse import quote as urlquote
@@ -243,6 +243,18 @@ class ConnectorProvider:
 # ----------------------------------------------------------------------------- the gateway
 
 
+@dataclass
+class _Claims:
+    """What the legs of one approval checked so far already claim (`Gateway.preflight`)."""
+
+    spend: defaultdict[str, int] = field(default_factory=lambda: defaultdict(int))
+    owed: defaultdict[str, int] = field(default_factory=lambda: defaultdict(int))
+    drawing: defaultdict[str, int] = field(default_factory=lambda: defaultdict(int))  # K_p
+    advancing: set[str] = field(default_factory=set)  # facilities this approval disburses
+    repaying: set[str] = field(default_factory=set)  # facilities this approval repays
+    holding: set[str] = field(default_factory=set)  # reservations a leg already spends
+
+
 class Gateway:
     """The execution legs of one observed ledger store, driven through one provider."""
 
@@ -376,19 +388,20 @@ class Gateway:
 
         The legs paid from one account are checked together, so two legs cannot each pass on
         the same spendable cash: discretionary ones against S(now) and the floor headroom
-        (`check_outflow`), and with the repayments, which are owed, against S(now) alone."""
-        spend: dict[str, int] = defaultdict(int)
-        owed: dict[str, int] = defaultdict(int)
-        repaying: set[str] = set()  # facilities this approval already repays
+        (`check_outflow`), and with the repayments, which are owed, against S(now) alone.
+        Overdue arrivals add nothing (`observed_view`); one held reservation funds one leg, a
+        facility disburses or repays through one leg at a time, and a pool's draws share K_p."""
+        claims = _Claims()
+        spend, owed = claims.spend, claims.owed
         wallet: dict[tuple[str, bool], int] = defaultdict(int)
         for leg in approval.legs:
-            if refusal := self._check_leg(approval.entity, leg, now, spend, owed, repaying):
+            if refusal := self._check_leg(approval.entity, leg, now, claims):
                 return refusal
             if (leg.kind, self.leg_mode) in DEBITS_WALLET:
                 on_behalf = self.leg_mode == "A" and leg.kind == "payout"
                 wallet[(leg.amount.currency, on_behalf)] += leg.amount.minor
         for account_id in sorted(spend.keys() | owed.keys()):
-            view = self.store.view(account_id)
+            view = observed_view(self.store.view(account_id), now)
             if spend[account_id]:
                 refusal = check_outflow(view, spend[account_id], now)
                 if refusal is not None:
@@ -400,8 +413,7 @@ class Gateway:
         return self._wallet(wallet) if self.mode == "sandbox" else None
 
     def _check_leg(self, entity: str, leg: ApprovalLeg, now: datetime,
-                   spend: dict[str, int], owed: dict[str, int],
-                   repaying: set[str]) -> binding.Refusal | None:
+                   claims: _Claims) -> binding.Refusal | None:
         source, other = self._view(leg.source), self._view(leg.counterparty)
         owner = source.entity_id if source else None
         other_owner = other.entity_id if other else None
@@ -432,25 +444,36 @@ class Gateway:
             if leg.amount.minor != f.limit_minor or f.state != "offered":
                 return binding.Refusal("reservation_mismatch", f"{f.facility_id} disburses its "
                                        f"principal {f.limit_minor} once, while offered")
-            refusal = lending.check_draw(self.store, f.pool, leg.amount.minor, now)
+            # It stays offered until its leg settles: one already on its way is not sent again.
+            if f.facility_id in claims.advancing or self._in_flight("advance", f.facility_id):
+                return binding.Refusal("reservation_mismatch", f"{f.facility_id} disburses "
+                                       "once; its advance is already on its way")
+            claims.advancing.add(f.facility_id)
+            claims.drawing[f.pool] += leg.amount.minor
+            refusal = lending.check_draw(self.store, f.pool, claims.drawing[f.pool], now)
             if refusal is not None:
                 return _from_ledger(refusal, f"K_p of {f.pool}")
         elif leg.kind == "repayment":
-            if f.facility_id in repaying or self._repaying(f.facility_id):
+            if f.facility_id in claims.repaying or self._in_flight("repayment", f.facility_id):
                 return binding.Refusal("reservation_mismatch", f"{f.facility_id} repays one "
                                        "period at a time; one is already on its way")
-            repaying.add(f.facility_id)
+            claims.repaying.add(f.facility_id)
             if self.period(f, leg.amount.minor, now) is None:
                 return binding.Refusal("reservation_mismatch", f"leg {leg.index} pays exactly "
                                        f"what the oldest unrepaid period of {f.facility_id} owes")
         if leg.funded_by and leg.funded_by.startswith("reservation:"):
-            return self._held(leg)
+            return self._held(leg, claims.holding)
         # A repayment is owed, not chosen: it needs S(now), and the floor does not apply.
-        (owed if leg.kind == "repayment" else spend)[leg.source] += leg.amount.minor
+        (claims.owed if leg.kind == "repayment" else claims.spend)[leg.source] += \
+            leg.amount.minor
         return None
 
-    def _held(self, leg: ApprovalLeg) -> binding.Refusal | None:
+    def _held(self, leg: ApprovalLeg, holding: set[str]) -> binding.Refusal | None:
         reservation_id = leg.funded_by.removeprefix("reservation:")
+        if reservation_id in holding:  # it is committed once, by the first leg naming it
+            return binding.Refusal("reservation_mismatch", f"leg {leg.index} spends "
+                                   f"{reservation_id}, which an earlier leg already spends")
+        holding.add(reservation_id)
         try:
             res = self.store.reservation(reservation_id)
         except LedgerRefusal:
@@ -501,10 +524,10 @@ class Gateway:
                 return end.replace(tzinfo=UTC) if due == amount else None
         return None
 
-    def _repaying(self, facility_id: str) -> bool:
-        """A repayment of the facility is already queued and not finished."""
+    def _in_flight(self, kind: str, facility_id: str) -> bool:
+        """A leg of this kind on the facility is already queued and not finished."""
         return any(self.bound(leg).facility_id == facility_id for leg in self.outbox._legs(
-            "kind = 'repayment' AND state IN ('pending', 'submitted', 'unknown')"))
+            "kind = ? AND state IN ('pending', 'submitted', 'unknown')", (kind,)))
 
     def _view(self, account_id: str) -> AccountView | None:
         try:
@@ -559,7 +582,7 @@ class Gateway:
                 self.store, bound.facility_id, now=now, from_account=leg.source,
                 borrower_account=leg.counterparty,
                 journal_id=bounded_id(journals.c.journal_id, f"j-{bound.facility_id}-disburse"),
-                mode=mode, source_leg_id=leg.leg_id, conn=c).journal_id
+                mode=mode, source_leg_id=leg.leg_id, land=False, conn=c).journal_id
         if leg.kind == "repayment":
             return self._repay(bound, leg, now, mode)
         seen = self.provider.seen[leg.leg_id]  # fx: the buy side as the GET showed it
@@ -585,7 +608,7 @@ class Gateway:
                              f"owes {leg.amount_minor}")
         paid = lending.repay(self.store, f.facility_id, end, now=now, from_account=leg.source,
                              to_account=leg.counterparty, mode=mode, source_leg_id=leg.leg_id,
-                             conn=self.sa)
+                             land=False, conn=self.sa)
         if paid.journal is None or paid.amount_minor != leg.amount_minor:
             raise ValueError(f"{leg.leg_id}: the period repays {paid.amount_minor}, the leg "
                              f"{leg.amount_minor}")
@@ -626,6 +649,16 @@ class Gateway:
         for leg in self.outbox._legs(where, args):
             with self.transaction():
                 self._flows(leg.leg_id, "cancelled")
+
+
+def observed_view(view: AccountView, now: datetime) -> AccountView:
+    """The view an execution spends from: without the arrivals promised by `now` not landed.
+
+    On the observed ledger nothing lands until it is observed, so a pending arrival past its
+    promise is overdue and adds nothing to S or P, as in the decisions module's projection;
+    the ledger's own S(now) counts it because a simulated round lands it at step 2.
+    """
+    return replace(view, pending_in=tuple(f for f in view.pending_in if f.at > now))
 
 
 def out_flow(leg_id: str, kind: str) -> str:

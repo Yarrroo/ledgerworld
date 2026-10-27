@@ -182,12 +182,14 @@ def disburse(store: LedgerStore, facility_id: str, *, now: datetime,
              from_account: str | None = None, borrower_account: str | None = None,
              journal_id: str | None = None, round: int = 0, mode: Mode = "simulation",
              source_intent_id: str | None = None, source_leg_id: str | None = None,
-             horizon: timedelta = HORIZON, conn: Connection | None = None) -> Journal:
+             horizon: timedelta = HORIZON, land: bool = True,
+             conn: Connection | None = None) -> Journal:
     """Disburse an offered revenue advance whole, in one transaction; raises the refusal.
 
     The principal must fit within K_p and within the source account's S and floor headroom.
     The fee is recognised at disbursal: the lender's receivable and the borrower's payable both
-    open at principal + fee.
+    open at principal + fee. `land=False` on the observed ledger (the execution gateway), where
+    an arrival lands only when it is observed: one due and not landed is overdue, not cash.
     """
     with store.transaction(conn) as c:
         f = facility(store, facility_id, conn=c, lock=True)
@@ -201,7 +203,8 @@ def disburse(store: LedgerStore, facility_id: str, *, now: datetime,
             raise refusal
         # Checked as cleared (K_p on settled cash, S counting arrivals due now); the source's due
         # arrivals land before the posting, so it does not fall below settled.
-        land_arrivals(store, source, now, round=round, conn=c)
+        if land:
+            land_arrivals(store, source, now, round=round, conn=c)
         income, expense = f"{f.pool}/fee-income", f"{f.borrower}/fee-expense"
         payable = advance_payable(f)
         fee, owed = f.fee_minor, f.owed_minor
@@ -315,10 +318,10 @@ def repay(store: LedgerStore, facility_id: str, period_end: datetime, *, now: da
           from_account: str | None = None, to_account: str | None = None,
           round: int = 0, mode: Mode = "simulation",
           source_intent_id: str | None = None, source_leg_id: str | None = None,
-          conn: Connection | None = None) -> Repayment:
+          land: bool = True, conn: Connection | None = None) -> Repayment:
     """One period's repayment of an advance: floor(observed revenue × share), capped at
     outstanding. No observation, no repayment; a period is repaid at most once, which its
-    journal id (`repay_journal_id`, never the caller's) enforces."""
+    journal id (`repay_journal_id`, never the caller's) enforces. `land` as in `disburse`."""
     with store.transaction(conn) as c:
         f = facility(store, facility_id, conn=c, lock=True)
         _kind(f, "revenue_advance", "active", "repaid")
@@ -336,7 +339,8 @@ def repay(store: LedgerStore, facility_id: str, period_end: datetime, *, now: da
         payee = to_account or f"{f.pool}/operating"
         _lock_cash(store, c, f.currency, (payer, f.borrower), (payee, f.pool))
         _payable_from(store, c, payer, amount, now)
-        land_arrivals(store, payer, now, round=round, conn=c)
+        if land:
+            land_arrivals(store, payer, now, round=round, conn=c)
         journal = store.apply(Journal(
             journal_id=journal_id, kind="advance_repayment", round=round, sim_time=now,
             source_intent_id=source_intent_id, source_leg_id=source_leg_id, mode=mode,
