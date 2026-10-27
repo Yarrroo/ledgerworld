@@ -3,7 +3,11 @@ name: Deploy LedgerWorld
 # Run on the compose host, using a dedicated runner labelled ledgerworld. Set the repository
 # variable LEDGERWORLD_ENV_FILE to an absolute host env-file path OUTSIDE the runner checkout.
 # The file holds the host settings/secrets from deploy/host.toml; checkout must never remove it.
-# Set the repository variable LEDGERWORLD_FREEZE=1 at submission. No deployment runs while frozen.
+# Host tools: Docker Compose and Python 3. Set LEDGERWORLD_FREEZE=0 for deployments and provide
+# LEDGERWORLD_FREEZE_READ_TOKEN as a repository secret with only Variables: read for this repo.
+# To freeze: set the repository variable to 1, then wait for active Deploy runs to finish BEFORE
+# submission. The host reads the current variable after building, immediately before activation;
+# no distributed check can revoke a compose activation that has already started.
 on:
   workflow_dispatch:
 
@@ -36,6 +40,7 @@ jobs:
       VITE_SOURCE_URL: https://github.com/${{ github.repository }}/tree/${{ github.sha }}
     steps:
       - name: Validate host configuration
+        id: host
         shell: bash
         run: |
           set -euo pipefail
@@ -51,15 +56,42 @@ jobs:
               exit 1 ;;
           esac
           test -f "$env_file" && test -r "$env_file"
+          printf 'env_file=%s\n' "$env_file" >> "$GITHUB_OUTPUT"
           docker compose version
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Deploy compose services
-        # Re-check at the mutating step as well as at job admission.
         if: ${{ vars.LEDGERWORLD_FREEZE != '1' }}
         shell: bash
+        env:
+          LEDGERWORLD_ENV_FILE: ${{ steps.host.outputs.env_file }}
+          FREEZE_READ_TOKEN: ${{ secrets.LEDGERWORLD_FREEZE_READ_TOKEN }}
         run: |
           set -euo pipefail
           docker compose --project-name ledgerworld -f deploy/compose.yml \
-            --env-file "$LEDGERWORLD_ENV_FILE" up --detach --build --wait --wait-timeout 180
+            --env-file "$LEDGERWORLD_ENV_FILE" build
+          python3 - <<'PY'
+          import json
+          import os
+          from urllib.request import Request, urlopen
+
+          token = os.environ.get("FREEZE_READ_TOKEN")
+          if not token:
+              raise SystemExit("Deployment refused: freeze reader is not configured")
+          url = (os.environ["GITHUB_API_URL"] + "/repos/" + os.environ["GITHUB_REPOSITORY"]
+                 + "/actions/variables/LEDGERWORLD_FREEZE")
+          request = Request(url, headers={
+              "Authorization": "Bearer " + token,
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          })
+          with urlopen(request, timeout=20) as response:
+              if response.status != 200:
+                  raise SystemExit("Deployment refused: freeze state is unavailable")
+              state = json.load(response)
+          if not isinstance(state, dict) or state.get("value") != "0":
+              raise SystemExit("Deployment refused: freeze is set or unavailable")
+          PY
+          docker compose --project-name ledgerworld -f deploy/compose.yml \
+            --env-file "$LEDGERWORLD_ENV_FILE" up --detach --no-build --wait --wait-timeout 180

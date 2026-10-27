@@ -51,5 +51,9 @@ jobs:
                   key in body for key in ("snapshot_id", "cash", "coverage", "demo")
               ):
                   raise SystemExit("Cached overview is unavailable")
+              if path == "/api/v1/overview" and (
+                  not isinstance(body["demo"], dict) or not body["demo"].get("run_id")
+              ):
+                  raise SystemExit("Prepared demo run is unavailable")
               print(f"{path}: OK")
           PY
