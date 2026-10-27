@@ -271,9 +271,10 @@ async def simulate(run_id: str, seed: int, source: str, workdir: Path) -> dict:
 
 
 def scrubbed(env: dict[str, str]) -> dict[str, str]:
-    """``env`` without any provider variable or the demo token, under the sim role."""
-    keep = {k: v for k, v in env.items() if not k.startswith("AIRWALLEX_") and k != SCRUBBED_TOKEN}
-    return keep | {"LEDGERWORLD_ROLE": SIM_ROLE}
+    """Use the same process boundary as every simulation entry point."""
+    from ..execution.boundary import spawn_sim
+
+    return spawn_sim(env)
 
 
 def sim_env(env: dict[str, str]) -> dict[str, str]:
@@ -284,9 +285,9 @@ def sim_env(env: dict[str, str]) -> dict[str, str]:
 
 def isolate() -> None:
     """In the child, before any world work: whatever reached ``os.environ`` on import goes."""
-    clean = scrubbed(dict(os.environ))
-    os.environ.clear()
-    os.environ.update(clean)
+    from ..execution.boundary import enter_sim
+
+    enter_sim()
 
 
 def run_simulation(run_id: str, seed: int, source: str, scratch: Path) -> dict:
