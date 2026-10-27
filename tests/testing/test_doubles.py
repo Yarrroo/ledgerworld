@@ -7,6 +7,7 @@ import asyncio
 import json
 import random
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from app.testing.fake_graph_memory import FakeGraphMemory, NamespaceViolation, namespace_for
@@ -17,6 +18,7 @@ from app.testing.scripted_model import (
     UnexpectedModelCall,
 )
 from zep_cloud import NotFoundError
+from zep_cloud.errors import BadRequestError
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "prp/2026-10-20-ledgerworld/design/modules/agent-world/fixtures/coupled-chain.json"
@@ -81,6 +83,13 @@ def run_branch(branch: str, seed: int):
     return plan, models, answers
 
 
+def intent_id(call_id: str) -> str:
+    """The intent a tool call becomes: i-r<round>-<actor_id>-<n> (agent-world HANDOFF, Data)."""
+
+    assert call_id.startswith("call-"), call_id
+    return "i-" + call_id[len("call-"):]
+
+
 def calls_of(completion) -> list[tuple[str, str, dict]]:
     return [
         (c.id, c.function.name, json.loads(c.function.arguments))
@@ -112,17 +121,12 @@ def test_coupled_chain_plan_replays_exactly():
     r4 = calls_of(shock[(4, "borrower-c")])
     assert [name for _, name, _ in r4] == [expect["shock"]["round_4"]["type"]]
     assert r4[0][2] == plan_entries[0]["tool_calls"][0]["args"]
-    assert [f"i-r4-borrower-c-{n}" for n, _ in enumerate(r4, 1)] == [
-        expect["shock"]["round_4"]["intent"]
-    ]
+    assert [intent_id(cid) for cid, _, _ in r4] == [expect["shock"]["round_4"]["intent"]]
     r5 = calls_of(shock[(5, "lender")])
     assert [(name, args) for _, name, args in r5] == [
         (c["name"], c["args"]) for c in plan_entries[1]["tool_calls"]
     ]
-    assert [f"i-r5-lender-{n}" for n, _ in enumerate(r5, 1)] == expect["shock"]["round_5"][
-        "intents"
-    ]
-    assert [cid for cid, _, _ in r5] == ["call-r5-lender-1", "call-r5-lender-2"]
+    assert [intent_id(cid) for cid, _, _ in r5] == expect["shock"]["round_5"]["intents"]
 
     # The model saw exactly the evidence the fixture traces each response to.
     by_round = {c.round: c for c in models["borrower-c"].calls}
@@ -212,12 +216,12 @@ def test_unexpected_calls_fail_loudly():
         once.run([{"role": "user", "content": "again"}], tools=tool_schemas())
 
     ambiguous = ScriptedPlan([
-        {"actor_id": "lender", "round": 1, "tool_calls": [{"name": "accept", "args": {}}]},
         {"actor_id": "lender", "round": 1, "when_seen": ["p-1"], "content": "x"},
+        {"actor_id": "lender", "round": 1, "when_seen": ["p-2"], "content": "y"},
     ])
     with pytest.raises(UnexpectedModelCall, match="all match"):
         ambiguous.model("lender", lambda: 1).run(
-            [{"role": "user", "content": "saw p-1"}], tools=tool_schemas()
+            [{"role": "user", "content": "saw p-1 and p-2"}], tools=tool_schemas()
         )
 
     # Whole-token matching: p-r3-10 is not p-r3-1, so the scripted entry does not fire.
@@ -361,3 +365,71 @@ def test_upstream_services_read_the_fake(monkeypatch):
     sibling = mem.for_namespace(namespace_for("w1", "other"))
     with pytest.raises(NamespaceViolation):
         sibling.graph.search(graph_id=graph_id, query="lender")
+
+
+# Regressions from review
+
+
+def test_the_most_specific_matching_entry_answers():
+    plan = ScriptedPlan([
+        {"actor_id": "lender", "round": 1, "tool_calls": [{"name": "accept", "args": {}}]},
+        {"actor_id": "lender", "round": 1, "when_seen": ["p-1"],
+         "tool_calls": [{"name": "no_action", "args": {}}]},
+    ])
+    saw = plan.model("lender", lambda: 1).run(
+        [{"role": "user", "content": "saw p-1"}], tools=tool_schemas()
+    )
+    assert [name for _, name, _ in calls_of(saw)] == ["no_action"]
+    unseen = plan.model("lender", lambda: 1).run(
+        [{"role": "user", "content": "quiet"}], tools=tool_schemas()
+    )
+    assert [name for _, name, _ in calls_of(unseen)] == ["accept"]
+
+
+def test_a_tool_result_the_model_never_asked_for_fails_loudly():
+    plan = ScriptedPlan([{"default": True, "tool_calls": [{"name": "no_action", "args": {}}]}])
+    model = plan.model("lender", lambda: 1)
+    stray = {"role": "tool", "tool_call_id": "call-r0-lender-1", "content": "queued"}
+    with pytest.raises(UnexpectedModelCall, match="tool result"):
+        model.run([{"role": "user", "content": "hi"}, stray], tools=tool_schemas())
+
+    first = model.run([{"role": "user", "content": "hi"}], tools=tool_schemas())
+    (call_id, _, _), = calls_of(first)
+    result = {"role": "tool", "tool_call_id": call_id, "content": "queued"}
+    history = [{"role": "user", "content": "hi"}, first.choices[0].message.model_dump(), result]
+    done = model.run(history, tools=tool_schemas())
+    assert done.choices[0].message.content == "done" and not calls_of(done)
+    assert [c.answer for c in model.calls] == ["default", "follow-up"]
+    with pytest.raises(UnexpectedModelCall, match="tool result"):
+        model.run(history, tools=tool_schemas())
+
+
+def test_batch_process_is_all_or_nothing():
+    mem = FakeGraphMemory(namespace_for("w", "b"))
+    for graph_id in ("g1", "g2"):
+        mem.graph.create(graph_id=graph_id)
+    batch_id = mem.batch.create().batch_id
+    items = [SimpleNamespace(type="graph_episode", graph_id=g, data=g, content=None,
+                             created_at=None, source_description=None, metadata=None)
+             for g in ("g1", "g2")]
+    mem.batch.add(batch_id, items=items)
+    mem.graph.delete(graph_id="g2")
+    with pytest.raises(NotFoundError):
+        mem.batch.process(batch_id)
+    assert mem.graph.search(graph_id="g1", query="g1", scope="episodes").episodes == []
+    assert mem.batch.get(batch_id).status == "draft"
+
+
+def test_graph_paging_takes_the_sdk_arguments_and_rejects_a_zero_limit():
+    mem, graph_id, _, _ = seeded(namespace_for("w", "b"))
+    first = mem.graph.node.with_raw_response.get_by_graph_id(graph_id, limit=1)
+    cursor = first.headers["zep-next-cursor"]
+    rest = mem.graph.node.with_raw_response.get_by_graph_id(graph_id, limit=1, uuid_cursor=cursor)
+    assert [n.name for n in first.data + rest.data] == ["lender", "venue"]
+    for call in (
+        lambda: mem.graph.search(graph_id=graph_id, query="venue", limit=0),
+        lambda: mem.batch.list(limit=0),
+        lambda: mem.graph.node.get_by_graph_id(graph_id, limit=0),
+    ):
+        with pytest.raises(BadRequestError):
+            call()

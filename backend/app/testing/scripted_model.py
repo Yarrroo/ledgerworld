@@ -4,8 +4,15 @@ A plan is a JSON list of entries ``{actor_id, round, when_seen?, tool_calls[] | 
 plus at most one ``{default: true, ...}``. ``ScriptedModel`` is a camel model backend, so an
 OASIS or camel agent built on it calls the same tools a live model would: each fresh call is
 answered from the entry matching (actor, round, what the actor saw), never from call order, so
-concurrent agents get the same answers in any order. A call no entry matches, with no default,
-raises ``UnexpectedModelCall``. Every prompt is recorded on the model and on its plan.
+concurrent agents get the same answers in any order. Among matching entries the most specific
+(the largest ``when_seen``) answers; a call no entry matches, with no default, raises
+``UnexpectedModelCall``, as do a tie, an entry answered twice by one model, a tool the agent does
+not offer and a tool result for a call this model never made. Every prompt is recorded on the
+model and on its plan.
+
+One plan may drive several branches, so an entry is consumed per model: a model is one actor in
+one branch. What the actor saw is the ``seen_source`` it is given (the observation's evidence
+ids), or else the ``when_seen`` ids written as whole tokens in its latest user message.
 
 Selection: ``LLM_BASE_URL=scripted://<plan>`` (a name in ``plans/`` or an absolute path) through
 ``ScriptedPlan.from_env``, or by passing a ``ScriptedModel`` directly. ``openai_client()`` gives
@@ -22,16 +29,21 @@ import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from camel.models import BaseModelBackend
-from camel.types import ChatCompletion, ModelType
+from camel.models.stub_model import StubTokenCounter
+from camel.types import (
+    ChatCompletion,
+    ChatCompletionMessage,
+    ChatCompletionMessageFunctionToolCall,
+    Choice,
+    CompletionUsage,
+    ModelType,
+)
 from camel.utils import BaseTokenCounter
-from openai.types.chat import ChatCompletionMessageFunctionToolCall
-from openai.types.chat.chat_completion import Choice
-from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.chat.chat_completion_message_function_tool_call import Function
-from openai.types.completion_usage import CompletionUsage
 
 PLANS_DIR = Path(__file__).resolve().parent / "plans"
 SCRIPTED_SCHEME = "scripted://"
@@ -61,7 +73,6 @@ class PlanEntry:
     when_seen: frozenset[str]
     tool_calls: tuple[ToolCall, ...]
     content: str | None
-    default: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,7 +105,7 @@ def _parse_entry(index: int, raw: Any) -> PlanEntry:
     if not tool_calls and content is None:
         raise PlanError(f"plan entry {index} has neither tool_calls nor content")
     if raw.get("default"):
-        return PlanEntry(index, None, None, frozenset(), tuple(tool_calls), content, True)
+        return PlanEntry(index, None, None, frozenset(), tuple(tool_calls), content)
     actor_id, rnd = raw.get("actor_id"), raw.get("round")
     if not isinstance(actor_id, str) or not isinstance(rnd, int) or isinstance(rnd, bool):
         raise PlanError(f"plan entry {index} needs a string actor_id and an integer round")
@@ -132,14 +143,17 @@ class ScriptedPlan:
             raise PlanError("a plan is a list of entries")
         self.source = source
         parsed = [_parse_entry(i, raw) for i, raw in enumerate(entries)]
-        defaults = [e for e in parsed if e.default]
+        defaults = [e for e in parsed if e.actor_id is None]
         if len(defaults) > 1:
             raise PlanError("a plan has at most one default entry")
         self.default: PlanEntry | None = defaults[0] if defaults else None
-        self.entries: tuple[PlanEntry, ...] = tuple(e for e in parsed if not e.default)
-        keys = [(e.actor_id, e.round, e.when_seen) for e in self.entries]
-        if len(keys) != len(set(keys)):
-            raise PlanError("two plan entries share actor, round and when_seen")
+        self.entries: tuple[PlanEntry, ...] = tuple(e for e in parsed if e.actor_id is not None)
+        self._by_turn: dict[tuple[str, int], list[PlanEntry]] = {}
+        for entry in self.entries:
+            turn = self._by_turn.setdefault((entry.actor_id, entry.round), [])
+            if any(other.when_seen == entry.when_seen for other in turn):
+                raise PlanError("two plan entries share actor, round and when_seen")
+            turn.append(entry)
         self._lock = threading.Lock()
         self.calls: list[ScriptedCall] = []
 
@@ -182,22 +196,18 @@ class ScriptedPlan:
         return ScriptedModel(self, actor_id, round_source, seen_source=seen_source)
 
     def candidates(self, actor_id: str, rnd: int) -> list[PlanEntry]:
-        return [e for e in self.entries if e.actor_id == actor_id and e.round == rnd]
+        return self._by_turn.get((actor_id, rnd), [])
 
     def record(self, call: ScriptedCall) -> None:
         with self._lock:
             self.calls.append(call)
 
 
-class _FixedTokenCounter(BaseTokenCounter):
+class _PromptTokenCounter(StubTokenCounter):
+    """Camel's stub counter, but scaled to the prompt so context trimming behaves as live."""
+
     def count_tokens_from_messages(self, messages: list[dict[str, Any]]) -> int:
-        return sum(len(json.dumps(m, sort_keys=True, default=str)) // 4 + 1 for m in messages)
-
-    def encode(self, text: str) -> list[int]:
-        return [0] * (len(text) // 4 + 1)
-
-    def decode(self, token_ids: list[int]) -> str:
-        return ""
+        return sum(len(str(m.get("content") or "")) // 4 + 1 for m in messages)
 
 
 def _tool_names(tools: list[dict[str, Any]] | None) -> tuple[str, ...]:
@@ -220,13 +230,14 @@ class ScriptedModel(BaseModelBackend):
         *,
         seen_source: Callable[[list[dict[str, Any]]], Iterable[str]] | None = None,
     ) -> None:
-        super().__init__(ModelType.STUB, {}, None, None, _FixedTokenCounter())
+        super().__init__(ModelType.STUB, {}, None, None, _PromptTokenCounter())
         self.plan = plan
         self.actor_id = actor_id
         self.round_source = round_source
         self.seen_source = seen_source
         self.calls: list[ScriptedCall] = []
         self._used: set[int] = set()
+        self._pending: set[str] = set()  # tool-call ids issued and not yet answered
         self._lock = threading.Lock()
 
     @property
@@ -242,7 +253,8 @@ class ScriptedModel(BaseModelBackend):
     def _seen(self, messages: list[dict[str, Any]], candidates: list[PlanEntry]) -> frozenset:
         if self.seen_source is not None:
             return frozenset(self.seen_source(messages))
-        return seen_in_prompt(messages, set().union(*(e.when_seen for e in candidates)))
+        ids = set().union(*(e.when_seen for e in candidates))
+        return seen_in_prompt(messages, ids) if ids else frozenset()
 
     def _answer(self, messages: list[dict[str, Any]], tools) -> ChatCompletion:
         rnd = int(self.round_source())
@@ -252,17 +264,25 @@ class ScriptedModel(BaseModelBackend):
             seq = len(self.calls) + 1
             # The agent sent back the results of the tool calls it was given: end the turn.
             if snapshot and snapshot[-1].get("role") == "tool":
+                call_id = snapshot[-1].get("tool_call_id")
+                if call_id not in self._pending:
+                    raise UnexpectedModelCall(
+                        f"{self.actor_id} round {rnd}: a tool result for {call_id!r}, which "
+                        "this model has no open call for"
+                    )
+                self._pending.clear()
                 return self._finish(rnd, seq, snapshot, offered, frozenset(), "follow-up", None)
             candidates = self.plan.candidates(self.actor_id, rnd)
             seen = self._seen(snapshot, candidates)
             matched = [e for e in candidates if e.when_seen <= seen]
-            if len(matched) > 1:
+            best = [e for e in matched if all(o.when_seen <= e.when_seen for o in matched)]
+            if matched and len(best) != 1:
                 raise UnexpectedModelCall(
                     f"{self.actor_id} round {rnd}: plan entries "
                     f"{[e.index for e in matched]} all match what it saw {sorted(seen)}"
                 )
             if matched:
-                entry, answer = matched[0], f"entry:{matched[0].index}"
+                entry, answer = best[0], f"entry:{best[0].index}"
                 if entry.index in self._used:
                     raise UnexpectedModelCall(
                         f"{self.actor_id} round {rnd}: plan entry {entry.index} already answered"
@@ -288,19 +308,21 @@ class ScriptedModel(BaseModelBackend):
         call = ScriptedCall(self.actor_id, rnd, messages, offered, seen, answer, tool_calls)
         self.calls.append(call)
         self.plan.record(call)
+        call_ids = [f"call-r{rnd}-{self.actor_id}-{n}" for n in range(1, len(tool_calls) + 1)]
+        self._pending.update(call_ids)
         message = ChatCompletionMessage(
             role="assistant",
             content=FINISHED if entry is None else entry.content,
             tool_calls=[
                 ChatCompletionMessageFunctionToolCall(
-                    id=f"call-r{rnd}-{self.actor_id}-{n}",
+                    id=call_id,
                     type="function",
                     function=Function(
                         name=c.name,
                         arguments=json.dumps(c.args, sort_keys=True, separators=(",", ":")),
                     ),
                 )
-                for n, c in enumerate(tool_calls, start=1)
+                for call_id, c in zip(call_ids, tool_calls, strict=True)
             ]
             or None,
         )
@@ -323,25 +345,10 @@ class ScriptedModel(BaseModelBackend):
             ),
         )
 
-    def openai_client(self) -> _OpenAIClient:
+    def openai_client(self) -> SimpleNamespace:
         """An object with ``chat.completions.create`` for the upstream ``LLMClient.client``."""
 
-        return _OpenAIClient(self)
+        def create(*, messages, tools=None, **_ignored) -> ChatCompletion:
+            return self.run(list(messages), tools=tools)
 
-
-class _Completions:
-    def __init__(self, model: ScriptedModel) -> None:
-        self._model = model
-
-    def create(self, *, messages, tools=None, **_ignored) -> ChatCompletion:
-        return self._model.run(list(messages), tools=tools)
-
-
-class _Chat:
-    def __init__(self, model: ScriptedModel) -> None:
-        self.completions = _Completions(model)
-
-
-class _OpenAIClient:
-    def __init__(self, model: ScriptedModel) -> None:
-        self.chat = _Chat(model)
+        return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))

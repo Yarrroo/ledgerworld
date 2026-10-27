@@ -17,8 +17,8 @@ given sequence of calls always produces the same ids.
 
 from __future__ import annotations
 
-import importlib
 import re
+import sys
 import threading
 from dataclasses import dataclass, field
 from typing import Any
@@ -40,17 +40,11 @@ from zep_cloud.types import (
     SuccessResponse,
 )
 
+from ..utils import zep as zep_utils
+from ..utils.zep_paging import _NEXT_CURSOR_HEADER as NEXT_CURSOR_HEADER
+
 NAMESPACE_RE = re.compile(r"^world/[^/\s]+/branch/[^/\s]+$")
-NEXT_CURSOR_HEADER = "zep-next-cursor"
 EPOCH = "2026-01-01T00:00:00Z"
-# Upstream modules that build their client with ``get_zep_client``; ``install`` points them here.
-UPSTREAM_CLIENT_MODULES = (
-    "app.services.graph_builder",
-    "app.services.zep_tools",
-    "app.services.zep_entity_reader",
-    "app.services.zep_graph_memory_updater",
-    "app.services.oasis_profile_generator",
-)
 
 
 class NamespaceViolation(PermissionError):
@@ -63,6 +57,24 @@ def namespace_for(world_id: str, branch_id: str) -> str:
 
 def _not_found(what: str) -> NotFoundError:
     return NotFoundError(body=ApiError(message=f"{what} not found"))
+
+
+def _bad_request(message: str) -> BadRequestError:
+    return BadRequestError(body=ApiError(message=message))
+
+
+def _check_limit(limit: int | None) -> None:
+    if limit is not None and limit < 1:
+        raise _bad_request("limit must be at least 1")
+
+
+def _offset_page(items: list[Any], limit: int | None, cursor: int | None):
+    """Offset pagination, as the batch endpoints page: (deep copies, next cursor or None)."""
+
+    _check_limit(limit)
+    start = cursor or 0
+    end = start + (len(items) if limit is None else limit)
+    return [i.model_copy(deep=True) for i in items[start:end]], end if end < len(items) else None
 
 
 @dataclass
@@ -115,25 +127,35 @@ class FakeGraphMemory:
         return FakeGraphMemory(namespace, self.store)
 
     def install(self, monkeypatch: Any) -> FakeGraphMemory:
-        """Make every upstream ``get_zep_client`` call return this client (pytest monkeypatch)."""
+        """Make every ``get_zep_client`` call return this client (pytest monkeypatch).
 
-        for name in UPSTREAM_CLIENT_MODULES:
-            module = importlib.import_module(name)
-            monkeypatch.setattr(module, "get_zep_client", lambda *_a, **_k: self)
+        Rebinds the function at its source and in every loaded module that imported it, so a
+        module imported later also gets the fake and none keeps the hosted client.
+        """
+
+        original = zep_utils.get_zep_client
+
+        def fake(*_args: Any, **_kwargs: Any) -> FakeGraphMemory:
+            return self
+
+        for module in list(sys.modules.values()):
+            if getattr(module, "__dict__", {}).get("get_zep_client") is original:
+                monkeypatch.setattr(module, "get_zep_client", fake)
         return self
 
     # Ownership checks. Callers hold the store lock.
 
+    def _check_owner(self, owner: str, what: str) -> None:
+        if owner != self.namespace:
+            raise NamespaceViolation(f"{self.namespace} reached {what} owned by {owner}")
+
     def _graph(self, graph_id: str | None) -> _GraphState:
         if not graph_id:
-            raise BadRequestError(body=ApiError(message="graph_id is required"))
+            raise _bad_request("graph_id is required")
         state = self.store.graphs.get(graph_id)
         if state is None:
             raise _not_found(f"graph {graph_id}")
-        if state.namespace != self.namespace:
-            raise NamespaceViolation(
-                f"{self.namespace} reached graph {graph_id} owned by {state.namespace}"
-            )
+        self._check_owner(state.namespace, f"graph {graph_id}")
         return state
 
     def _item_graph(self, uuid_: str, kind: str) -> _GraphState:
@@ -146,10 +168,7 @@ class FakeGraphMemory:
         state = self.store.batches.get(batch_id)
         if state is None:
             raise _not_found(f"batch {batch_id}")
-        if state.namespace != self.namespace:
-            raise NamespaceViolation(
-                f"{self.namespace} reached batch {batch_id} owned by {state.namespace}"
-            )
+        self._check_owner(state.namespace, f"batch {batch_id}")
         return state
 
     def _new_episode(
@@ -207,9 +226,9 @@ class _RawResponse:
 
 
 def _page(items: list[Any], limit: int | None, cursor: str | None) -> tuple[list[Any], str | None]:
-    """Cursor pagination over uuid-sorted items; the cursor is the last uuid returned."""
+    """Cursor pagination over items in uuid order; the cursor is the last uuid returned."""
 
-    items = sorted(items, key=lambda item: item.uuid_)
+    _check_limit(limit)
     if cursor is not None:
         items = [item for item in items if item.uuid_ > cursor]
     size = limit if limit is not None else len(items)
@@ -224,29 +243,31 @@ class _ListByGraph:
     def __init__(self, client: FakeGraphMemory, attr: str) -> None:
         self._client = client
         self._attr = attr
+        self.with_raw_response = _RawList(self)
 
     def _list(self, graph_id: str, limit: int | None, cursor: str | None):
         with self._client.store.lock:
             state = self._client._graph(graph_id)
             return _page(list(getattr(state, self._attr).values()), limit, cursor)
 
-    def get_by_graph_id(self, graph_id: str, *, limit=None, uuid_cursor=None, cursor=None):
-        return self._list(graph_id, limit, uuid_cursor or cursor)[0]
+    def get_by_graph_id(self, graph_id: str, *, limit=None, uuid_cursor=None):
+        return self._list(graph_id, limit, uuid_cursor)[0]
 
 
 class _RawList:
     def __init__(self, lister: _ListByGraph) -> None:
         self._lister = lister
 
-    def get_by_graph_id(self, graph_id: str, *, limit=None, cursor=None) -> _RawResponse:
-        data, next_cursor = self._lister._list(graph_id, limit, cursor)
+    def get_by_graph_id(
+        self, graph_id: str, *, limit=None, cursor=None, uuid_cursor=None
+    ) -> _RawResponse:
+        data, next_cursor = self._lister._list(graph_id, limit, uuid_cursor or cursor)
         return _RawResponse(data, {NEXT_CURSOR_HEADER: next_cursor} if next_cursor else {})
 
 
 class _NodeClient(_ListByGraph):
     def __init__(self, client: FakeGraphMemory) -> None:
         super().__init__(client, "nodes")
-        self.with_raw_response = _RawList(self)
 
     def get(self, uuid_: str) -> EntityNode:
         with self._client.store.lock:
@@ -257,7 +278,7 @@ class _NodeClient(_ListByGraph):
             state = self._client._item_graph(node_uuid, "node")
             return [
                 edge.model_copy(deep=True)
-                for _, edge in sorted(state.edges.items())
+                for edge in state.edges.values()
                 if node_uuid in (edge.source_node_uuid, edge.target_node_uuid)
             ]
 
@@ -265,7 +286,6 @@ class _NodeClient(_ListByGraph):
 class _EdgeClient(_ListByGraph):
     def __init__(self, client: FakeGraphMemory) -> None:
         super().__init__(client, "edges")
-        self.with_raw_response = _RawList(self)
 
     def get(self, uuid_: str) -> EntityEdge:
         with self._client.store.lock:
@@ -299,11 +319,7 @@ class _GraphClient:
         with client.store.lock:
             existing = client.store.graphs.get(graph_id)
             if existing is not None:
-                if existing.namespace != client.namespace:
-                    raise NamespaceViolation(
-                        f"{client.namespace} reached graph {graph_id} owned by "
-                        f"{existing.namespace}"
-                    )
+                client._check_owner(existing.namespace, f"graph {graph_id}")
                 raise ConflictError(body=ApiError(message=f"graph {graph_id} exists"))
             graph = Graph(
                 graph_id=graph_id, name=name, description=description, created_at=EPOCH,
@@ -336,7 +352,7 @@ class _GraphClient:
         source_description: str | None = None, metadata: dict[str, Any] | None = None,
     ) -> Episode:
         if type not in {"text", "json", "message"}:
-            raise BadRequestError(body=ApiError(message=f"unsupported episode type {type!r}"))
+            raise _bad_request(f"unsupported episode type {type!r}")
         client = self._client
         with client.store.lock:
             state = client._graph(graph_id)
@@ -359,7 +375,8 @@ class _GraphClient:
             "episodes": lambda ep: ep.content,
         }
         if scope not in texts:
-            raise BadRequestError(body=ApiError(message=f"unsupported search scope {scope!r}"))
+            raise _bad_request(f"unsupported search scope {scope!r}")
+        _check_limit(limit)
         terms = set(re.findall(r"\w+", query.lower()))
         with self._client.store.lock:
             state = self._client._graph(graph_id)
@@ -392,10 +409,10 @@ class _BatchClient:
         with client.store.lock:
             batch = client._batch(batch_id)
             if batch.summary.status != "draft":
-                raise BadRequestError(body=ApiError(message=f"batch {batch_id} is not a draft"))
+                raise _bad_request(f"batch {batch_id} is not a draft")
             for item in items:
                 if getattr(item, "type", None) != "graph_episode":
-                    raise BadRequestError(body=ApiError(message="only graph_episode items"))
+                    raise _bad_request("only graph_episode items")
                 client._graph(item.graph_id)
             added = []
             for item in items:
@@ -416,11 +433,13 @@ class _BatchClient:
         with client.store.lock:
             batch = client._batch(batch_id)
             if batch.summary.status != "draft":
-                raise BadRequestError(body=ApiError(message=f"batch {batch_id} is not a draft"))
+                raise _bad_request(f"batch {batch_id} is not a draft")
+            # Resolve every graph before writing any episode, so a failure ingests nothing.
+            graphs = [client._graph(item.graph_id) for _, item in batch.items]
             processed = []
-            for detail, item in batch.items:
+            for (detail, item), graph in zip(batch.items, graphs, strict=True):
                 episode = client._new_episode(
-                    client._graph(item.graph_id), item.data or item.content or "",
+                    graph, item.data or item.content or "",
                     created_at=item.created_at, source_description=item.source_description,
                     metadata=item.metadata,
                 )
@@ -450,12 +469,8 @@ class _BatchClient:
                 b.summary for _, b in sorted(client.store.batches.items())
                 if b.namespace == client.namespace and (status is None or b.summary.status == status)
             ]
-        start = cursor or 0
-        end = start + (limit or len(own))
-        return BatchListResponse(
-            batches=[s.model_copy(deep=True) for s in own[start:end]],
-            next_cursor=end if end < len(own) else None,
-        )
+        batches, next_cursor = _offset_page(own, limit, cursor)
+        return BatchListResponse(batches=batches, next_cursor=next_cursor)
 
     def list_items(self, batch_id: str, *, limit: int | None = None, cursor: int | None = None,
                    status=None) -> BatchItemListResponse:
@@ -464,9 +479,5 @@ class _BatchClient:
                 d for d, _ in self._client._batch(batch_id).items
                 if status is None or d.status == status
             ]
-        start = cursor or 0
-        end = start + (limit or len(details))
-        return BatchItemListResponse(
-            items=[d.model_copy(deep=True) for d in details[start:end]],
-            next_cursor=end if end < len(details) else None,
-        )
+        items, next_cursor = _offset_page(details, limit, cursor)
+        return BatchItemListResponse(items=items, next_cursor=next_cursor)
