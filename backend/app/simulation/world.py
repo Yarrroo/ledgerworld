@@ -15,15 +15,15 @@ that branch. Graph memory is not in the round loop (HANDOFF); an actor's memory 
 
 ``capture()`` pins every component a round can change, before step 1; ``restore()`` puts them
 back and ``fingerprint()`` digests each, so a restoration is checked rather than trusted.
-Each world draws from its own ``random.Random``, OASIS's draws included, so a sibling world in
-the same process never moves its stream. Importing ``oasis`` writes ``./log`` in the working directory (oasis-seam.md S13), so it is
-imported on first use from a temporary directory.
+Each world draws from its own ``random.Random``, OASIS's draws included (``oasis_finance.rng``),
+so a sibling world in the same process never moves its stream. Importing ``oasis`` writes
+``./log`` in the working directory (oasis-seam.md S13), so it is imported on first use from a
+temporary directory.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import copy
 import hashlib
 import json
@@ -42,6 +42,7 @@ from typing import Any, Self
 
 from oasis_finance.actions import decode_args
 from oasis_finance.observation import DEFAULT_EPOCH
+from oasis_finance.rng import WORLD_RNG, route_oasis_random
 from sqlalchemy import Connection, select
 
 from ..finance import ledger
@@ -66,19 +67,6 @@ class WorldUnusable(RuntimeError):
     """A failed round could not be shown to have stopped every writer; this world is spent."""
 
 
-# The RNG of the world whose OASIS code is running; unset, OASIS draws from the module RNG.
-_WORLD_RNG: contextvars.ContextVar[random.Random | None] = contextvars.ContextVar(
-    "world_rng", default=None)
-
-
-class _WorldRandom:
-    """``random`` as OASIS's platform and recommender see it: each draw goes to the RNG of the
-    world whose platform is running, so worlds sharing a process never share a stream."""
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(_WORLD_RNG.get() or random, name)
-
-
 def import_oasis() -> SimpleNamespace:
     """The OASIS names the world uses, imported from a temporary directory the first time."""
     if "oasis.environment.env" not in sys.modules:
@@ -90,13 +78,9 @@ def import_oasis() -> SimpleNamespace:
             os.chdir(cwd)
     from oasis import AgentGraph, LLMAction, Platform
     from oasis.environment.env import OasisEnv
-    from oasis.social_platform import platform, recsys
     from oasis.social_platform.typing import ActionType
 
-    for module in (platform, recsys):  # every OASIS module that draws from ``random``
-        if not isinstance(module.random, _WorldRandom):
-            module.random = _WorldRandom()
-
+    route_oasis_random()
     return SimpleNamespace(AgentGraph=AgentGraph, LLMAction=LLMAction, Platform=Platform,
                            OasisEnv=OasisEnv, ActionType=ActionType)
 
@@ -218,8 +202,9 @@ class World:
                               if e.get("branch") in (None, branch_id)),
                              key=lambda e: e["round"])
         self.clock = Clock(epoch=epoch)
-        self.seed = seed
-        self.rng = random.Random(seed)  # this world's own stream, OASIS's draws included
+        # This world's own stream, OASIS's draws included. Its tasks hold this object, so it is
+        # only ever reseeded or restored in place, never replaced.
+        self.rng = random.Random(seed)
         self.store = store or LedgerStore("sqlite://")
         ledger.from_snapshot(self.store, self.snapshot)
         self.queue = IntentQueue(branch_id)
@@ -256,27 +241,15 @@ class World:
             graph.add_agent(agent)
         platform = self.oasis.Platform(db_path=str(self.db_path), recsys_type="random")
         self.env = self.oasis.OasisEnv(graph, platform, database_path=str(self.db_path))
-        # OASIS draws from ``random``, which import_oasis routes to the running world's RNG: the
-        # platform's task inherits this world's at creation, and env.step's direct call to the
-        # recommender is given it here.
-        token = _WORLD_RNG.set(self.rng)
+        # The platform's task, created here, draws from this world's RNG for its whole life
+        # (oasis_finance.rng); a round's own draws are given it by the coordinator.
+        token = WORLD_RNG.set(self.rng)
         try:
             await self.env.reset()
         finally:
-            _WORLD_RNG.reset(token)
-        platform.update_rec_table = self._own_rng(platform.update_rec_table)
+            WORLD_RNG.reset(token)
         platform.sandbox_clock.time_step = self.clock.round
         return self
-
-    def _own_rng(self, draw: Callable[[], Any]) -> Callable[[], Any]:
-        async def update_rec_table() -> Any:
-            token = _WORLD_RNG.set(self.rng)
-            try:
-                return await draw()
-            finally:
-                _WORLD_RNG.reset(token)
-
-        return update_rec_table
 
     async def close(self) -> None:
         if self.env is not None and not self.env.platform_task.done():

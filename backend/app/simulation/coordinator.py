@@ -57,6 +57,7 @@ from oasis_finance.actions import (
     clearing_key,
     parse_tool_call,
 )
+from oasis_finance.rng import WORLD_RNG
 from pydantic import ValidationError
 from sqlalchemy import Connection, select
 
@@ -623,6 +624,7 @@ class Coordinator:
         token = object()
         context = contextvars.copy_context()
         context.run(_ROUND.set, token)
+        context.run(WORLD_RNG.set, world.rng)  # env.step's recommender draws from the world's
         conn = world.store.engine.connect()
         trans = conn.begin()
         body = asyncio.create_task(self._steps(world, conn, trans), context=context,

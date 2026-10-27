@@ -14,6 +14,7 @@ import asyncio
 import copy
 import json
 import random
+import sys
 from pathlib import Path
 
 import pytest
@@ -778,10 +779,13 @@ def drawing_world(tmp_path, name, seed) -> World:
                       name=name, seed=seed)
 
 
-def draws(world: World) -> tuple:
-    """What the world's random stream decided: the recommendation table it drew, its RNG."""
+async def draws(world: World) -> tuple:
+    """What the world's random stream decided: the recommendation table a round drew, the post
+    each actor's refresh drew on the platform's task, and the RNG after both."""
     rec = world.platform.db.execute("SELECT user_id, post_id FROM rec ORDER BY user_id, post_id")
-    return tuple(rec.fetchall()), world.fingerprint()["RNG state"]
+    feeds = [[p["post_id"] for p in (await agent.env.action.refresh())["posts"]]
+             for agent in world.agents.values()]
+    return tuple(rec.fetchall()), feeds, world.fingerprint()["RNG state"]
 
 
 def test_a_sibling_world_leaves_this_worlds_random_stream_alone(tmp_path):
@@ -790,8 +794,12 @@ def test_a_sibling_world_leaves_this_worlds_random_stream_alone(tmp_path):
 
     async def solo():
         world = drawing_world(tmp_path, "solo", seed=1)
+        seen = []
         async with world:
-            return [(await world.run(1), draws(world))[1] for _ in range(3)]
+            for _ in range(3):
+                await world.run(1)
+                seen.append(await draws(world))
+        return seen
 
     async def beside_a_sibling():
         world = drawing_world(tmp_path, "this", seed=1)
@@ -799,13 +807,13 @@ def test_a_sibling_world_leaves_this_worlds_random_stream_alone(tmp_path):
         seen = []
         async with world:
             await world.run(1)
-            seen.append(draws(world))
+            seen.append(await draws(world))
             await sibling.start()  # sibling startup
             try:
                 await sibling.run(2)  # sibling execution
-                random.seed(99), random.random()  # the process's own draws
+                random.seed(99)  # the process's own stream moves too
                 await world.run(1)
-                seen.append(draws(world))
+                seen.append(await draws(world))
                 capture = sibling.capture()
 
                 def fault(world, ctx):
@@ -816,14 +824,22 @@ def test_a_sibling_world_leaves_this_worlds_random_stream_alone(tmp_path):
                     await sibling.run(1)  # sibling rollback
                 assert sibling.fingerprint() == capture.fingerprint
                 await world.run(1)
-                seen.append(draws(world))
+                seen.append(await draws(world))
             finally:
                 await sibling.close()
         return seen
 
     control = run(solo())
-    assert len({rec for rec, _ in control}) > 1  # the recommender really drew each round
+    assert len({rec for rec, _, _ in control}) > 1  # the recommender really drew each round
     assert run(beside_a_sibling()) == control
+
+
+def test_no_oasis_module_draws_from_the_process_random():
+    """A camel-oasis upgrade that draws from ``random`` in a new module fails here, not by a
+    sibling world quietly moving this one's stream."""
+    unrouted = [name for name, module in list(sys.modules.items())
+                if name.split(".")[0] == "oasis" and getattr(module, "random", None) is random]
+    assert unrouted == []
 
 
 def test_capture_covers_every_component_the_fixture_names():
