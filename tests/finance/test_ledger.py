@@ -505,6 +505,40 @@ def test_an_unknown_balance_never_reads_as_a_missed_obligation():
     assert store.rows("obligations")[0]["state"] == "open"
 
 
+def test_an_unknown_balance_never_pays_a_held_reservation():
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="r1")
+    store.add_obligation("ob", "a/operating", 500, h(1), kind="rent", reservation_id="r1")
+    store.observe("a/operating", "unknown", h(1))
+    assert settle_due(store, h(1)) == []
+    assert store.rows("obligations")[0]["state"] == "open"
+    assert store.reservation("r1").state == "held"
+    assert store.view("a/operating").settled_minor == 7000000
+    store.observe("a/operating", "known", h(2))
+    settle_due(store, h(2))
+    assert store.rows("obligations")[0]["state"] == "met"
+    assert store.view("a/operating").settled_minor == 7000000 - 500
+
+
+def test_an_unknown_balance_never_pays_a_committed_flow():
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="r1")
+    store.add_obligation("ob", "a/operating", 500, h(1), kind="rent", reservation_id="r1")
+    store.commit("r1", due_at=h(1))
+    store.expect("a/operating", "in", 200, h(1), kind="receivable")
+    store.observe("a/operating", "unknown", h(1))
+    settled = settle_due(store, h(2))
+    assert [j.kind for j in settled] == ["settle_receivable"]  # arrivals still land
+    assert store.rows("obligations")[0]["state"] == "open"
+    assert store.reservation("r1").state == "committed"
+    out = [f for f in store.rows("expected_flows") if f["direction"] == "out"]
+    assert [f["state"] for f in out] == ["pending"]
+    store.observe("a/operating", "known", h(3))
+    settle_due(store, h(3))
+    assert store.rows("obligations")[0]["state"] == "met"
+    assert store.view("a/operating").settled_minor == 7000000 + 200 - 500
+
+
 def test_an_obligation_whose_reservation_settled_is_met():
     store = lifecycle_world()
     store.hold("a/operating", 500, now=T0, reservation_id="r1")

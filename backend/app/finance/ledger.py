@@ -70,21 +70,30 @@ def settle_due(store: LedgerStore, now: datetime, *, round: int = 0,
     Expire lapsed holds; land every pending flow due by `now` (arrivals before payments); pay
     every mandatory obligation due by `now` from its held reservation, or from free cash when it
     has none. One whose reservation is already committed waits for its pending_out flow. One the
-    cash cannot cover is marked missed: still owed, still in P, and tried again next round. One
-    on an unknown balance stays open: nothing observed says the cash is short.
+    cash cannot cover is marked missed: still owed, still in P, and tried again next round. On
+    an unknown balance nothing goes out: its due payments stay pending, no reservation is paid
+    and its obligations keep their state, since nothing observed says the cash is there or short.
     """
     done: list[Journal] = []
     with store.transaction(conn) as c:
         outside: dict[str, str] = {}
+        observed: dict[str, bool] = {}
 
         def payee(currency: str) -> str:
             if currency not in outside:
                 outside[currency] = store.external_account(currency, conn=c)
             return outside[currency]
 
+        def known(account_id: str) -> bool:
+            if account_id not in observed:
+                observed[account_id] = state_of(store.view(account_id, conn=c), now) != "unknown"
+            return observed[account_id]
+
         store.expire_due(now, conn=c)
         for direction in ("in", "out"):
             for flow in store.due_flows(direction, now, conn=c):
+                if direction == "out" and not known(flow.account_id):
+                    continue
                 done.append(store.settle_flow(flow.flow_id, counterparty=payee(flow.currency),
                                               at=now, round=round, conn=c))
         for ob in store.due_obligations(now, conn=c):
@@ -95,14 +104,14 @@ def settle_due(store: LedgerStore, now: datetime, *, round: int = 0,
                 continue
             if state == "committed":
                 continue
+            if not known(ob.account_id):  # an unknown balance is not a shortfall: it waits
+                continue
             if state != "held":
                 try:
                     reservation_id = store.hold(ob.account_id, ob.amount_minor, now=now,
                                                 purpose=ob.kind, conn=c)
-                except LedgerRefusal as refusal:
-                    # An unknown balance is not a shortfall: the obligation waits, still open.
-                    if refusal.code != "unknown_balance":
-                        store.set_obligation_state(ob.obligation_id, "missed", conn=c)
+                except LedgerRefusal:
+                    store.set_obligation_state(ob.obligation_id, "missed", conn=c)
                     continue
                 store.attach_reservation(ob.obligation_id, reservation_id, conn=c)
             flow_id = store.commit(reservation_id, due_at=now, flow_id=f"out:{ob.obligation_id}",
