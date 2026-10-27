@@ -615,16 +615,21 @@ def test_a_fork_that_fails_anywhere_can_be_retried(tmp_path, monkeypatch, fault)
 
 
 def test_a_failed_replay_can_be_retried_in_the_same_workdir(played, tmp_path):
+    """And on the same store: a failed replay leaves no platform file and its store empty."""
     cp, calls = played["cp"], list(played["integrated"]["calls"])
     n = next(i for i, c in enumerate(calls)
              if (c.round, c.actor_id) == (CP_ROUND + 1, "borrower-c"))
     bad = [*calls[:n], dataclasses.replace(calls[n], obs_hash="f" * 64), *calls[n + 1:]]
+    store = file_store(tmp_path / "ledger.db")
 
     async def go():
         with pytest.raises(ReplayMiss):
-            await replay(cp, Transcript(WORLD_ID, "integrated", calls=bad), workdir=tmp_path)
+            await replay(cp, Transcript(WORLD_ID, "integrated", calls=bad), workdir=tmp_path,
+                         store=store)
+        assert not (tmp_path / "integrated.db").exists()
+        assert not any(store.dump().values())
         branch = await replay(cp, Transcript(WORLD_ID, "integrated", calls=calls),
-                              workdir=tmp_path)
+                              workdir=tmp_path, store=store)
         await branch.world.close()
         return journal_bytes(branch.world)
 
@@ -814,24 +819,21 @@ def test_a_failed_fork_can_be_retried_on_the_same_store(tmp_path, monkeypatch, f
     retry."""
     from app.simulation import branches
 
-    def refuse(actor_id, world):
-        raise RuntimeError("injected")
-
-    def lineage(*args):
+    def boom(*args):
         raise RuntimeError("injected")
 
     if fault == "lineage":
-        monkeypatch.setattr(branches, "_write_lineage", lineage)
+        monkeypatch.setattr(branches, "_write_lineage", boom)
 
     async def go():
         parent, cp = await small_parent(tmp_path)
         (tmp_path / "a").mkdir()
         store = file_store(tmp_path / "a-ledger.db")
         with pytest.raises(RuntimeError, match="injected"):
-            await fork(cp, "a", model=refuse if fault == "model" else idle_model(),
+            await fork(cp, "a", model=boom if fault == "model" else idle_model(),
                        workdir=tmp_path / "a", store=store)
         monkeypatch.undo()
-        left = {t: r for t, r in store.dump().items() if r}
+        left = any(store.dump().values())
         files = sorted(p.name for p in (tmp_path / "a").iterdir())
         a = await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a", store=store)
         restored = ledger_hash(store)
@@ -840,27 +842,36 @@ def test_a_failed_fork_can_be_retried_on_the_same_store(tmp_path, monkeypatch, f
         return left, files, restored, cp.ledger_digest
 
     left, files, restored, digest = asyncio.run(go())
-    assert left == {} and files == []
+    assert not left and files == []
     assert restored == digest
 
 
-def test_a_failed_replay_can_be_retried_on_the_same_store(played, tmp_path):
-    cp, calls = played["cp"], list(played["integrated"]["calls"])
-    n = next(i for i, c in enumerate(calls)
-             if (c.round, c.actor_id) == (CP_ROUND + 1, "borrower-c"))
-    bad = [*calls[:n], dataclasses.replace(calls[n], obs_hash="f" * 64), *calls[n + 1:]]
-    store = file_store(tmp_path / "ledger.db")
+def test_a_failed_undo_does_not_hide_why_the_fork_failed(tmp_path, monkeypatch):
+    """The fork's own failure is the one raised; an undo step that fails too is named on it."""
+    real_write = BranchMemory.write_record
+
+    def write(self, *args):
+        if self.branch_id == "a":
+            raise RuntimeError("injected")
+        return real_write(self, *args)
+
+    def unreachable(graph_id):
+        raise ConnectionError("graph backend unreachable")
+
+    monkeypatch.setattr(BranchMemory, "write_record", write)
 
     async def go():
-        with pytest.raises(ReplayMiss):
-            await replay(cp, Transcript(WORLD_ID, "integrated", calls=bad), workdir=tmp_path,
-                         store=store)
-        left = {t: r for t, r in store.dump().items() if r}
-        branch = await replay(cp, Transcript(WORLD_ID, "integrated", calls=calls),
-                              workdir=tmp_path, store=store)
-        await branch.world.close()
-        return left, journal_bytes(branch.world)
+        parent, cp = await small_parent(tmp_path)
+        (tmp_path / "a").mkdir()
+        client = FakeGraphMemory(namespace_for(WORLD_ID, "a"), GraphMemoryStore())
+        monkeypatch.setattr(client.graph, "delete", unreachable)
+        try:
+            with pytest.raises(RuntimeError, match="injected") as failed:
+                await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a",
+                           memory_client=client)
+        finally:
+            await parent.close()
+        return failed.value
 
-    left, journals = asyncio.run(go())
-    assert left == {}
-    assert journals == played["integrated"]["journals"]
+    error = asyncio.run(go())
+    assert any("graph backend unreachable" in n for n in error.__notes__)

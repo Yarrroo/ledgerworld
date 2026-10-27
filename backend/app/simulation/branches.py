@@ -246,7 +246,8 @@ async def _fork(cp: Checkpoint, branch_id: str, *, model: ModelFactory, workdir:
     """``fork``, or with ``replay`` the same branch re-run under its own id for ``rounds``.
 
     All or nothing: a failure anywhere, building the world included, leaves no platform file,
-    no memory graph and a given ``store`` as it was before the call.
+    no memory graph and a given ``store`` as it was before the call. The failure is what is
+    raised; an undo step that fails too is added to it as a note.
     """
     if branch_id in (cp.lineage if not replay else cp.lineage - {cp.branch_id}):
         raise BranchMismatch(f"{branch_id!r} is the checkpoint's branch or an ancestor of it; "
@@ -290,16 +291,20 @@ async def _fork(cp: Checkpoint, branch_id: str, *, model: ModelFactory, workdir:
             for r in cp.memory.records if cp.memory is not None else ():
                 memory.write_record(r.actor_id, r.key, r.value, r.round)
         await world.run(rounds)
-    except BaseException:
-        async with contextlib.AsyncExitStack() as undo:  # last in, first run; each one runs
-            if before is not None:
-                undo.callback(_copy_ledger, before, store)
-            if memory is not None:
-                undo.callback(memory.client.graph.delete, memory.graph_id)
-            if created:
-                undo.callback(world.db_path.unlink, missing_ok=True)
-            if world is not None:
-                undo.push_async_callback(world.close)
+    except BaseException as failed:
+        try:
+            async with contextlib.AsyncExitStack() as undo:  # last in, first run; each one runs
+                if before is not None:
+                    undo.callback(_copy_ledger, before, store)
+                if memory is not None:
+                    undo.callback(memory.client.graph.delete, memory.graph_id)
+                if created:
+                    undo.callback(world.db_path.unlink, missing_ok=True)
+                if world is not None:
+                    undo.push_async_callback(world.close)
+        # Whichever undo step fails, the fork's own failure is the one its caller needs.
+        except Exception as undoing:  # noqa: BLE001
+            failed.add_note(f"undoing {branch_id} also failed: {undoing!r}")
         raise
     return Branch(world, memory, parent, checkpoint_round, replay)
 
