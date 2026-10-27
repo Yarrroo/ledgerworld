@@ -26,6 +26,7 @@ from app.connectors.airwallex.client import (
     MAX_ATTEMPTS,
     AirwallexClient,
     account_currencies,
+    global_accounts_by_currency,
 )
 from app.connectors.airwallex.errors import DuplicateRequest, OutcomeUnknown, ProviderError
 from app.connectors.airwallex.live import LiveTransport
@@ -51,11 +52,18 @@ NEXT = {"SCHEDULED": "PROCESSING", "PROCESSING": "SENT", "SENT": "PAID"}
 
 
 class Sandbox:
-    """Answers the way the sandbox did on run 2; `stuck` makes every transition a 500 that
-    moves nothing."""
+    """Answers the way the sandbox did on run 2. A transition it cannot make answers `refuse`
+    (500); `stuck` makes every transition fail and move nothing. The sandbox moves a transfer on
+    by itself: `drift` lists where each failed transition leaves it (None: where it was), `then`
+    maps a made transition's status to the one it moves on to.
+    `reads_fail` answers every transfer read with a 404."""
 
-    def __init__(self, *, stuck: bool = False) -> None:
-        self.stuck = stuck
+    def __init__(self, *, stuck: bool = False, refuse: int = 500, drift: list | None = None,
+                 then: dict | None = None, reads_fail: bool = False,
+                 accounts: list[dict] | None = None) -> None:
+        self.stuck, self.refuse, self.reads_fail = stuck, refuse, reads_fail
+        self.drift, self.then = list(drift or []), then or {}
+        self.accounts = [GLOBAL_ACCOUNT] if accounts is None else accounts
         self.usd = 1_000_000_00
         self.transfers: dict[str, dict] = {}
         self.conversions: set[str] = set()
@@ -70,7 +78,7 @@ class Sandbox:
             return httpx.Response(200, json=[{"currency": "USD", "available_amount":
                                               self.usd / 100, "pending_amount": 0}])
         if path == "/api/v1/global_accounts":
-            return httpx.Response(200, json={"items": [GLOBAL_ACCOUNT], "has_more": False})
+            return httpx.Response(200, json={"items": self.accounts, "has_more": False})
         if path == "/api/v1/fx/quotes/create":
             return httpx.Response(200, json={"quote_id": "q-1", "client_rate": 1.08})
         if path == "/api/v1/fx/conversions/create":
@@ -92,14 +100,21 @@ class Sandbox:
             transfer["status"] = "PROCESSING"  # the sandbox moves it on by itself
             return answer
         if path.startswith("/api/v1/transfers/"):
+            if self.reads_fail:
+                return httpx.Response(404, json={"code": "resource_not_found"})
             return httpx.Response(200, json=self.transfers[path.rsplit("/", 1)[1]])
         if match := TRANSITION.fullmatch(path):
             transfer, target = self.transfers[match.group(1)], body["next_status"]
             self.transitions.append(target)
             if self.stuck or NEXT.get(transfer["status"]) != target:
-                return httpx.Response(500, json={"code": "internal_error"})
+                if self.drift and (moved := self.drift.pop(0)):
+                    transfer["status"] = moved
+                code = "internal_error" if self.refuse >= 500 else "invalid_argument"
+                return httpx.Response(self.refuse, json={"code": code})
             transfer["status"] = target
-            return httpx.Response(200, json=transfer)
+            answer = httpx.Response(200, json=dict(transfer))
+            transfer["status"] = self.then.get(target, target)
+            return answer
         return httpx.Response(404, json={"code": "resource_not_found", "message": path})
 
 
@@ -178,7 +193,7 @@ def test_the_payout_reaches_paid_from_where_the_sandbox_moved_it():
     ok, provider_id, detail = run.payout_to_paid()
     assert (ok, provider_id) == (True, "tr-1"), detail
     assert detail == "status PAID, USD moved -10000 minor"
-    assert sandbox.transitions == ["SENT", "PAID"]
+    assert sandbox.transitions == ["PROCESSING", "SENT", "PAID"]
 
 
 def test_a_transition_to_the_status_already_held_is_that_transfer():
@@ -205,4 +220,68 @@ def test_a_transition_that_never_answers_names_the_transfer():
     sandbox.transitions.clear()
     ok, provider_id, detail = run.payout_to_paid()
     assert (ok, provider_id) == (False, "tr-1")
-    assert detail.startswith("from PROCESSING, to SENT: OutcomeUnknown") and "None" not in detail
+    assert detail.startswith("to SENT: OutcomeUnknown") and "None" not in detail
+
+
+def paid_from(sandbox: Sandbox) -> AirwallexClient:
+    client = live(sandbox)
+    client.create_transfer("canon-pay-1", beneficiary_id="ben-1",
+                           amount=Money(minor=100_00, currency="USD"))
+    return client
+
+
+@pytest.mark.parametrize("refuse", [500, 400])
+def test_a_transition_the_sandbox_already_went_past_is_that_transfer(refuse):
+    sandbox = Sandbox(refuse=refuse)
+    client = paid_from(sandbox)
+    sandbox.transfers["tr-1"]["status"] = "PAID"
+    moved = client.simulate_transition("tr-1", "SENT")
+    assert (moved.provider_id, moved.status) == ("tr-1", "PAID")
+    assert sandbox.transitions == ["SENT"]
+
+
+def test_a_transfer_the_sandbox_moved_toward_the_target_is_asked_again():
+    sandbox = Sandbox(drift=[None, "SENT"])  # PAID from PROCESSING: 500, 500 and on to SENT
+    client = paid_from(sandbox)
+    moved = client.simulate_transition("tr-1", "PAID")
+    assert moved.status == "PAID"
+    assert sandbox.transitions == ["PAID", "PAID", "PAID"]
+
+
+def test_the_check_passes_when_the_sandbox_pays_out_by_itself():
+    sandbox = Sandbox(then={"SENT": "PAID"})  # SENT made, then PAID on its own
+    run = contract(sandbox)
+    assert run.payout()[0]
+    ok, provider_id, detail = run.payout_to_paid()
+    assert (ok, provider_id) == (True, "tr-1"), detail
+
+
+def test_a_failure_transition_is_sent_once():
+    sandbox = Sandbox(stuck=True)
+    client = paid_from(sandbox)
+    with pytest.raises(OutcomeUnknown) as unknown:
+        client.simulate_transition("tr-1", "FAILED", failure_type="REJECTED")
+    assert unknown.value.provider_id == "tr-1"
+    assert sandbox.transitions == ["FAILED"]
+
+
+def test_a_refusal_stands_when_the_read_back_fails():
+    sandbox = Sandbox(refuse=400, reads_fail=True)
+    client = paid_from(sandbox)
+    with pytest.raises(ProviderError) as refused:
+        client.simulate_transition("tr-1", "PAID")
+    assert (refused.value.code, refused.value.http) == ("invalid_argument", 400)
+
+
+EUR_WITH_USD = {"id": "ga-eur", "required_features": [{"currency": "EUR"}],
+                "supported_features": [{"currency": "EUR"}, {"currency": "USD"}]}
+USD_ONLY = {"id": "ga-usd", "required_features": [{"currency": "USD"}]}
+
+
+def test_an_account_of_the_currency_wins_over_one_that_also_takes_it():
+    client = live(Sandbox(accounts=[EUR_WITH_USD, USD_ONLY]))
+    assert client.global_account_in("USD") == "ga-usd"
+    assert client.global_account_in("EUR") == "ga-eur"
+    assert global_accounts_by_currency([EUR_WITH_USD, USD_ONLY]) == {
+        "EUR": "ga-eur", "USD": "ga-usd"}
+    assert global_accounts_by_currency([EUR_WITH_USD]) == {"EUR": "ga-eur", "USD": "ga-eur"}

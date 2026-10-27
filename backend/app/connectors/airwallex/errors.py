@@ -70,6 +70,8 @@ class OutcomeUnknown(AirwallexError):
         self.request_id = request_id
         self.reason = reason
         self.provider_id = provider_id  # the object a call without a request_id was about
-        about = f"provider id {provider_id}" if request_id is None and provider_id else (
-            f"request_id {request_id}")
+        if request_id is None and provider_id:
+            about = f"provider id {provider_id}"
+        else:
+            about = f"request_id {request_id}"
         super().__init__(f"outcome unknown for {about}: {reason}")

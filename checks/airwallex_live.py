@@ -39,6 +39,7 @@ from typing import Any
 
 from app.connectors.airwallex.client import (
     LOGIN_PATH,
+    PAYOUT_PATH,
     AirwallexClient,
     account_currencies,
     active_account,
@@ -64,7 +65,7 @@ FAKE_BENEFICIARY = START["beneficiaries"][0]["id"]
 FX_BUY = Money(minor=1_000_000, currency="EUR")
 PAYOUT = Money(minor=10_000, currency="USD")
 ADVANCE = Money(minor=1_000_000, currency="USD")
-TO_PAID = ("PROCESSING", "SENT", "PAID")
+TO_PAID = PAYOUT_PATH[1:]
 # The probe path is assumed (canonical-requests.json): its answer is recorded, not diffed.
 RECORDED_ONLY = frozenset({"connected-probe"})
 # The minimum key sets of canonical-requests.json; both sides must carry them.
@@ -345,16 +346,14 @@ class ContractPass:
 
     def payout_to_paid(self) -> tuple[bool, str | None, str]:
         transfer = self._need("transfer")
-        # The sandbox moves a payout on by itself: only the steps it has not taken are asked.
-        now = self.client.get_transfer(transfer.provider_id).status
-        steps = TO_PAID[TO_PAID.index(now) + 1:] if now in TO_PAID else TO_PAID
+        # The sandbox moves a payout on by itself; a step it already took is read back as made.
         try:
-            for status in steps:
+            for status in TO_PAID:
                 self.client.simulate_transition(transfer.provider_id, status)
         except AirwallexError as failed:
             self._observe()
             return False, transfer.provider_id, self._scrub(
-                f"from {now}, to {status}: {type(failed).__name__}: {failed}")
+                f"to {status}: {type(failed).__name__}: {failed}")
         final = self.client.get_transfer(transfer.provider_id)
         self._observe()
         delta = self._usd() - self.state["usd_before_payout"]

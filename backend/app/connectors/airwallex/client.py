@@ -32,7 +32,7 @@ from urllib.parse import quote as urlquote
 
 from app.finance.schemas import EXPONENT, Money, Receipt, to_provider_decimal
 
-from .errors import ConfigError, DuplicateRequest, OutcomeUnknown, ProviderError
+from .errors import AirwallexError, ConfigError, DuplicateRequest, OutcomeUnknown, ProviderError
 from .transport import Transport, TransportTimeout, api_version_from, select_transport
 
 log = logging.getLogger(__name__)
@@ -53,6 +53,8 @@ QUOTE_VALIDITY = "MIN_15"
 # `reason` and `reference` are required on a payout; the reason is one of the provider's own.
 TRANSFER_REASON = "business_expenses"
 CONVERSIONS_PATH = "/api/v1/fx/conversions"
+# A payout's way to `PAID`; the sandbox walks it on its own as well as on a transition.
+PAYOUT_PATH = ("SCHEDULED", "PROCESSING", "SENT", "PAID")
 
 LegMode = Literal["A", "B"]
 ConnectedSetting = Literal["auto", "on", "off"]
@@ -375,13 +377,8 @@ class AirwallexClient:
         return self._items(self._request("GET", "/api/v1/global_accounts"))
 
     def global_account_in(self, currency: str) -> str | None:
-        """The id of the first Global Account that takes `currency` (`account_currencies`)."""
-        for account in self.global_accounts():
-            if isinstance(account, dict) and currency in account_currencies(account):
-                account_id = account.get("id")
-                if isinstance(account_id, str) and account_id:
-                    return account_id
-        return None
+        """The Global Account for `currency` (`global_accounts_by_currency`), or None."""
+        return global_accounts_by_currency(self.global_accounts()).get(currency)
 
     def probe_connected(self, setting: ConnectedSetting | None = None) -> LegMode:
         """Mode A only when the connected-accounts list answers 200 with an `ACTIVE` account;
@@ -502,34 +499,34 @@ class AirwallexClient:
 
         The sandbox moves a payout on by itself (it reads back `PROCESSING` straight after the
         create) and answered a transition with a 500. So a transition that is refused or left
-        unknown is read back, and a transfer already at `next_status` is the answer. A refusal
-        otherwise stands. An unknown one whose transfer did not move is sent again (it is keyed
-        on the transfer and creates nothing), at most `MAX_ATTEMPTS` times, then raises
-        `OutcomeUnknown` naming the transfer and the status it holds."""
+        unknown is read back, and a transfer at or past `next_status` on `PAYOUT_PATH` is the
+        answer. A refusal otherwise stands. A step of `PAYOUT_PATH` left unknown, with the
+        transfer still before it, is sent again (it is keyed on the transfer and creates
+        nothing; the no-second-POST rule is for creates), at most `MAX_ATTEMPTS` times. Any
+        other unknown raises `OutcomeUnknown` naming the transfer and the status it holds."""
         body = {"next_status": next_status}
         if failure_type is not None:
             body["failure_type"] = failure_type
         path = f"/api/v1/simulation/transfers/{urlquote(transfer_id, safe='')}/transition"
-        before: str | None = None
-        for attempt in range(1, MAX_ATTEMPTS + 1):
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 return ProviderObject.parse("transfer", self._request("POST", path, body))
-            except ProviderError:
-                now = self.get_transfer(transfer_id)
-                if now.status == next_status:
+            except (ProviderError, OutcomeUnknown) as failed:
+                try:
+                    now = self.get_transfer(transfer_id)
+                except AirwallexError:
+                    raise failed from None  # the read-back's failure never hides the answer
+                if _reached(now.status, next_status):
                     return now
-                raise
-            except OutcomeUnknown as unknown:
-                now = self.get_transfer(transfer_id)
-                if now.status == next_status:
-                    return now
-                if attempt == MAX_ATTEMPTS or before not in (None, now.status):
+                if isinstance(failed, ProviderError):
+                    raise
+                if attempt >= MAX_ATTEMPTS or not _before(now.status, next_status):
                     raise OutcomeUnknown(
-                        None, f"transition to {next_status}: {unknown.reason}, transfer at "
+                        None, f"transition to {next_status}: {failed.reason}, transfer at "
                         f"{now.status}", provider_id=transfer_id) from None
-                before = now.status
                 self._backoff(attempt)
-        raise AssertionError("unreachable")
 
     def _create(
         self,
@@ -559,22 +556,43 @@ def active_account(answer: Any) -> str | None:
     return None
 
 
-def account_currencies(account: Mapping[str, Any]) -> list[str]:
+def account_currencies(account: Mapping[str, Any], *, own: bool = False) -> list[str]:
     """The currencies a Global Account takes, its own first: `currency` when it carries one (as
-    the sandbox did before 2024-09-27), then `required_features[].currency`, then
-    `supported_features[].currency` (the 2024-09-27 shape, which has no `currency` key)."""
-    found: list[str] = []
-    own = account.get("currency")
-    candidates = [own] if isinstance(own, str) else []
-    for key in ("required_features", "supported_features"):
+    the sandbox did before 2024-09-27), then `required_features[].currency`, then (unless
+    `own`) `supported_features[].currency` (the 2024-09-27 shape has no `currency` key)."""
+    candidates = [account.get("currency")]
+    for key in ("required_features",) if own else ("required_features", "supported_features"):
         features = account.get(key)
-        for feature in features if isinstance(features, list) else []:
-            if isinstance(feature, dict):
-                candidates.append(feature.get("currency"))
-    for currency in candidates:
-        if isinstance(currency, str) and currency and currency not in found:
-            found.append(currency)
+        candidates += [f.get("currency") for f in features if isinstance(f, dict)] if isinstance(
+            features, list) else []
+    return list(dict.fromkeys(c for c in candidates if isinstance(c, str) and c))
+
+
+def global_accounts_by_currency(accounts: list) -> dict[str, str]:
+    """Currency → Global Account id: an account whose own currency it is wins over one that
+    only supports it; among equals, the first listed."""
+    found: dict[str, str] = {}
+    for own in (True, False):
+        for account in accounts:
+            account_id = account.get("id") if isinstance(account, dict) else None
+            if isinstance(account_id, str) and account_id:
+                for currency in account_currencies(account, own=own):
+                    found.setdefault(currency, account_id)
     return found
+
+
+def _reached(status: str | None, target: str) -> bool:
+    """`status` is `target`, or past it on `PAYOUT_PATH`."""
+    if status == target:
+        return True
+    return status in PAYOUT_PATH and target in PAYOUT_PATH and (
+        PAYOUT_PATH.index(status) > PAYOUT_PATH.index(target))
+
+
+def _before(status: str | None, target: str) -> bool:
+    """`status` comes before `target` on `PAYOUT_PATH`."""
+    return status in PAYOUT_PATH and target in PAYOUT_PATH and (
+        PAYOUT_PATH.index(status) < PAYOUT_PATH.index(target))
 
 
 def _replayed(status: int, code: str | None, envelope: Mapping[str, Any]) -> bool:
