@@ -121,6 +121,21 @@ def test_a_committed_obligation_is_met_only_when_its_flow_landed_by_its_due_roun
         assert ob.short_minor == 0
 
 
+def test_a_committed_payment_under_a_journal_of_its_own_naming_falls_back_to_the_state():
+    """A settlement whose journal id the caller named (the execution gateway's ``j-<leg>``) dates
+    nothing feasibility can find; the obligation is then judged by the state the ledger left."""
+    w = world()
+    res = w.store.hold(ACCOUNT, 300_000, now=T0, purpose="payroll")
+    w.store.add_obligation("ob-1", ACCOUNT, 300_000, T0 + timedelta(hours=12), kind="payroll",
+                           reservation_id=res)
+    w.store.commit(res, due_at=T0 + timedelta(hours=8), kind="payroll")
+    w.store.settle(res, to_account="a/opening", at=T0 + timedelta(hours=8), journal_id="j-leg-1",
+                   round=2)
+    f = assess(w, ACCOUNT, from_round=0, to_round=5, observability=seen(set()))
+    (ob,) = f.obligations
+    assert (ob.id, ob.met) == ("ob-1", True)
+
+
 def test_a_round_with_no_recorded_observability_is_refused():
     with pytest.raises(ValueError, match=r"rounds \[4, 5\]"):
         assess(world(), ACCOUNT, from_round=0, to_round=5,
