@@ -59,7 +59,7 @@ from ..simulation.branches import BranchMismatch, Checkpoint, fork
 from ..simulation.coordinator import Coordinator
 from ..simulation.world import World, _digest, due_hour, hours_of
 from ..testing.scripted_model import ScriptedPlan
-from .feasibility import assess
+from .feasibility import assess, cash_accounts
 from .nonanticipativity import HOURS_PER_ROUND, Leaf, PolicyView, check_pairs, guarded_decide
 from .objective import DecisionResult, Evaluation, rank
 
@@ -295,7 +295,7 @@ class Integrated(_Policy):
         except UnpricedPosition as why:
             return _refused(t, why)
         actions: list[dict] = []
-        reason = detail = None
+        reason = detail = None  # said only when an advance cannot close the shortfall
         for o, amount in uncovered(obs):
             currency = o.get("currency", obs["currency"])
             if amount and currency != obs["currency"] and t < o["due_h"] <= t + CONVERT_LEAD_H:
@@ -328,7 +328,7 @@ class Integrated(_Policy):
                     after = trial
                     if not after.short_minor:
                         break
-            if after.short_minor and reason is None \
+            if after.short_minor \
                     and not any(a["type"] == "request_advance" for a in actions):
                 rank_ = {"facility_rejected": 0, "arrives_after_deadline": 1}
                 reason, detail = min(excluded, key=lambda w: rank_.get(w[0], 2),
@@ -368,15 +368,10 @@ def _facilities(store: Any, borrower: str, terms: Mapping[str, Mapping[str, Any]
     return out
 
 
-def cash_accounts(store: Any, entity: str, conn: Connection | None = None) -> list[str]:
-    """Every cash account ``entity`` holds, in id order."""
-    return [a["account_id"] for a in store.rows("accounts", conn=conn)
-            if a["entity_id"] == entity and a["kind"] == "cash"]
-
-
-def _free(settled: int | None, pledged: int, known: bool) -> int:
-    """A holding's cash free to pay its own account's obligations: nothing when unknown."""
-    return max(0, (settled or 0) - pledged) if known else 0
+def _free(settled: int | None, pledged: int, committed_out: int, known: bool) -> int:
+    """A holding's cash free to pay its own account's open obligations: settled less what is
+    pledged and what its committed outflows will take; nothing when unknown."""
+    return max(0, (settled or 0) - pledged - committed_out) if known else 0
 
 
 def branch_observation(world: World, conn: Connection, actor: str, *,
@@ -421,6 +416,7 @@ def branch_observation(world: World, conn: Connection, actor: str, *,
                         for w in (v, *others) for d in w.obligations],
         "holdings": [{"id": w.account_id, "currency": w.currency,
                       "settled": _free(w.settled_minor, w.pledged_minor,
+                                       sum(f.amount_minor for f in w.pending_out),
                                        w.observability == "known")} for w in others],
         "outflows": [],  # this world holds no contract that lets an outflow be deferred
         "facilities": _facilities(world.store, actor, terms or {}, conn),
@@ -648,7 +644,9 @@ def snapshot_observation(snapshot: Snapshot, *, epoch: datetime, account: str | 
                         and (o.reservation_id is None or o.reservation_id not in committed)],
         "holdings": [{"id": a.id, "currency": a.currency,
                       "settled": _free(a.buckets.settled.minor if a.buckets.settled else 0,
-                                       a.buckets.pledged.minor, a.observability == "known")}
+                                       a.buckets.pledged.minor,
+                                       sum(f.amount.minor for f in a.buckets.pending_out),
+                                       a.observability == "known")}
                      for a in others],
         "outflows": [],
         "facilities": [{"id": c.contract_id, "state": c.state, "lender": c.lender,

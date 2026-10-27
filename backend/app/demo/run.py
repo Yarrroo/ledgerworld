@@ -457,9 +457,15 @@ def failure_of(entry: dict) -> str:
     why += [f"{o['id']} unmet at t={o['due_h']} h"
             + (f", overdue at the checkpoint (read at t={o['overdue_h']} h)"
                if "overdue_h" in o else "")
-            + (f", short {usd(o['short_minor'])}" if o.get("short_minor") else "")
+            + (f", short {_owed(o['short_minor'], o.get('currency'))}"
+               if o.get("short_minor") else "")
             for o in entry["obligations"]]
     return f"{entry['policy']}: " + ("; ".join(why) or "infeasible")
+
+
+def _owed(minor: int, currency: str | None) -> str:
+    """An amount as the demo prints it: USD bare, any other currency named."""
+    return usd(minor) if currency is None else f"{grouped(minor, currency)} {currency}"
 
 
 def tell(sim: dict) -> None:

@@ -176,3 +176,38 @@ def test_no_policy_that_misses_the_invoice_is_selected(evaluations):
         "id": "inv-eur", "account": EUR_ACCOUNT, "currency": "EUR", "short_minor": 300_000}
     assert result.escalation["binding"] == (
         "free cash 1,000.00 EUR at t=20 < inv-eur 4,000.00 EUR; no reservation is touched")
+
+
+# ------------------------------------------------------------------------ vet round 1
+
+def test_a_holdings_committed_outflow_is_not_free_to_pay_another_obligation():
+    """1,000.00 EUR held, 800.00 of it already committed to a flow: 200.00 is free, so 3,800.00
+    of the 4,000.00 invoice is the home account's to fund."""
+    snap = snapshot(invoice_due_h=4)
+    snap["accounts"][1]["buckets"]["pending_out"] = [
+        {"flow_id": "out:inv-0", "amount": money(80_000, "EUR"),
+         "expected_at": iso_utc(8), "kind": "invoice"}]
+    obs = snapshot_observation(Snapshot.model_validate(snap), epoch=T0,
+                               prices={"EUR/USD": EURUSD})
+    assert obs["holdings"] == [{"id": EUR_ACCOUNT, "currency": "EUR", "settled": 20_000}]
+    (convert,) = Integrated().propose(PolicyView(view_world(obs), 0)).actions
+    assert convert["buy"] == money(380_000, "EUR")
+
+
+def test_the_replay_world_refuses_only_a_debt_it_cannot_hold():
+    from app.decisions.reverse_stress import replayable
+
+    owes_eur = snapshot_observation(observed(invoice_due_h=4), epoch=T0)
+    assert not replayable(owes_eur)
+    idle = snapshot(invoice_due_h=4)
+    idle["obligations"] = []  # a second account with nothing owed on it: replayable as before
+    assert replayable(snapshot_observation(Snapshot.model_validate(idle), epoch=T0))
+
+
+def test_the_demo_names_the_currency_of_a_foreign_shortfall():
+    from app.demo.run import failure_of
+
+    entry = {"policy": "integrated", "floor": {"short_minor": 0},
+             "obligations": [{"id": "inv-eur", "due_h": 20, "short_minor": 300_000,
+                              "account": EUR_ACCOUNT, "currency": "EUR"}]}
+    assert failure_of(entry) == "integrated: inv-eur unmet at t=20 h, short 3,000.00 EUR"

@@ -36,7 +36,8 @@ from ..finance.models import accounts, bounded_id, expected_flows, journals, pos
 from ..simulation.clock import ROUND_HOURS
 from ..simulation.world import due_hour
 
-__all__ = ["Feasibility", "FloorResult", "ObligationResult", "assess", "settled_by_round"]
+__all__ = ["Feasibility", "FloorResult", "ObligationResult", "assess", "cash_accounts",
+           "settled_by_round"]
 
 
 @dataclass(frozen=True)
@@ -167,6 +168,13 @@ def _paid_round(store: Any, ob: Mapping) -> int | None:
                          .where(journals.c.journal_id.in_(ids))).scalar()
 
 
+def cash_accounts(store: Any, entity: str, conn: Any = None) -> list[str]:
+    """Every cash account ``entity`` holds, in id order: the accounts whose obligations its
+    position (a policy's observation, a branch's assessment) is judged on."""
+    return [a["account_id"] for a in store.rows("accounts", conn=conn)
+            if a["entity_id"] == entity and a["kind"] == "cash"]
+
+
 def _check(account: str, rounds: range, observability: Mapping[int, str]) -> None:
     missing = [r for r in rounds if r not in observability]
     if missing:
@@ -196,9 +204,8 @@ def assess(world: Any, account: str, *, from_round: int, to_round: int,
     usable = {h: min(v, 0) if h in unknown else v for h, v in settled.items()}
 
     held = {account: (view, settled, unknown)}  # account -> its view, settled, unknown hours
-    for a in store.rows("accounts"):
-        other = a["account_id"]
-        if a["entity_id"] != view.entity_id or a["kind"] != "cash" or other == account:
+    for other in cash_accounts(store, view.entity_id):
+        if other == account:
             continue
         other_view = store.view(other)
         seen = (observability_of or {}).get(other) or {r: other_view.observability
