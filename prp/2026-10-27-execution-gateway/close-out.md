@@ -1,6 +1,7 @@
 # Execution gateway (T13) — close-out
 
-> Close-out (dev-build stage 5). Source: design.md. Board item 14.
+> Close-out (/dev-close). Source: design.md ← briefs/T13.md + design/modules/execution/HANDOFF.md.
+> Date: 2026-10-27. Board item 14.
 
 ## What landed
 
@@ -20,9 +21,28 @@
 
 ## Verification
 
-- `uv run pytest -q tests/execution`: 153 passed, 1 skipped (the token route).
-- ruff, `no_secrets` and `attribution`: ok. The full suite is run by the landing train
-  (`bash checks/merge.sh`), not in this slot.
+- `uv run pytest -q tests/execution` (the item's check): 164 passed, 1 skipped (the token route).
+- The touched set (`tests/execution checks/tests tests/test_skeleton.py tests/connectors
+  tests/finance`): 474 passed, 1 skipped, 20 deselected. ruff, `no_secrets` and `attribution`:
+  ok. The full suite is run by the landing train (`bash checks/merge.sh`), not in this slot.
+- Vet: T3, 2 rounds, 16 applied (11 proven by tests that fail before the fix, 1 unproven), 7
+  recorded, 0 open. Details in `vet-report.md`.
+
+## Docs updated
+
+- `design/modules/execution/HANDOFF.md`: the interface rows now name what the code exposes
+  (`Gateway.record`/`execute`, `ConnectorProvider.find`, `reconcile_leg`/`sweep`/`on_hint`), and
+  the `ledger_refused` incident is listed. `schema.sql` gains that incident kind.
+- `design.md` decision 3 records the ledger effects as built.
+
+## Reflect
+
+- Fixed now: the HANDOFF named `Gateway.execute(approval_id)`, `resolve_unknown` and
+  `reconcile(leg | sweep)`, and none of these exists in the code. The rows are corrected.
+- Not a gap: removed names (`fx_targets`, `_targets`, `LANDS_WITH_T13`) have no remaining
+  callers (grep).
+- Not a gap: `CLAUDE.md` is untouched, as the order requires, and the dev-workflows block refresh
+  is skipped for the same reason.
 
 ## Not wired here (named follow-ups)
 
