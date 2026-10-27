@@ -50,7 +50,26 @@
     {"id": "sibling_isolation", "name": "sibling isolation", "tests": []},
     {"id": "replay_identity", "name": "replay identity", "tests": []},
     {"id": "six_families_run", "name": "six families run", "tests": []},
-    {"id": "report_numbers_grounded", "name": "report numbers grounded", "tests": []},
+    {"id": "report_numbers_grounded", "name": "report numbers grounded", "tests": [
+      "tests/reports/test_provenance.py::test_an_invented_number_is_rejected[amount-and-percent]",
+      "tests/reports/test_provenance.py::test_an_invented_number_is_rejected[percent]",
+      "tests/reports/test_provenance.py::test_an_invented_number_is_rejected[identifier]",
+      "tests/reports/test_provenance.py::test_an_invented_number_is_rejected[round]",
+      "tests/reports/test_provenance.py::test_a_placeholder_naming_no_figure_is_rejected",
+      "tests/reports/test_provenance.py::test_a_literal_number_from_the_set_is_linked_to_its_evidence",
+      "tests/reports/test_provenance.py::test_a_grounded_draft_is_filled_from_the_signed_results",
+      "tests/reports/test_provenance.py::test_a_rejected_draft_gets_one_redraft",
+      "tests/reports/test_provenance.py::test_a_rejected_redraft_falls_back_to_the_template",
+      "tests/reports/test_provenance.py::test_the_model_is_asked_at_most_twice",
+      "tests/reports/test_provenance.py::test_a_tampered_result_is_refused_before_the_model_is_asked",
+      "tests/reports/test_provenance.py::test_a_figure_is_money_or_a_count_never_a_float[float]",
+      "tests/reports/test_provenance.py::test_a_figure_is_money_or_a_count_never_a_float[bool]",
+      "tests/reports/test_provenance.py::test_a_figure_is_money_or_a_count_never_a_float[string]",
+      "tests/reports/test_provenance.py::test_a_figure_is_money_or_a_count_never_a_float[float-minor]",
+      "tests/reports/test_provenance.py::test_a_section_never_reads_graph_memory",
+      "tests/reports/test_provenance.py::test_the_template_alone_is_grounded",
+      "tests/reports/test_provenance.py::test_an_unplanned_model_call_is_not_swallowed"
+    ]},
     {"id": "interview_read_only", "name": "interview read-only", "tests": []}
   ]
 }
