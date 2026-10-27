@@ -187,10 +187,25 @@ const REFUSALS = {
 const route = useRoute()
 const enc = encodeURIComponent
 
+/** A 2xx whose body is missing or incomplete: answered, but what it says cannot be read. */
+const UNREADABLE = 'unreadable'
+const unreadable = () => new ApiError(null, UNREADABLE, 'the answer could not be read')
+
+/** An execution read with the legs and incidents the receipts are drawn from. */
+const readableExecution = (body) => typeof body?.execution_id === 'string' &&
+  Array.isArray(body.legs) && Array.isArray(body.incidents)
+
+/** GET /executions/:id; an answer without its legs and incidents is unreadable, never a state. */
+async function readExecution (id) {
+  const body = await request(`/executions/${enc(id)}`)
+  if (!readableExecution(body)) throw unreadable()
+  return body
+}
+
 /** A read that may name nothing yet: 404 is "not there", every other failure is an error. */
-async function optional (path) {
+async function optional (read) {
   try {
-    return await request(path)
+    return await read()
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) return null
     throw error
@@ -206,8 +221,8 @@ const { state, refresh } = useReading(async () => {
   let decisionsError = ''
   const [decisions, execution] = await Promise.all([
     // the receipts still read when this fails; only the review needs the decision
-    runId ? optional(`/decisions/${enc(runId)}`).catch((error) => { decisionsError = error.message; return null }) : null,
-    executionId ? optional(`/executions/${enc(executionId)}`) : null
+    runId ? optional(() => request(`/decisions/${enc(runId)}`)).catch((error) => { decisionsError = error.message; return null }) : null,
+    executionId ? optional(() => readExecution(executionId)) : null
   ])
   const head = execution ?? overview
   return {
@@ -293,19 +308,25 @@ const executeWhy = computed(() => {
  * No answer, a server/proxy failure, or a 2xx this screen cannot read: the POST may or may not
  * have taken effect. Only a 4xx is a definite refusal.
  */
-const unanswered = (error) => !(error instanceof ApiError) || error.status === 0 || error.status >= 500
+const unanswered = (error) => !(error instanceof ApiError) || error.code === UNREADABLE ||
+  error.status === 0 || error.status >= 500
 
-/** A successful POST whose body is missing or incomplete: answered, but what it did is unknown. */
-const unreadable = () => new ApiError(0, 'unreadable', 'the answer could not be read')
 const isText = (x) => typeof x === 'string' && x !== ''
-const isTime = (iso) => typeof iso === 'string' && !Number.isNaN(Date.parse(iso))
+// C6 timestamps are ISO-8601 with a zone; Date.parse alone also takes "1" or "Nov 5"
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
+const isTime = (iso) => typeof iso === 'string' && ISO.test(iso) && !Number.isNaN(Date.parse(iso))
+
+/** A C3 leg as the bound-terms table shows it. */
+const isLeg = (l) => Number.isSafeInteger(l?.index) && isText(l.kind) && isText(l.source) &&
+  isText(l.counterparty) && Number.isSafeInteger(l.amount?.minor) && isText(l.amount.currency) &&
+  (l.after == null || Array.isArray(l.after))
 
 /** The approval a 201 bound, with every term the review shows; anything less is unreadable. */
 function boundApproval (answer) {
   const a = answer?.approval
   const readable = isTime(answer?.as_of) && isText(a?.approval_id) && isText(a.plan_hash) &&
-    isText(a.snapshot_id) && isText(a.mode) && isTime(a.expires_at) && Array.isArray(a.legs) &&
-    a.legs.every((l) => Number.isSafeInteger(l?.amount?.minor) && isText(l.amount.currency))
+    isText(a.entity) && isText(a.account) && isText(a.snapshot_id) && isText(a.mode) &&
+    isTime(a.expires_at) && Array.isArray(a.legs) && a.legs.length > 0 && a.legs.every(isLeg)
   if (!readable) throw unreadable()
   return a
 }
@@ -421,7 +442,7 @@ async function poll () {
   if (!id) return
   const ticket = guard.issue()
   try {
-    const body = await request(`/executions/${enc(id)}`)
+    const body = await readExecution(id)
     if (!guard.accept(ticket, id)) return
     live.value = body
     notFound.value = false
