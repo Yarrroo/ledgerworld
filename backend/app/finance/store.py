@@ -38,6 +38,7 @@ from .models import (
     UnknownAccount,
     account_observations,
     accounts,
+    bounded_id,
     entities,
     expected_flows,
     journals,
@@ -280,7 +281,7 @@ class LedgerStore:
         """reserved → pending_out in one step, so the units are never counted twice."""
         with self.transaction(conn) as c:
             res = self._held(c, reservation_id)
-            flow_id = flow_id or f"out:{reservation_id}"
+            flow_id = flow_id or bounded_id(expected_flows.c.flow_id, f"out:{reservation_id}")
             self._leave_held(c, reservation_id, "committed")
             c.execute(insert(expected_flows).values(
                 flow_id=flow_id, account_id=res.account_id, direction="out",
@@ -358,7 +359,8 @@ class LedgerStore:
                                  obligations.c.state.in_(OPEN_OBLIGATION))
                           .values(state="met"))
             return self._apply(c, Journal(
-                journal_id=journal_id or f"settle:{flow_id}", kind=f"settle_{flow.kind}",
+                journal_id=journal_id or bounded_id(journals.c.journal_id, f"settle:{flow_id}"),
+                kind=f"settle_{flow.kind}",
                 round=round, sim_time=at, postings=(
                     Posting(flow.account_id, sign * flow.amount_minor),
                     Posting(counterparty, -sign * flow.amount_minor))))
@@ -610,6 +612,7 @@ class LedgerStore:
     def _next_id(c: Connection, table: Table, prefix: str) -> str:
         """`<prefix>-<n>`, the first n past the row count that no row already uses."""
         key = next(iter(table.primary_key.columns))
+        prefix = bounded_id(key, prefix, room=12)  # `-<n>` for up to 11 digits
         n = c.execute(select(func.count()).select_from(table)).scalar()
         while True:
             n += 1

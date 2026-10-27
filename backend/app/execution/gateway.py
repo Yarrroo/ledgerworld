@@ -44,6 +44,7 @@ from app.finance.models import (
     LedgerRefusal,
     Posting,
     UnknownAccount,
+    bounded_id,
     expected_flows,
     journals,
     reservations,
@@ -550,12 +551,14 @@ class Gateway:
         if leg.kind == "payout":  # the committed flow pays out: reservation and obligation close
             return self.store.settle_flow(
                 leg.leg_id, counterparty=self.store.external_account(leg.currency, conn=c),
-                at=now, journal_id=f"j-{leg.leg_id}", conn=c).journal_id
+                at=now, journal_id=bounded_id(journals.c.journal_id, f"j-{leg.leg_id}"),
+                conn=c).journal_id
         self._flows(leg.leg_id, "settled")  # the journal below carries the cash itself
         if leg.kind == "advance":
             return lending.disburse(
                 self.store, bound.facility_id, now=now, from_account=leg.source,
-                borrower_account=leg.counterparty, journal_id=f"j-{bound.facility_id}-disburse",
+                borrower_account=leg.counterparty,
+                journal_id=bounded_id(journals.c.journal_id, f"j-{bound.facility_id}-disburse"),
                 mode=mode, source_leg_id=leg.leg_id, conn=c).journal_id
         if leg.kind == "repayment":
             return self._repay(bound, leg, now, mode)
@@ -566,7 +569,8 @@ class Gateway:
         sold_to = self.store.external_account(leg.currency, conn=c)
         bought_from = self.store.external_account(buy.currency, conn=c)
         return self.store.apply(Journal(
-            journal_id=f"j-{leg.leg_id}", kind="fx_conversion", sim_time=now,
+            journal_id=bounded_id(journals.c.journal_id, f"j-{leg.leg_id}"), kind="fx_conversion",
+            sim_time=now,
             source_leg_id=leg.leg_id, mode=mode,
             postings=(Posting(leg.source, -leg.amount_minor), Posting(sold_to, leg.amount_minor),
                       Posting(bought_from, -buy.minor), Posting(leg.counterparty, buy.minor))),
