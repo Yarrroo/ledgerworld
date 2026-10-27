@@ -161,7 +161,12 @@ def scripted_plan(source: str) -> Any:
 
 
 def model_kind(source: str) -> str:
-    return "live" if scripted_plan(source) is None else "scripted"
+    """``scripted|live``, from the source and ``LLM_BASE_URL`` alone: no plan is loaded."""
+    from ..testing.scripted_model import SCRIPTED_SCHEME
+
+    scripted = source == "family" or os.environ.get("LLM_BASE_URL", "").startswith(
+        SCRIPTED_SCHEME)
+    return "scripted" if scripted else "live"
 
 
 def model_factory(source: str) -> Any:
@@ -321,21 +326,26 @@ def connect(mode: str, connected_account: str | None) -> tuple[Any, str]:
     return client, leg_mode
 
 
-def fund_wallet(client: Any, plan: dict, global_account: Any) -> list[dict]:
+def fund_wallet(client: Any, plan: dict) -> list[dict]:
     """Mode B, sandbox: top the platform wallet up to the payouts, one setup deposit for each
-    currency it is short in; ``global_account(currency)`` names the account to deposit into."""
+    currency it is short in, into that currency's Global Account."""
     need: dict[str, int] = defaultdict(int)
     for leg in plan["legs"]:
         if leg["kind"] == "payout":
             need[leg["amount"]["currency"]] += leg["amount"]["minor"]
     held = {b.currency: b.available.minor for b in client.balances()}
+    short = {c: minor - held.get(c, 0) for c, minor in sorted(need.items())
+             if minor > held.get(c, 0)}
+    if not short:
+        return []
+    accounts = {a["currency"]: a["id"] for a in reversed(client.global_accounts())
+                if isinstance(a, dict) and "currency" in a and "id" in a}
     setup = []
-    for currency, minor in sorted(need.items()):
-        short = minor - held.get(currency, 0)
-        if short <= 0:
-            continue
-        amount = Money(minor=short, currency=currency)
-        obj = client.simulate_deposit(amount=amount, global_account_id=global_account(currency),
+    for currency, minor in short.items():
+        if currency not in accounts:
+            raise DemoFailed(f"no {currency} Global Account to fund the sandbox wallet from")
+        amount = Money(minor=minor, currency=currency)
+        obj = client.simulate_deposit(amount=amount, global_account_id=accounts[currency],
                                       reference=SETUP_LABEL)
         setup.append({"kind": "wallet_funding", "label": SETUP_LABEL,
                       "provider_id": obj.provider_id, "amount": to_provider_decimal(amount)})
@@ -343,17 +353,24 @@ def fund_wallet(client: Any, plan: dict, global_account: Any) -> list[dict]:
 
 
 def pay(client: Any, provider_id: str, status: str) -> None:
-    """Walk a submitted payout to ``PAID`` from ``status``, what the provider shows now."""
-    path = list(PAYOUT_PATH)
-    if status in path:
-        path = path[path.index(status) + 1:]
+    """Walk a submitted payout to ``PAID`` from ``status``, what the provider shows now; a
+    status off the path (failed, cancelled) is left to reconciliation."""
+    if status == "SCHEDULED":
+        path = list(PAYOUT_PATH)
+    elif status in PAYOUT_PATH:
+        path = list(PAYOUT_PATH[PAYOUT_PATH.index(status) + 1:])
+    else:
+        return
     for step in path:
         client.simulate_transition(provider_id, step)
 
 
 def execute(selected: str, mode: str, *, client: Any, leg_mode: str, run_id: str,
-            beneficiary: str, connected_account: str | None) -> dict:
-    """The selected policy's plan on the observed snapshot, bound, executed and reconciled."""
+            beneficiary: str, connected_account: str | None, into: dict) -> dict:
+    """The selected policy's plan on the observed snapshot, bound, executed and reconciled.
+
+    ``into`` is filled as the run goes (setup, approval, legs), so a step that fails after
+    money moved still leaves in the receipt what reached the provider."""
     from ..decisions.candidates import ALL, plan_for_now
     from ..execution import reconcile
     from ..execution.approval import bind
@@ -369,14 +386,20 @@ def execute(selected: str, mode: str, *, client: Any, leg_mode: str, run_id: str
                         beneficiaries={PAYROLL: beneficiary})
     if plan is None:
         raise DemoFailed(f"{selected} proposes nothing on {observed.snapshot_id}")
+    into.update(connected=leg_mode == "A", setup=[], legs=[], incidents_open=0)
+    if mode == "sandbox" and leg_mode == "B":
+        into["setup"] = fund_wallet(client, plan)
     store = LedgerStore("sqlite://")
     from_snapshot(store, observed)
     gateway = Gateway(store, client, mode=mode, leg_mode=leg_mode, beneficiaries=[beneficiary],
                       clock=lambda: now, connected_account=connected_account,
                       global_account_id=os.environ.get("AIRWALLEX_GLOBAL_ACCOUNT_ID") or None)
-    setup = fund_wallet(client, plan, gateway.provider._global_account) \
-        if mode == "sandbox" and leg_mode == "B" else []
     approval = bind(plan, observed, APPROVER, mode, now=now)
+    into["story"] = {"simulated_now": now.isoformat(), "observed_snapshot_id": observed.snapshot_id,
+                     "leg_mode": leg_mode, "approval": {
+                         "approval_id": approval.approval_id, "plan_hash": approval.plan_hash,
+                         "legs": [leg.model_dump(mode="json", exclude_none=True)
+                                  for leg in approval.legs]}}
     gateway.record(approval)
     done = gateway.execute(approval.model_dump(mode="json"),
                            current_snapshot_id=observed.snapshot_id)
@@ -384,30 +407,32 @@ def execute(selected: str, mode: str, *, client: Any, leg_mode: str, run_id: str
         raise DemoFailed(f"the gateway refused the approval: {done.code} ({done.detail})")
     stamps: dict[str, str] = {}
 
-    def stamp_settled() -> list[Any]:
+    def record() -> list[Any]:
         legs = gateway.legs(done.execution_id)
         for leg in legs:
             if leg.state == "settled" and leg.reconciled:
                 stamps.setdefault(leg.leg_id, utc_now())
+        into["legs"] = [{"kind": leg.kind, "leg_id": leg.leg_id, "request_id": leg.request_id,
+                         "provider_id": leg.provider_id, "label": leg.receipt_label,
+                         "status": leg.provider_status, "journal_id": leg.journal_id,
+                         "reconciled": leg.reconciled, "mode": mode,
+                         "at": stamps.get(leg.leg_id, utc_now()), "state": leg.state}
+                        for leg in legs]
+        into["incidents_open"] = len(gateway.incidents(open_only=True))
         return legs
 
-    for leg in stamp_settled():
-        if leg.kind == "payout" and leg.state == "submitted":
-            pay(client, leg.provider_id, gateway.provider.get(leg).status)
-        reconcile.reconcile_leg(gateway, leg.leg_id)
-    legs = [{"kind": leg.kind, "leg_id": leg.leg_id, "request_id": leg.request_id,
-             "provider_id": leg.provider_id, "label": leg.receipt_label,
-             "status": leg.provider_status, "journal_id": leg.journal_id,
-             "reconciled": leg.reconciled, "mode": mode,
-             "at": stamps.get(leg.leg_id, utc_now()), "state": leg.state}
-            for leg in stamp_settled()]
-    return {"connected": leg_mode == "A", "setup": setup, "legs": legs,
-            "incidents_open": len(gateway.incidents(open_only=True)),
-            "story": {"simulated_now": now.isoformat(), "observed_snapshot_id": observed.snapshot_id,
-                      "leg_mode": leg_mode, "approval": {
-                          "approval_id": approval.approval_id, "plan_hash": approval.plan_hash,
-                          "legs": [leg.model_dump(mode="json", exclude_none=True)
-                                   for leg in approval.legs]}}}
+    ids = [leg.leg_id for leg in record()]
+    paid: set[str] = set()
+    for _ in ids:  # a pass can release a dependent leg; one pass per leg reaches the last
+        for leg_id in ids:
+            leg = gateway.outbox.leg(leg_id)  # read afresh: an earlier leg may have sent it
+            if leg.kind == "payout" and leg.state == "submitted" and leg_id not in paid:
+                paid.add(leg_id)
+                pay(client, leg.provider_id, gateway.provider.get(leg).status)
+            reconcile.reconcile_leg(gateway, leg_id)
+        if all(leg.state == "settled" for leg in record()):
+            break
+    return into
 
 
 def first_leg(done: dict, kind: str) -> dict | None:
@@ -517,9 +542,10 @@ def demo(mode: str, out: Path, seed: int | None, *, beneficiary: str | None,
         tell(sim)
         if sim["fork"]["selected"] is None:
             raise DemoFailed(f"no feasible plan: {sim['fork']['escalation']}")
-        done = execute(sim["fork"]["selected"], mode, client=client, leg_mode=leg_mode,
-                       run_id=run_id, beneficiary=beneficiary or FAKE_BENEFICIARY,
-                       connected_account=connected_account)
+        done = {}
+        execute(sim["fork"]["selected"], mode, client=client, leg_mode=leg_mode, run_id=run_id,
+                beneficiary=beneficiary or FAKE_BENEFICIARY, connected_account=connected_account,
+                into=done)
         tell_execution(done, mode)
         open_legs = [leg["leg_id"] for leg in done["legs"]
                      if leg["state"] != "settled" or not leg["reconciled"]]

@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 from app.connectors.airwallex.errors import AirwallexError
+from app.connectors.airwallex.fake import CONNECTED_ACCOUNT
 from app.demo import run
 from app.execution.approval import bind
 from app.finance.schemas import Money
@@ -152,11 +153,12 @@ def test_a_dotenv_cannot_put_the_credential_back_in_the_simulation(tmp_path):
 
 
 def test_the_child_scrubs_what_reached_its_environment_on_import(monkeypatch):
+    import os
+    monkeypatch.setattr(os, "environ", dict(os.environ))  # isolate() clears; keep the session's
     monkeypatch.setenv("AIRWALLEX_API_KEY", SENTINEL)
     monkeypatch.setenv("LEDGERWORLD_DEMO_TOKEN", SENTINEL)
     monkeypatch.setenv("LEDGERWORLD_ROLE", "")
     run.isolate()
-    import os
     assert "AIRWALLEX_API_KEY" not in os.environ and "LEDGERWORLD_DEMO_TOKEN" not in os.environ
     assert os.environ["LEDGERWORLD_ROLE"] == "sim"
 
@@ -179,10 +181,50 @@ def test_a_foreign_object_on_the_provider_is_not_this_runs_incident():
                            amount=Money(minor=100, currency="USD"))
     done = run.execute("integrated", "fake", client=client, leg_mode=leg_mode,
                        run_id="demo-x-0000", beneficiary=run.FAKE_BENEFICIARY,
-                       connected_account=None)
+                       connected_account=None, into={})
     assert done["incidents_open"] == 0
     assert [(leg["kind"], leg["state"]) for leg in done["legs"]] == [
         ("advance", "settled"), ("payout", "settled")]
+
+
+def test_mode_a_with_a_lost_advance_answer_still_ends_paid():
+    """Mode A: the advance's create answer is lost; the gateway adopts it by request id, the
+    payout follows it, and the demo walks the payout to PAID. (The fake settles the adopted
+    advance inside `execute`, so this does not reach the case the leg loop re-reads for: a
+    sandbox advance still processing when `execute` returns.)"""
+    client, _ = run.connect("fake", None)
+    fake = client.transport
+    fake.connected = True
+    fake.balances[CONNECTED_ACCOUNT] = {"USD": 10_000_000}
+    fake.arm("timeout_after_accept")
+    done = run.execute("integrated", "fake", client=client, leg_mode="A", run_id="demo-y-0000",
+                       beneficiary=run.FAKE_BENEFICIARY, connected_account=CONNECTED_ACCOUNT,
+                       into={})
+    assert [(leg["kind"], leg["state"], leg["status"]) for leg in done["legs"]] == [
+        ("advance", "settled", "SETTLED"), ("payout", "settled", "PAID")]
+
+
+def test_a_step_that_fails_after_money_moved_keeps_what_moved_in_the_receipt(
+        demo, monkeypatch, tmp_path):
+    def refused(*a):
+        raise AirwallexError("transition refused")
+
+    monkeypatch.setattr(run, "run_simulation", lambda *a: sim_of(demo[1]))
+    monkeypatch.setattr(run, "pay", refused)
+    out = tmp_path / "r.json"
+    assert run.main(["--mode", "fake", "--out", str(out)]) == 1
+    receipt = json.loads(out.read_text(encoding="utf-8"))
+    assert receipt["failed"] == "AirwallexError: transition refused"
+    assert receipt["checkpoints"]["advance_reconciled"]["status"] == "SETTLED"
+    assert receipt["checkpoints"]["payout_reconciled"]["provider_id"]  # sent, not paid
+    assert receipt["story"]["execute"]["approval"]["legs"]
+
+
+def test_a_bad_scripted_plan_still_writes_a_receipt(monkeypatch, tmp_path):
+    monkeypatch.setenv("LLM_BASE_URL", "scripted://no-such-plan")
+    out = tmp_path / "live.json"
+    assert run.main(["--mode", "sandbox", "--out", str(out)]) == 1
+    assert json.loads(out.read_text(encoding="utf-8"))["model"] == "scripted"
 
 
 def canned(monkeypatch, receipt: dict, execute) -> None:
@@ -212,7 +254,7 @@ def test_every_leg_must_settle_not_only_the_last_of_its_kind(demo, monkeypatch, 
                    state="settled")
     done = {"connected": False, "setup": [], "legs": [advance, stuck, payout],
             "incidents_open": 0, "story": receipt["story"]["execute"]}
-    canned(monkeypatch, receipt, lambda *a, **k: done)
+    canned(monkeypatch, receipt, lambda *a, into, **k: into.update(done))
     out = tmp_path / "r.json"
     assert run.main(["--mode", "fake", "--out", str(out)]) == 1
     assert "x-2-payout" in json.loads(out.read_text(encoding="utf-8"))["failed"]
@@ -255,13 +297,17 @@ class _Client:
         return [SimpleNamespace(currency=c, available=Money(minor=m, currency=c))
                 for c, m in self.held.items()]
 
+    def global_accounts(self):
+        return [{"id": "ga-eur", "currency": "EUR"}, {"id": "ga-usd", "currency": "USD"}]
+
     def simulate_deposit(self, *, amount, global_account_id, reference):
         self.deposits.append((amount.currency, amount.minor, global_account_id, reference))
         return SimpleNamespace(provider_id=f"dep-{amount.currency}")
 
 
 @pytest.mark.parametrize(("status", "moves"), [
-    ("SCHEDULED", ["PROCESSING", "SENT", "PAID"]), ("SENT", ["PAID"]), ("PAID", [])])
+    ("SCHEDULED", ["PROCESSING", "SENT", "PAID"]), ("SENT", ["PAID"]), ("PAID", []),
+    ("FAILED", []), ("CANCELLED", [])])
 def test_a_payout_is_walked_on_from_the_status_it_shows(status, moves):
     client = _Client()
     run.pay(client, "t-1", status)
@@ -273,7 +319,7 @@ def test_the_wallet_is_funded_per_currency_and_listed_as_setup():
     legs = [{"kind": "payout", "amount": {"minor": 5_000_000, "currency": "USD"}},
             {"kind": "payout", "amount": {"minor": 300_000, "currency": "EUR"}},
             {"kind": "advance", "amount": {"minor": 1_000_000, "currency": "USD"}}]
-    setup = run.fund_wallet(client, {"legs": legs}, lambda currency: f"ga-{currency.lower()}")
+    setup = run.fund_wallet(client, {"legs": legs})
     assert client.deposits == [("EUR", 300_000, "ga-eur", run.SETUP_LABEL),
                                ("USD", 3_000_000, "ga-usd", run.SETUP_LABEL)]
     assert [(s["provider_id"], s["amount"]) for s in setup] == [
