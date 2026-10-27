@@ -238,13 +238,11 @@ def test_fx_posts_one_journal_balanced_per_currency():
          "source": "borrower-a/operating", "counterparty": "borrower-a/eur",
          "to_currency": "EUR"}])
     (leg,) = world.execute(approval).legs
-    assert leg.state == "submitted"
     obj = world.fake.objects["conversions"][leg.provider_id]
     assert (str(obj["buy_amount"]), str(obj["sell_amount"]), str(obj["client_rate"])) == (
         case["provider"]["buy_amount"], case["provider"]["sell_amount"],
         case["provider"]["client_rate"])
-    world.fake.settle_conversion(leg.provider_id)
-    reconcile.sweep(world.gateway)
+    reconcile.sweep(world.gateway)  # the provider settled it at create; the sweep finds nothing
     (leg,) = world.legs("apr-fx")
     assert leg.state == "settled" and leg.reconciled is case["expect"]["reconciled"]
     assert postings(world, leg.journal_id) == sorted([

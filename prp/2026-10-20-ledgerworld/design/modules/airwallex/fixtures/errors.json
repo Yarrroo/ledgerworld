@@ -5,8 +5,8 @@
  "cases": [
   {"scenario": "happy", "http": 201, "class": "ok"},
   {"scenario": "insufficient_funds", "http": 400, "code": "balance_insufficient", "class": "rejected", "raises": "ProviderError(code=balance_insufficient, retryable=false, outcome=rejected)"},
-  {"scenario": "duplicate", "http": 400, "code": "duplicate_request_id", "class": "rejected_duplicate", "raises": "DuplicateRequest(in_flight=false)"},
-  {"scenario": "duplicate_old_spelling", "http": 400, "code": "request_id_duplicate", "class": "rejected_duplicate", "raises": "DuplicateRequest(in_flight=false)"},
+  {"scenario": "duplicate", "note": "the sandbox on a transfer (run 2), no trace_id; the client also reads the documented duplicate_request_id", "http": 400, "code": "request_id_duplicate", "class": "rejected_duplicate", "raises": "DuplicateRequest(in_flight=false)"},
+  {"scenario": "duplicate_old_spelling", "note": "a connected-account transfer", "http": 400, "code": "request_id_duplicate", "class": "rejected_duplicate", "raises": "DuplicateRequest(in_flight=false)"},
   {"scenario": "in_flight", "http": 409, "class": "rejected_duplicate", "raises": "DuplicateRequest(in_flight=true)"},
   {"scenario": "rate_limited", "http": 429, "code": "too_many_requests", "class": "retried", "after_3": "ProviderError(code=too_many_requests, retryable=true, outcome=rejected)"},
   {"scenario": "auth_fail", "http": 401, "code": "credentials_invalid", "class": "retried_once", "after_relogin_fails": "ProviderError(code=auth_fail, retryable=false, outcome=rejected)"},

@@ -5,7 +5,7 @@
   {"id": "replay-after-settle",
    "calls": [
     {"op": "create_transfer", "request_id": "leg-1", "amount_minor": 100000, "result": {"http": 201, "status": "SCHEDULED", "provider_id": "<t1>"}},
-    {"op": "create_transfer", "request_id": "leg-1", "amount_minor": 100000, "result": {"http": 400, "code": "duplicate_request_id"}}
+    {"op": "create_transfer", "request_id": "leg-1", "amount_minor": 100000, "result": {"http": 400, "code": "request_id_duplicate"}}
    ],
    "client_raises": {"DuplicateRequest": {"request_id": "leg-1", "in_flight": false}},
    "then": {"op": "find_transfer(request_id=leg-1)", "returns": {"provider_id": "<t1>", "count": 1}},
@@ -20,14 +20,14 @@
   {"id": "replay-with-other-amount",
    "calls": [
     {"op": "create_transfer", "request_id": "leg-3", "amount_minor": 100000, "result": {"http": 201}},
-    {"op": "create_transfer", "request_id": "leg-3", "amount_minor": 999999, "result": {"http": 400, "code": "duplicate_request_id"}}
+    {"op": "create_transfer", "request_id": "leg-3", "amount_minor": 999999, "result": {"http": 400, "code": "request_id_duplicate"}}
    ],
    "movements": 1,
    "note": "the id alone dedupes; a second amount under the same id never moves money"},
   {"id": "conversion-replay",
    "calls": [
-    {"op": "create_conversion", "request_id": "leg-fx-1", "result": {"http": 201, "status": "SCHEDULED"}},
-    {"op": "create_conversion", "request_id": "leg-fx-1", "result": {"http": 400, "code": "duplicate_request_id", "note": "docs say 'rejected' without a code; the fake uses this one and T15 records the real one"}}
+    {"op": "create_conversion", "request_id": "leg-fx-1", "result": {"http": 201, "status": "SETTLED"}},
+    {"op": "create_conversion", "request_id": "leg-fx-1", "result": {"http": 400, "code": "invalid_argument", "note": "the sandbox (run 2): message \"request_id '…' has been used in the past\"; the fake answers the same"}}
    ],
    "then": {"op": "find_conversion(request_id=leg-fx-1)", "returns": {"count": 1}},
    "movements": 1},
@@ -45,7 +45,7 @@
     {"op": "create_transfer", "request_id": "leg-4", "amount_minor": 100000, "result": "the fake stores the transfer, then the transport raises TransportTimeout(after_send=true)"}
    ],
    "client_raises": {"OutcomeUnknown": {"request_id": "leg-4"}},
-   "then": {"op": "find_transfer(request_id=leg-4)", "returns": {"count": 1, "status": "SCHEDULED"}},
+   "then": {"op": "find_transfer(request_id=leg-4)", "returns": {"count": 1, "status": "PROCESSING"}},
    "movements": 1,
    "note": "no automatic retry of the POST; state unknown until the lookup"},
   {"id": "timeout-before-send",
