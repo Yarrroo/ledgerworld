@@ -13,6 +13,7 @@ repeating execution returns `409 approval_used`. A fresh simulation fork does no
 The Execute beat uses the labelled earlier capture, not a second approval of the prepared plan.
 The command-line demo's private store is not that prepared run. If the prepared run is absent or
 every policy is infeasible, stop recording; do not force a selection just for the video.
+Before the take, `uv run python checks/recording_ready.py <Demo URL>` must print `GO`.
 
 Keep synthetic data and provider/model labels visible. Use an operator-only token outside the
 capture area for POSTs. Do not film environment files, headers containing credentials or a token
