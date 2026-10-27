@@ -241,6 +241,10 @@ async function optional (reading) {
   }
 }
 
+// One generation for every read of an execution's state, the screen's own and the polls: an
+// answer is applied only if no read issued after it has been applied already.
+const guard = latestOnly()
+
 const { state, refresh } = useReading(async () => {
   const overview = await getOverview()
   const asked = route.query.run_id || null
@@ -249,6 +253,7 @@ const { state, refresh } = useReading(async () => {
   const executionId = route.query.execution_id || (demo ? overview.demo.execution_id : null) || null
   let decisionsError = ''
   let executionError = ''
+  const { generation } = guard.issue()
   const [decisions, execution] = await Promise.all([
     // the receipts still read when this fails; only the review needs the decision
     runId ? optional(readDecisions(runId)).catch((error) => { decisionsError = error.message; return null }) : null,
@@ -258,7 +263,7 @@ const { state, refresh } = useReading(async () => {
   const head = execution ?? overview
   return {
     as_of: head.as_of, mode: head.mode, snapshot_id: head.snapshot_id, run_id: runId,
-    execution_id: executionId, decisions, decisionsError, execution, executionError
+    execution_id: executionId, decisions, decisionsError, execution, executionError, generation
   }
 })
 
@@ -452,17 +457,15 @@ async function executePlan () {
 // ----------------------------------------------------------------- provider state, polled
 
 const activeId = shallowRef(null)
-const live = shallowRef(null)
+// the execution on screen: only an accepted reading, the screen's own read or a poll
+const execution = shallowRef(null)
 const notFound = shallowRef(false)
 const pollError = shallowRef('')
-const guard = latestOnly()
+let failedAt = 0 // generation of the newest failed read: only a later answer clears its error
 let timer = null
 const followedId = shallowRef(null)
 let followed = false // an execution this tab sent: a refresh re-reads it, never swaps it for another
 let autoReviewed = false // review=1 opens the review once, not on every refresh
-
-const execution = computed(() =>
-  live.value ?? (state.body?.execution?.execution_id === activeId.value ? state.body.execution : null))
 
 /** Still moving: no legs queued yet, or a leg neither final nor reconciled. */
 const moving = (body) => !body.legs.length ||
@@ -481,6 +484,11 @@ function schedule () {
   timer = keep ? setTimeout(poll, POLL_MS) : null
 }
 
+/** An answer to a read issued after the newest failure clears its error; an older one does not. */
+function answered (generation) {
+  if (generation > failedAt) pollError.value = ''
+}
+
 /** Read an execution's state by id; out-of-order or other-execution answers are dropped. */
 async function poll () {
   const id = activeId.value
@@ -489,13 +497,21 @@ async function poll () {
   try {
     const body = await readExecution(id)
     if (!guard.accept(ticket, id)) return
-    live.value = body
+    execution.value = body
     notFound.value = false
-    pollError.value = ''
+    answered(ticket.generation)
   } catch (error) {
-    if (!guard.accept(ticket, id)) return
-    notFound.value = error.status === 404 // the two notices never stand together
-    pollError.value = notFound.value ? '' : error.message
+    if (error.status === 404) {
+      if (!guard.accept(ticket, id)) return
+      execution.value = null // the server has no record: no earlier reading stands beside that
+      notFound.value = true
+      answered(ticket.generation)
+    } else {
+      // a failed read is no answer: it never discards a reading issued before it
+      if (!guard.current(ticket, id)) return
+      pollError.value = error.message
+      failedAt = ticket.generation
+    }
   }
   schedule()
 }
@@ -511,7 +527,7 @@ function follow (id) {
   followedId.value = id
   activeId.value = id
   guard.select(id)
-  live.value = null
+  execution.value = null
   notFound.value = false
   poll()
 }
@@ -536,11 +552,26 @@ watch(() => state.body, (body) => {
     poll() // Refresh re-reads the execution this tab sent
     return
   }
+  if (activeId.value !== body.execution_id) { // another execution: nothing read for the last stands
+    execution.value = null
+    notFound.value = false
+  }
   activeId.value = body.execution_id
   guard.select(body.execution_id)
-  live.value = null
-  notFound.value = Boolean(body.execution_id && !body.execution && !body.executionError)
-  pollError.value = body.executionError
+  // this read replaces any poll answered before it and invalidates every poll issued before it;
+  // a poll issued after it and already answered is newer, and stays. A failed read is no answer:
+  // it shows its error and discards nothing read before it.
+  const ticket = { generation: body.generation, context: body.execution_id }
+  if (body.executionError) {
+    if (guard.current(ticket)) {
+      pollError.value = body.executionError
+      failedAt = body.generation
+    }
+  } else if (guard.accept(ticket)) {
+    execution.value = body.execution
+    notFound.value = Boolean(body.execution_id && !body.execution)
+    answered(body.generation)
+  }
   schedule()
   if (route.query.review === '1' && !autoReviewed && !reviewWhy.value) {
     autoReviewed = true
@@ -556,7 +587,7 @@ watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
     followed = false
     followedId.value = null
     activeId.value = null
-    live.value = null
+    execution.value = null
     clearTimeout(timer)
   }
   refresh()
