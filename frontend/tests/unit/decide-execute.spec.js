@@ -8,7 +8,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import Decisions from '../../src/views/Decisions.vue'
-import Execution from '../../src/views/Execution.vue'
+import Execution, { forgetTab } from '../../src/views/Execution.vue'
 
 import decideExecute from '../../../prp/2026-10-20-ledgerworld/design/modules/ui/fixtures/decide-execute.json'
 import accessibility from '../../../prp/2026-10-20-ledgerworld/design/modules/ui/fixtures/accessibility.json'
@@ -169,6 +169,7 @@ afterEach(async () => {
     await w.find('[data-test="forget-token"]').exists() && w.get('[data-test="forget-token"]').trigger('click')
     w.unmount()
   }
+  forgetTab()
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -683,5 +684,90 @@ describe('vet round 2, re-read', () => {
     expect(text(w, 'context')).toContain('Run run-2')
     release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
     await flushPromises()
+  })
+})
+
+describe('leaving and returning to Execution (board item 95)', () => {
+  const gets = (calls, path) => calls.filter((x) => x.method === 'GET' && x.path === path)
+  const APPROVAL_UNKNOWN = kase('approval-post-timeout').expect.message
+
+  /** Leave the screen (the router unmounts it) and come back to a fresh mount in the same tab. */
+  async function leaveAndReturn (w, path = '/execution') {
+    mounted.splice(mounted.indexOf(w), 1)
+    w.unmount()
+    return open(Execution, path)
+  }
+
+  it('an unknown approval outcome stays blocked on return, while the token is still held', async () => {
+    const { w, calls } = await reviewReady({ 'POST /approvals': timeout() })
+    await approve(w)
+    expect(text(w, 'blocked')).toBe(APPROVAL_UNKNOWN)
+    const back = await leaveAndReturn(w)
+    expect(back.find('[data-test="forget-token"]').exists()).toBe(true) // the authority survived
+    expect(text(back, 'blocked')).toBe(APPROVAL_UNKNOWN)
+    expect(disabled(back, 'review-plan')).toBe(true)
+    await back.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    expect(back.find('[data-test="confirm"]').exists()).toBe(false)
+    expect(posts(calls, '/approvals')).toHaveLength(1)
+  })
+
+  it('an unknown execution outcome stays blocked on return and its lookup resumes', async () => {
+    const { w, calls } = await reviewReady({ 'POST /executions': timeout() })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(1)
+    const back = await leaveAndReturn(w)
+    expect(text(back, 'blocked')).toContain('Do not send again')
+    expect(disabled(back, 'review-plan')).toBe(true)
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2) // read again by the approval id
+    expect(text(back, 'not-found')).toContain('does not mean it failed')
+    expect(posts(calls, '/executions')).toHaveLength(1)
+  })
+
+  it('an accepted execution is still read on return, not swapped for the demo one', async () => {
+    const { w, calls } = await reviewReady({
+      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'GET /executions/apr-1': executionBody({ legs: [paidPayout()] })
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    const back = await leaveAndReturn(w)
+    expect(text(back, 'context')).toContain('execution apr-1')
+    expect(text(back, 'leg-status')).toContain('PAID · reconciled as of')
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
+  })
+
+  it('a query-only navigation away and back resumes the unknown execution lookup', async () => {
+    const { w, calls } = await reviewReady({
+      'POST /executions': timeout(),
+      'GET /decisions/run-2': { ...decisionsBody(), run_id: 'run-2' }
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    await w.vm.$router.push('/execution?run_id=run-1')
+    await flushPromises()
+    expect(text(w, 'context')).toContain('execution apr-1')
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
+    expect(text(w, 'blocked')).toContain('Do not send again')
+  })
+
+  it('an execution the address names is read as named, not swapped for the held one', async () => {
+    const { w, calls } = await reviewReady({
+      'POST /executions': timeout(),
+      'GET /executions/apr-7': executionBody({ legs: [paidPayout()] })
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    const back = await leaveAndReturn(w, '/execution?run_id=run-1&execution_id=apr-7')
+    expect(text(back, 'context')).toContain('execution apr-7')
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(1)
+    expect(text(back, 'blocked')).toContain('Do not send again') // still this run's quarantine
   })
 })
