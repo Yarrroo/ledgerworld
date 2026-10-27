@@ -403,6 +403,35 @@ describe('review findings, each pinned', () => {
     expect(text(w, 'cursor')).toBe('Round 2 of 5 · simulated time not loaded')
   })
 
+  it('an export of a fresh base with a replayed child keeps each branch\'s provenance', async () => {
+    const body = run()
+    const child = 'b-child-replayed'
+    body.branches.push({ branch_id: child, parent_branch_id: ctx.branch_id, checkpoint_round: 4,
+      policy: 'integrated', replay: true })
+    body.cash_paths.push({ ...clone(body.cash_paths[0]), branch_id: child })
+    const { wrapper: w } = await open(body)
+    const exported = JSON.parse(decodeURIComponent(w.get('[data-test="export"]').attributes('href').split(',').slice(1).join(',')))
+    expect(exported.label).not.toBe('Fresh run') // the cash mixes fresh and replayed branches
+    expect(exported.label).toContain('Replay')
+    expect(exported.round_label).toBe('Fresh run') // posts and intents are the fresh base's
+    const cash = new Map(exported.cash.map((c) => [c.branch_id, c]))
+    expect(cash.get(ctx.branch_id)).toMatchObject({ replay: false, label: 'Fresh run', parent_branch_id: null })
+    expect(cash.get(child)).toMatchObject({ replay: true, label: 'Replay', parent_branch_id: ctx.branch_id,
+      checkpoint_round: 4, policy: 'integrated' })
+  })
+
+  it('an export whose every branch was replayed is labelled Replay, not mixed', async () => {
+    const body = run({ replay: true })
+    body.branches.push({ branch_id: 'b-child', parent_branch_id: ctx.branch_id, checkpoint_round: 4,
+      policy: 'no-action', replay: true })
+    body.cash_paths.push({ ...clone(body.cash_paths[0]), branch_id: 'b-child' })
+    const { wrapper: w } = await open(body)
+    const exported = JSON.parse(decodeURIComponent(w.get('[data-test="export"]').attributes('href').split(',').slice(1).join(',')))
+    expect(exported.label).toBe('Replay')
+    expect(exported.round_label).toBe('Replay')
+    expect(exported.cash.every((c) => c.replay === true)).toBe(true)
+  })
+
   it('a reload asked for while a poll is in flight shows as loading, not as a quiet poll', async () => {
     vi.useFakeTimers()
     const body = run()

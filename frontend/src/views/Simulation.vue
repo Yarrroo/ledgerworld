@@ -406,11 +406,33 @@ const compareWhy = computed(() => (phase.value.invalid
   : 'The decisions screen is not part of this build'))
 
 const exportName = computed(() => `${runId.value}-${base.value.branch_id}-round-${display.value}.json`)
+const provenance = (replay) => (replay === true ? LABELS.replay : replay === false ? 'Fresh run' : 'Provenance not loaded')
+
+// Each exported cash row keeps its own branch's replay provenance; the document's label covers
+// every branch in it (mixed when they differ) and `round_label` covers the base branch's round.
 const exportHref = computed(() => {
   if (!current.value) return null
   const b = shellReading.value.body
+  const meta = new Map((b.branches ?? []).map((x) => [x.branch_id, x]))
+  const cash = (b.cash_paths ?? []).map((p) => {
+    const branch = meta.get(p.branch_id)
+    const replay = typeof branch?.replay === 'boolean' ? branch.replay : null
+    return {
+      branch_id: p.branch_id,
+      parent_branch_id: branch ? branch.parent_branch_id : null,
+      checkpoint_round: branch?.checkpoint_round ?? null,
+      policy: branch?.policy ?? null,
+      replay,
+      label: provenance(replay),
+      account_id: p.account_id,
+      value: p.points.find((x) => Date.parse(x.t) === roundAt.value)?.value ?? null
+    }
+  })
+  const roundLabel = provenance(Boolean(base.value.replay))
+  const labels = [...new Set([roundLabel, ...cash.map((c) => c.label)])]
   const doc = {
-    label: base.value.replay ? LABELS.replay : 'Fresh run',
+    label: labels.length === 1 ? labels[0] : `Mixed: ${labels.join(' + ')}`,
+    round_label: roundLabel,
     source: sourceLabel(b),
     mode: LABELS[b.mode] || b.mode,
     as_of: b.as_of,
@@ -422,11 +444,7 @@ const exportHref = computed(() => {
     intents: current.value.intents,
     cleared: current.value.cleared,
     journal_ids: current.value.journal_ids,
-    cash: (b.cash_paths ?? []).map((p) => ({
-      branch_id: p.branch_id,
-      account_id: p.account_id,
-      value: p.points.find((x) => Date.parse(x.t) === roundAt.value)?.value ?? null
-    }))
+    cash
   }
   return `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(doc, null, 2))}`
 })
