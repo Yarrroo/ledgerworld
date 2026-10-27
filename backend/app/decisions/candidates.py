@@ -485,9 +485,12 @@ async def evaluate(run_id: str, cp: Checkpoint, scenarios: Mapping[str, Sequence
                     raise BranchMismatch(f"{world.branch_id}: its schedule or seed differs from "
                                          f"the other branches of {sid}")
                 capacity_by_round: dict[str, dict[int, int]] = {}
+                observability: dict[int, Any] = {}
                 c2: list[dict] = []
                 for _ in range(to_round - cp.round):
                     result = await world.coordinator.run_round(world)
+                    observability[result.round] = world.store.view(
+                        world.operating(actor)).observability
                     for pool, k_p in _pools(world).items():
                         capacity_by_round.setdefault(pool, {})[result.round] = k_p
                     c2 += [{"round": result.round, "intent_id": c.intent_id, "type": c.type,
@@ -498,7 +501,7 @@ async def evaluate(run_id: str, cp: Checkpoint, scenarios: Mapping[str, Sequence
                 out.append(Evaluation(
                     scenario=sid, policy=policy.id, branch_id=world.branch_id,
                     feasibility=assess(world, world.operating(actor), from_round=cp.round,
-                                       to_round=to_round),
+                                       to_round=to_round, observability=observability),
                     actions=driver.actions, c2=c2, intents=driver.queued,
                     decisions=driver.decisions, capacity=capacity_by_round,
                     schedule_hash=digest, seed=world.seed,

@@ -6,13 +6,18 @@ obligation is met when its settlement journal falls in its due round, and unmet 
 by its amount less the cash that was free then (settled less the reservations still backing
 later obligations, less pledged). Funding cost is the expense the entity booked in the branch
 (an advance's fee is recognised at disbursal). Every number is an integer in minor units.
+
+Cash is usable only at the end of a round whose balance was known: an unknown balance adds
+nothing (HANDOFF), so the floor and an unmet obligation's shortfall count it as 0 whatever the
+ledger holds. The store keeps only the current observability, so the caller records it per round.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import func, select
 
@@ -56,6 +61,7 @@ class Feasibility:
     obligations: tuple[ObligationResult, ...]
     floor: FloorResult
     funding_cost_minor: int
+    unknown_h: tuple[int, ...] = ()  # round ends at which the balance was unknown: usable 0
 
     @property
     def unmet(self) -> list[ObligationResult]:
@@ -77,7 +83,8 @@ class Feasibility:
         return {"account": self.account, "settled": {str(h): v for h, v in self.settled.items()},
                 "obligations": [o.as_dict() for o in self.obligations],
                 "floor": self.floor.as_dict(), "obligations_unmet": self.obligations_unmet,
-                "funding_cost_minor": self.funding_cost_minor, "feasible": self.feasible}
+                "funding_cost_minor": self.funding_cost_minor, "feasible": self.feasible,
+                "unknown_h": list(self.unknown_h)}
 
 
 def _aware(when: datetime) -> datetime:
@@ -119,15 +126,23 @@ def _paid_round(store: Any, obligation_id: str) -> int | None:
                          .where(journals.c.journal_id == journal_id)).scalar()
 
 
-def assess(world: Any, account: str, *, from_round: int, to_round: int) -> Feasibility:
+def assess(world: Any, account: str, *, from_round: int, to_round: int,
+           observability: Mapping[int, Literal["known", "unknown"]]) -> Feasibility:
     """The branch's realised outcome on ``account`` over the rounds after ``from_round`` through
-    ``to_round`` (the horizon). ``world`` is a branch's world, or the ``Branch`` holding it."""
+    ``to_round`` (the horizon). ``world`` is a branch's world, or the ``Branch`` holding it;
+    ``observability`` is the account's at the end of each of those rounds."""
     world = getattr(world, "world", world)
     store, epoch = world.store, world.clock.epoch
     if to_round <= from_round:
         raise ValueError(f"nothing to assess between rounds {from_round} and {to_round}")
+    rounds = range(from_round + 1, to_round + 1)
+    missing = [r for r in rounds if r not in observability]
+    if missing:
+        raise ValueError(f"no observability of {account} recorded for rounds {missing}")
     view = store.view(account)
-    settled = settled_by_round(store, account, range(from_round + 1, to_round + 1))
+    settled = settled_by_round(store, account, rounds)
+    unknown_h = tuple(r * ROUND_HOURS for r in rounds if observability[r] != "known")
+    usable = {h: 0 if h in unknown_h else v for h, v in settled.items()}
 
     obligations = []
     rows = [r for r in store.rows("obligations") if r["account_id"] == account]
@@ -145,12 +160,12 @@ def assess(world: Any, account: str, *, from_round: int, to_round: int) -> Feasi
         later = sum(o["amount_minor"] for o in rows
                     if o["reservation_id"] and o["obligation_id"] != ob["obligation_id"]
                     and _aware(o["due_at"]) > _aware(ob["due_at"]))
-        free = settled[due_round * ROUND_HOURS] - later - view.pledged_minor
+        free = usable[due_round * ROUND_HOURS] - later - view.pledged_minor
         obligations.append(ObligationResult(ob["obligation_id"], due_h, ob["amount_minor"],
                                             False, ob["amount_minor"] - max(0, free)))
 
     floor = view.floor_minor or 0
-    series = list(settled.items())
+    series = list(usable.items())
     min_cash = min(v for _, v in series)
     at_h = next(h for h, v in series if v == min_cash)
     first = next((h for h, v in series if v < floor), None)
@@ -161,4 +176,4 @@ def assess(world: Any, account: str, *, from_round: int, to_round: int) -> Feasi
     return Feasibility(
         account=account, settled=settled, obligations=tuple(obligations),
         floor=FloorResult(min_cash, at_h, max(0, floor - min_cash), breach),
-        funding_cost_minor=_expense(store, view.entity_id, from_round))
+        funding_cost_minor=_expense(store, view.entity_id, from_round), unknown_h=unknown_h)
