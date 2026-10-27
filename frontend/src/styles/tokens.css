@@ -4,7 +4,7 @@
  * paper surface (#F5F3ED): ok #0F8A4F at 3.97:1 and warn #A86A00 at 4.00:1. Status text uses the
  * darker `-text` variants instead, #0B7A45 (4.87:1) and #8F5A00 (5.21:1); the brief's colour
  * stays on icons and rules, which need 3:1. Every other pair passes as given: ink 16.8:1,
- * brand 4.61:1, bad 4.65:1 on paper; in dark every token is above 6:1 on #0E1520.
+ * brand and link 4.61:1, bad 4.65:1 on paper; in dark every token is above 6:1 on #0E1520.
  * Status is never colour alone: each state carries its icon and its word.
  */
 
@@ -23,6 +23,7 @@
   --lw-warn-text: #8F5A00;
   --lw-bad-text: #CC3328;
   --lw-focus: #2D69D6;
+  --lw-link: #2D69D6;
 
   --lw-font-text: 'Space Grotesk', 'Noto Sans SC', system-ui, sans-serif;
   --lw-font-figure: 'JetBrains Mono', ui-monospace, monospace;
@@ -51,6 +52,7 @@
     --lw-warn-text: #FFB43A;
     --lw-bad-text: #FF5E54;
     --lw-focus: #79A6FF;
+    --lw-link: #79A6FF;
   }
 }
 
@@ -143,6 +145,11 @@
   color: var(--lw-ink-muted);
   font-size: 14px;
   margin-bottom: var(--lw-space-4);
+}
+
+/* Plain links take the theme's link colour; the browser's default blue is 1.95:1 in dark. */
+.lw-main a:not(.lw-button) {
+  color: var(--lw-link);
 }
 
 /* ------------------------------------------------------------ answer strip */
