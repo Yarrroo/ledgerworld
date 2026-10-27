@@ -215,8 +215,11 @@ class ReplayModel(ScriptedModel):
         return self._pinned.round
 
     def _answer(self, messages, tools):
-        rnd = self._pinned.round = int(self.live_round_source())
         follow_up = bool(messages) and messages[-1].get("role") == "tool"
+        # A tool follow-up belongs to the call whose round was pinned on its first turn.
+        if not (follow_up and hasattr(self._pinned, "round")):
+            self._pinned.round = int(self.live_round_source())
+        rnd = self._pinned.round
         if not follow_up:
             call = self.recorded.get(rnd)
             if call is None:

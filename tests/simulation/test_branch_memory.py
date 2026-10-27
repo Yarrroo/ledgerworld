@@ -297,3 +297,11 @@ def test_replay_reads_the_round_once_per_call():
     model = recorded().replay_model("borrower-c", lambda: next(rounds), lambda: "obs-c4")
     reply = ask(model).choices[0].message
     assert reply.tool_calls[0].function.name == "request_advance"
+
+
+def test_tool_follow_up_keeps_the_pinned_round():
+    rounds = iter([4, 5])  # the live round moves on before the agent sends its tool result
+    model = recorded().replay_model("borrower-c", lambda: next(rounds), lambda: "obs-c4")
+    call = ask(model).choices[0].message.tool_calls[0]
+    model.run([{"role": "tool", "tool_call_id": call.id, "content": "queued"}])
+    assert [c.round for c in model.calls] == [4, 4]
