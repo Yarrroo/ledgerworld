@@ -206,7 +206,9 @@ def test_prepared_job_configuration_is_simulation_safe(tmp_path):
 
 
 @pytest.mark.parametrize("point", ["after_submitted_before_send", "after_response_before_state_write",
-                                  "before_payout_settlement", "before_execution"])
+                                  "before_payout_settlement", "before_execution",
+                                  "after_response_before_state_write_advance",
+                                  "after_settled_seen_before_journal_advance", "before_provider_send"])
 def test_interrupted_execution_can_resume_without_duplicate_money(deployed, monkeypatch, point):
     from datetime import timedelta
 
@@ -217,7 +219,9 @@ def test_interrupted_execution_can_resume_without_duplicate_money(deployed, monk
 
     def crash(at, leg):
         nonlocal interrupted
-        if not interrupted and at == point and leg.kind == "payout":
+        target = "advance" if point.endswith("_advance") else "payout"
+        at_point = point.removesuffix("_advance")
+        if not interrupted and at == at_point and leg.kind == target:
             interrupted = True
             raise KeyboardInterrupt("simulated process exit")
 
@@ -225,6 +229,15 @@ def test_interrupted_execution_can_resume_without_duplicate_money(deployed, monk
         gw = original_gateway(*a, **kw, on_point=crash)
         if point == "before_execution":
             gw.execute = lambda *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt())
+        if point == "before_provider_send":
+            original_send = gw.provider.send
+
+            def send(leg):
+                if leg.kind == "payout":
+                    raise KeyboardInterrupt()
+                return original_send(leg)
+
+            gw.provider.send = send
         return gw
 
     def pay(*a, **kw):
@@ -284,3 +297,49 @@ def test_prepared_run_cannot_be_reforked_with_a_different_world(deployed):
     assert response.status_code == 409
     assert response.get_json()["error"]["code"] == "prepared_demo_read_only"
     assert services.jobs.get("decisions", run_id) is None
+
+
+def test_provider_clients_cannot_overwrite_newer_fake_objects(deployed):
+    from app.demo.provider import client_for
+    from app.finance.schemas import Money
+
+    services, _ = deployed
+    older = client_for(services.jobs, "provider-concurrent")
+    newer = client_for(services.jobs, "provider-concurrent")
+    newer.create_transfer("provider-concurrent-payout", beneficiary_id="ben-payroll-1",
+                          amount=Money(minor=100, currency="USD"), reference="test payout")
+    older.balances()
+    restarted = client_for(services.jobs, "provider-concurrent")
+    assert len(restarted.find_transfer("provider-concurrent-payout")) == 1
+
+
+def test_provider_persists_acceptance_even_when_the_reply_times_out(deployed):
+    from app.connectors.airwallex.errors import OutcomeUnknown
+    from app.demo.provider import client_for
+    from app.finance.schemas import Money
+
+    services, _ = deployed
+    client = client_for(services.jobs, "provider-timeout")
+    client.login()
+    client.transport.arm("timeout_after_accept")
+    with pytest.raises(OutcomeUnknown):
+        client.create_transfer("provider-timeout-payout", beneficiary_id="ben-payroll-1",
+                               amount=Money(minor=100, currency="USD"), reference="test payout")
+    restarted = client_for(services.jobs, "provider-timeout")
+    assert len(restarted.find_transfer("provider-timeout-payout")) == 1
+
+
+def test_local_fake_deposit_reference_is_idempotent_across_clients(deployed):
+    from app.demo.provider import client_for
+    from app.finance.schemas import Money
+
+    services, _ = deployed
+    first = client_for(services.jobs, "deposit-concurrent")
+    second = client_for(services.jobs, "deposit-concurrent")
+    global_account = first.global_account_in("USD")
+    args = {"amount": Money(minor=100, currency="USD"), "global_account_id": global_account,
+            "reference": "prepared advance deposit-concurrent"}
+    left = first.simulate_deposit(**args)
+    right = second.simulate_deposit(**args)
+    assert left.provider_id == right.provider_id
+    assert len(second.transport.deposits()) == 1

@@ -22,10 +22,10 @@ from ..api.v1.services import Services, beneficiaries_for
 from ..decisions.candidates import ALL, plan_for_now
 from ..execution import reconcile
 from ..execution.approval import bind
-from ..execution.gateway import Gateway
 from ..finance import contracts
 from ..jobs.runner import FORK, RUN, family_of, new_run, pending_decisions
 from ..simulation.scenarios import DemoWorld, load_world
+from .provider import PreparedGateway as Gateway
 from .provider import client_for
 from .run import APPROVER, TERMS, observed_snapshot, pay
 
@@ -129,6 +129,12 @@ def _execution(services: Services, run_id: str, selected: str, world: DemoWorld 
             sent = leg.attempts == gateway.outbox._claims(leg)
             gateway.outbox._move(leg, "unknown", "restart_after_send" if sent else "restart",
                                  incident=("outcome_unknown", "prepared execution resumed"))
+    # The fake's transactionally stored objects are authoritative, unlike a sandbox lookup.
+    # A send that died before committing any fake object can safely reuse the same request id.
+    for leg in gateway.legs(stored.approval_id):
+        if leg.state == "unknown" and not gateway.provider.find(leg):
+            gateway.outbox._move(leg, "pending", "local_fake_lookup_found_none",
+                                 close=("outcome_unknown",))
     for _ in stored.legs:
         legs = gateway.run(stored.approval_id)
         if all(leg.state == "settled" and leg.reconciled for leg in legs):
