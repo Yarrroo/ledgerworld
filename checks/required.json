@@ -108,6 +108,8 @@
       "tests/decisions/test_nonanticipativity.py::test_a_policy_that_moves_the_views_clock_is_caught",
       "tests/decisions/test_nonanticipativity.py::test_a_policy_that_erases_its_violation_is_caught_by_the_pair",
       "tests/decisions/test_policies.py::test_a_policy_that_peeks_inside_a_branch_is_rejected_with_the_path",
+      "tests/decisions/test_policies.py::test_a_side_channel_policy_is_caught_by_evaluate_before_any_ranking",
+      "tests/decisions/test_policies.py::test_an_honest_policy_on_the_same_pair_passes_evaluate",
       "tests/decisions/test_policies.py::test_the_integrated_draw_at_t12_is_the_same_whether_the_receipt_comes_at_16_or_252",
       "tests/decisions/test_policies.py::test_a_policy_never_sees_the_scenario",
       "tests/decisions/test_policies.py::test_every_policy_runs_on_the_same_checkpoint_seed_and_schedule"
