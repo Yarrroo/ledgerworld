@@ -116,6 +116,8 @@ class WorldState:
     event_cursor: int = 0
     post_cursor: int = 0  # the last OASIS post id already a world item
     intents: dict[str, dict] = field(default_factory=dict)  # committed C1, for the trace
+    # The item an intent acted on, by intent id, when the clearing chose it (an offer drawn).
+    acted_on: dict[str, str] = field(default_factory=dict)
     rounds: list[dict] = field(default_factory=list)  # committed round records
     deliveries: list[str] = field(default_factory=list)  # scheduled event ids delivered
 
@@ -531,7 +533,10 @@ class World:
 
     def trace(self, journal_id: str) -> list[str]:
         """The chain of cause behind a journal: the journal, its intent, the item that intent
-        acted on, that item's own intent, and so on to the public posts the first one saw."""
+        acted on, that item's own intent, and so on to the public posts the first one saw.
+
+        The item is the one the clearing recorded (a draw names a facility, or none, never the
+        offer item), else the one a parameter names among the intent's evidence."""
         with self.store.reading() as c:
             journal = c.execute(select(journals.c.source_intent_id)
                                 .where(journals.c.journal_id == journal_id)).first()
@@ -544,8 +549,9 @@ class World:
             intent = self.state.intents[intent_id]
             evidence = intent["evidence_ids"]
             params = intent["params"]
-            ref = next((params[k] for k in ("request", "facility_id", "target", "obligation_id")
-                        if params.get(k) in evidence), None)
+            ref = self.state.acted_on.get(intent_id) or next(
+                (params[k] for k in ("request", "target", "obligation_id")
+                 if params.get(k) in evidence), None)
             if ref is None:
                 chain += [e for e in evidence if items.get(e, {}).get("kind") == "public_post"]
                 break
