@@ -35,6 +35,7 @@ T0 = datetime(2026, 1, 5, tzinfo=UTC)
 CASH = {"a/usd": "USD", "a/usd-2": "USD", "a/eur": "EUR"}
 EXTERNAL = {"x/usd": "USD", "x/eur": "EUR"}
 ACCOUNTS = [*CASH, *EXTERNAL]
+OUTSIDE = {currency: account_id for account_id, currency in EXTERNAL.items()}
 LOTS = ["lot-1", "lot-2", "lot-3"]  # few collateral refs, so pledges collide
 SEED = 20261027
 BUDGET = settings(max_examples=80, stateful_step_count=25, deadline=None, database=None,
@@ -80,11 +81,12 @@ class LedgerMachine(RuleBasedStateMachine):
         self.n += 1
         return f"{prefix}{self.n}"
 
-    def same(self, store_write: Callable[[], object], ref_write: Callable[[], object],
-             **kw: bool) -> str:
+    def same(self, store_write: Callable[[], object], ref_write: Callable[[], object], *,
+             own_account: bool = False) -> str:
         """Run one write on both sides; they must agree on its outcome."""
         self.writes += 1
-        ref, store = outcome(ref_write, **kw), outcome(store_write, **kw)
+        ref = outcome(ref_write, own_account=own_account)
+        store = outcome(store_write, own_account=own_account)
         assert store == ref, f"store {store!r}, reference {ref!r}"
         return store
 
@@ -119,8 +121,7 @@ class LedgerMachine(RuleBasedStateMachine):
     def fund(self, funding: list[int]) -> None:
         for (account_id, currency), amount in zip(CASH.items(), funding, strict=True):
             if amount:
-                outside = next(x for x, c in EXTERNAL.items() if c == currency)
-                assert self.journal([(outside, -amount), (account_id, amount)]) == "ok"
+                assert self.journal([(OUTSIDE[currency], -amount), (account_id, amount)]) == "ok"
 
     @rule(src=anywhere, dst=anywhere, data=st.data(),
           shape=st.sampled_from(["journal", "journal", "unbalanced", "bare posting"]))
