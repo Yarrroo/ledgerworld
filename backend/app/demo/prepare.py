@@ -20,6 +20,7 @@ from redis.exceptions import WatchError
 
 from ..api.v1.services import Services, beneficiaries_for
 from ..decisions.candidates import ALL, plan_for_now
+from ..execution import outbox as ob
 from ..execution import reconcile
 from ..execution.approval import bind
 from ..finance import contracts
@@ -113,7 +114,7 @@ def _execution(services: Services, run_id: str, selected: str, world: DemoWorld 
         # No leg was queued: reapprove identical terms, under the same operation ids.
         with gateway.transaction():
             gateway.conn.execute("UPDATE approvals SET expires_at = ? WHERE approval_id = ?",
-                                 (approval.expires_at.isoformat(), approval.approval_id))
+                                 (ob.stamp(approval.expires_at), approval.approval_id))
             gateway.conn.execute("UPDATE approval_terms SET terms = ? WHERE approval_id = ?",
                                  (approval.model_dump_json(), approval.approval_id))
         stored = approval
