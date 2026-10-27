@@ -117,11 +117,18 @@ def _binding(earliest: dict, evals: list[Evaluation], tried: list[Evaluation],
     if earliest["kind"] == "obligation":
         o = next(o for o in e.feasibility.obligations if o.id == earliest["id"])
         return (f"free cash {grouped(o.amount_minor - o.short_minor, currency)} at "
-                f"t={o.due_h} < {o.id} {grouped(o.amount_minor, currency)}; "
-                "no reservation is touched")
+                f"t={o.due_h}{_unknown(e.feasibility, o.due_h)} < {o.id} "
+                f"{grouped(o.amount_minor, currency)}; no reservation is touched")
     f = e.feasibility.floor
-    return (f"min cash {grouped(f.min_cash, currency)} at t={f.at_h} < floor "
+    return (f"min cash {grouped(f.min_cash, currency)} at t={f.at_h}"
+            f"{_unknown(e.feasibility, f.at_h)} < floor "
             f"{grouped(f.min_cash + f.short_minor, currency)}; no remedy closed it")
+
+
+def _unknown(f: Feasibility, h: int) -> str:
+    """Says so when hour ``h`` fell in a round that ended unknown: the shortfall is what could
+    not be used, not what the ledger held."""
+    return " (balance unknown)" if f.unknown_at(h) else ""
 
 
 def rank(evaluations: Sequence[Evaluation], *, order: Sequence[str] | None = None,
