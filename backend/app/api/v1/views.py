@@ -17,7 +17,6 @@ from ...finance.models import HORIZON
 from ...finance.schemas import Snapshot
 from ...finance.spendability import (
     AccountView,
-    min_projected,
     projected_cash,
     spendability,
     state_of,
@@ -101,8 +100,6 @@ def _combined_low(views: list[AccountView], now: datetime,
                   horizon: timedelta = HORIZON) -> tuple[int, datetime]:
     """The lowest P of the accounts together over the horizon, and when it is first reached;
     P moves only at a flow's or an obligation's time, so only those times are evaluated."""
-    if len(views) == 1:
-        return min_projected(views[0], now, horizon)
     end = now + horizon
     times = sorted({now, *(x.at for v in views
                            for x in v.pending_in + v.pending_out + v.obligations

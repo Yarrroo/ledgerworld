@@ -465,7 +465,9 @@ def decided(services: Services, run_id: str = "run-demo", status: str = "selecte
         "run_id": run_id, "snapshot_id": "demo-world", "checkpoint_round": 2,
         "cohort": "delayed-receipt seed 101", "weight_kind": "unweighted", "status": status,
         "results": [], "selected": "integrated" if status == "selected" else None,
-        "escalation": None})
+        "escalation": None, "job_id": f"job-fork-{run_id}"})
+    if status == "pending":  # its fork job is still queued
+        services.jobs.create(f"job-fork-{run_id}", "fork", run_id, {}, max_attempts=1)
     return run_id
 
 
@@ -575,8 +577,51 @@ def test_reap_requeues_a_job_whose_worker_died_before_taking_its_lease():
     q = queue()
     job = q.submit("run", "run-1", {})
     q.redis.rpoplpush(q.queue_key, q.processing_key)  # the worker dies right here
-    q.reap()
+    q.reap()  # once: it may still be claiming
+    q.reap()  # twice: it died
     assert q.claim("w2").job_id == job.job_id
+
+
+def test_reap_leaves_a_claim_in_progress_alone():
+    q = queue()
+    job = q.submit("run", "run-1", {})
+    q.redis.rpoplpush(q.queue_key, q.processing_key)  # a worker is between pop and lease
+    q.reap()
+    assert q.redis.lrange(q.queue_key, 0, -1) == []  # not pushed twice
+    q.redis.set(q._lease(job.job_id), "w1", px=q.lease_ms)
+    assert q.store.move(job.job_id, ["queued"], "running", worker="w1")
+    assert q.redis.lrange(q.processing_key, 0, -1) == [job.job_id.encode()]
+
+
+def test_a_hung_handler_loses_its_lease_after_the_job_timeout():
+    q = queue(lease_s=0.2)
+
+    def hung(job, ctx):
+        time.sleep(0.8)  # past the 0.3 s job timeout: the heartbeat stops renewing
+        q.reap()
+
+    q.submit("run", "run-1", {})
+    assert Worker(q, {"run": hung}, job_timeout_s=0.3).run_once().state != "done"
+
+
+def test_a_pending_decision_whose_job_never_started_reads_failed():
+    services = build()
+    run_id = finished_run(services)
+    services.jobs.put("decisions", run_id, {"status": "pending", "job_id": "job-lost"})
+    refused(client(services).get(f"/api/v1/decisions/{run_id}"), 409, "fork_failed")
+
+
+def test_the_deployed_clock_does_not_run_back_on_a_restart(monkeypatch):
+    from app.api.v1 import services as services_module
+
+    wall = [1000.0]
+    monkeypatch.setattr(services_module.time, "time", lambda: wall[0])
+    first = build(clock=None)
+    wall[0] += 3600
+    before_restart = first.now()
+    restarted = Services(snapshot=first.snapshot, store=first.store, jobs=first.jobs,
+                         queue=first.queue, epoch=T0, mode="fake", token=TOKEN)
+    assert restarted.now() >= before_restart
 
 
 def test_the_worker_refuses_to_start_on_a_database_the_api_cannot_see(monkeypatch):
@@ -655,7 +700,7 @@ def test_an_approval_expires_on_the_deployed_clock(monkeypatch):
     from app.api.v1 import services as services_module
 
     wall = [1000.0]
-    monkeypatch.setattr(services_module.time, "monotonic", lambda: wall[0])
+    monkeypatch.setattr(services_module.time, "time", lambda: wall[0])
     services = build(clock=None)
     http = client(services)
     run_id = decided(services)

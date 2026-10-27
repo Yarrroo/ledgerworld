@@ -30,6 +30,7 @@ from .store import Job, JobStore
 
 LEASE_S = 120
 MAX_ATTEMPTS = 3
+JOB_TIMEOUT_S = 30 * 60  # past this the lease is no longer renewed: a hung job is reaped
 
 
 def _text(value: Any) -> str:
@@ -54,6 +55,7 @@ class JobQueue:
         self.lease_prefix = f"{prefix}:lease:"
         self.lease_ms = int(lease_s * 1000)
         self.max_attempts = max_attempts
+        self._suspect: set[str] = set()  # queued, in processing, no lease: seen by the last reap
 
     def _lease(self, job_id: str) -> str:
         return self.lease_prefix + job_id
@@ -140,9 +142,10 @@ class JobQueue:
         return to
 
     def reap(self) -> list[str]:
-        """Expired leases count as a failed attempt; a queued job left in the processing list
-        (its worker died before taking the lease) and a queued row Redis lost are pushed again."""
-        touched = []
+        """Expired leases count as a failed attempt; a queued row Redis lost is pushed again, and
+        so is a queued job left in the processing list with no lease on two reaps in a row (on
+        one, a worker may be between its pop and its lease)."""
+        touched, suspect = [], set()
         for raw in self.redis.lrange(self.processing_key, 0, -1):
             job_id = _text(raw)
             if self.redis.exists(self._lease(job_id)):
@@ -151,11 +154,16 @@ class JobQueue:
             if job is not None and job.state == "running":
                 self.fail(job, job.worker, "lease expired: the worker stopped renewing it")
                 touched.append(job_id)
+            elif job is not None and job.state == "queued":
+                if job_id not in self._suspect:
+                    suspect.add(job_id)
+                    continue
+                self.redis.lrem(self.processing_key, 0, job_id)
+                self.redis.lpush(self.queue_key, job_id)
+                touched.append(job_id)
             else:
                 self.redis.lrem(self.processing_key, 0, job_id)
-                if job is not None and job.state == "queued":
-                    self.redis.lpush(self.queue_key, job_id)
-                    touched.append(job_id)
+        self._suspect = suspect
         listed = {_text(x) for key in (self.queue_key, self.processing_key)
                   for x in self.redis.lrange(key, 0, -1)}
         for job in self.store.in_state("queued"):
@@ -187,14 +195,17 @@ Handler = Callable[[Job, JobContext], None]
 
 class _Heartbeat:
     """Renews a job's lease in the background while its handler runs, so one long unit of work
-    (a fork's whole evaluation) is not mistaken for a dead worker."""
+    (a fork's whole evaluation) is not mistaken for a dead worker; it stops at ``timeout_s``,
+    so a hung handler's lease lapses and the job is reaped like a dead worker's."""
 
-    def __init__(self, queue: JobQueue, job: Job, worker: str) -> None:
+    def __init__(self, queue: JobQueue, job: Job, worker: str, timeout_s: float) -> None:
         self._stop = threading.Event()
         every = queue.lease_ms / 3000
+        deadline = time.monotonic() + timeout_s
 
         def beat() -> None:
-            while not self._stop.wait(every) and queue.heartbeat(job, worker):
+            while (not self._stop.wait(every) and time.monotonic() < deadline
+                   and queue.heartbeat(job, worker)):
                 pass
 
         self._thread = threading.Thread(target=beat, name=f"lease-{job.job_id}", daemon=True)
@@ -212,11 +223,13 @@ class Worker:
     """Claims one job at a time and runs its kind's handler; reaps at most every ``reap_s``."""
 
     def __init__(self, queue: JobQueue, handlers: Mapping[str, Handler],
-                 worker: str | None = None, *, reap_s: float = 30.0) -> None:
+                 worker: str | None = None, *, reap_s: float = 30.0,
+                 job_timeout_s: float = JOB_TIMEOUT_S) -> None:
         self.queue = queue
         self.handlers = dict(handlers)
         self.worker = worker or f"worker-{uuid.uuid4().hex[:8]}"
         self.reap_s = reap_s
+        self.job_timeout_s = job_timeout_s
         self._reaped_at: float | None = None
 
     def run_once(self) -> Job | None:
@@ -237,7 +250,7 @@ class Worker:
                                 retry=False)
                 return self.queue.store.job(job.job_id)
             ctx.checkpoint()
-            with _Heartbeat(self.queue, job, self.worker):
+            with _Heartbeat(self.queue, job, self.worker, self.job_timeout_s):
                 handler(job, ctx)
         except Cancelled:
             self.queue.finish_cancelled(job, self.worker)

@@ -227,9 +227,10 @@ def _decisions(run_id: str) -> dict:
     doc = services().jobs.get("decisions", run_id)
     if doc is None:
         raise Refused(404, "no_decisions", f"run {run_id} has not been forked")
-    if doc["status"] == "pending":
-        state, _ = _job_state(run_id, FORK)
-        if state in ("failed", "cancelled"):  # the worker's error stays in its log, not here
+    if doc["status"] == "pending":  # the fork this record names, never an earlier one
+        job = services().jobs.job(doc.get("job_id") or "")
+        state = job.state if job else "lost"
+        if state in ("failed", "cancelled", "lost"):  # its error stays in the worker's log
             raise Refused(409, "fork_failed", f"the fork of {run_id} {state}; fork it again")
     return doc
 

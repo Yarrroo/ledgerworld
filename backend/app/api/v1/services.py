@@ -7,8 +7,9 @@
   store's database;
 - the execution gateway on the observed store, built on first use (it reads the provider);
 - the demo token, the provider mode, and the clock the observed state is read at: the snapshot's
-  `as_of` plus the time this process has been up, so a frozen snapshot goes stale and an
-  approval expires as they would on the provider's clock.
+  `as_of` plus the wall time since the store first served it (the anchor is stored, so a restart
+  or a second process never runs the clock back), so a frozen snapshot goes stale and an approval
+  expires as they would on the provider's clock.
 
 `Services.from_env()` is the deployed wiring; tests build one directly with fakes.
 """
@@ -59,7 +60,7 @@ class Services:
     mode: Mode
     token: str | None
     make_gateway: Callable[[Services], Gateway] | None = None
-    clock: Callable[[], datetime] | None = None  # None: as_of + this process's uptime
+    clock: Callable[[], datetime] | None = None  # None: as_of + wall time since the anchor
     wall_ms: Callable[[], int] = field(default=lambda: int(time.time() * 1000))
     webhook_secret: str | None = None
     connected_setting: str = "auto"
@@ -76,8 +77,12 @@ class Services:
         if self.beneficiaries is None:
             self.beneficiaries = beneficiaries_for(self.snapshot)
         if self.clock is None:
-            started, as_of = time.monotonic(), self.snapshot.as_of
-            self.clock = lambda: as_of + timedelta(seconds=time.monotonic() - started)
+            anchor = self.jobs.get("clock", self.snapshot.snapshot_id)
+            if anchor is None:
+                anchor = time.time()
+                self.jobs.put("clock", self.snapshot.snapshot_id, anchor)
+            as_of = self.snapshot.as_of
+            self.clock = lambda: as_of + timedelta(seconds=max(0.0, time.time() - anchor))
 
     @classmethod
     def build(cls, snapshot: Snapshot, *, store: LedgerStore | None = None,
