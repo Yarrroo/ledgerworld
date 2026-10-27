@@ -53,6 +53,7 @@ def pay(store: LedgerStore, account_id: str, amount_minor: int, *, to_account: s
         conn: Connection | None = None) -> Journal:
     """Check and post a discretionary payment in one transaction; raises the refusal."""
     with store.transaction(conn) as c:
+        store.lock(account_id, to_account, conn=c)
         refusal = check_outflow(store.view(account_id, conn=c), amount_minor, now, horizon)
         if refusal is not None:
             raise refusal

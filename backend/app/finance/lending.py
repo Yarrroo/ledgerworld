@@ -188,6 +188,7 @@ def disburse(store: LedgerStore, facility_id: str, *, now: datetime,
         payee = borrower_account or f"{f.borrower}/operating"
         _cash_of(c, source, f.pool, f.currency)
         _cash_of(c, payee, f.borrower, f.currency)
+        store.lock(source, payee, conn=c)
         refusal = (check_draw(store, f.pool, f.limit_minor, now, horizon, conn=c)
                    or check_outflow(store.view(source, conn=c), f.limit_minor, now, horizon))
         if refusal is not None:
@@ -236,6 +237,7 @@ def draw_line(store: LedgerStore, facility_id: str, amount_minor: int, *, now: d
         payee = borrower_account or f"{f.borrower}/operating"
         _cash_of(c, source, f.pool, f.currency)
         _cash_of(c, payee, f.borrower, f.currency)
+        store.lock(source, payee, conn=c)
         if held is not None:
             store.release(held.reservation_id, conn=c)
         _payable_from(store, c, source, amount, now)  # the released hold is free again
@@ -324,6 +326,7 @@ def repay(store: LedgerStore, facility_id: str, period_end: datetime, *, now: da
         payee = to_account or f"{f.pool}/operating"
         _cash_of(c, payer, f.borrower, f.currency)
         _cash_of(c, payee, f.pool, f.currency)
+        store.lock(payer, payee, conn=c)
         _payable_from(store, c, payer, amount, now)
         journal = store.apply(Journal(
             journal_id=journal_id, kind="advance_repayment", round=round, sim_time=now,

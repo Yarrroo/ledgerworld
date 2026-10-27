@@ -38,10 +38,12 @@
 - Nothing calls the ledger yet. The coordinator (round steps 7–8), decisions, the gateway and
   the overview API are later tasks. `check_outflow`, `settle_due` and `AccountView` are their
   entry points.
-- Concurrent writers on PostgreSQL: the check-then-write in `pay`, `hold` and `max(seq)+1`
-  takes no row lock. One store serves one branch with one coordinator, so this does not bite
-  today. A gateway running legs in parallel against the ledger of record needs
-  `SELECT … FOR UPDATE` on the account row or SERIALIZABLE isolation.
+- Concurrent writers on PostgreSQL: fixed after review (finding F3). Every free-funds check
+  locks the account row (`FOR NO KEY UPDATE`, id order) under a pinned READ COMMITTED, and
+  `pay` and the lending payments lock their accounts before the view they check;
+  `test_two_connections_never_claim_more_than_settled` is the two-connection regression.
+  `max(seq)+1` is still unlocked: two journals on disjoint accounts committing at once collide
+  on the unique `seq` and one fails with an integrity error, which moves no money.
 - A negative hold, pledge or outflow amount is refused as `zero_amount`. The closed code set has
   no separate code for it.
 - Kinds and purposes are cut to the 32-character columns of the design schema; `schemas.Kind`

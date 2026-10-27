@@ -7,6 +7,11 @@ refusal the caller catches still leaves nothing of the refused write behind.
 
 Buckets map to tables: settled ← Σ postings · reserved ← reservations held · pending_in/out ←
 expected_flows pending · pledged ← pledges active · unknown ← account_observations.
+
+Concurrent writers: every check of an account's free units first locks that account's row
+(`SELECT … FOR NO KEY UPDATE`, accounts in id order), so two claims on the same cash are
+serialized; under READ COMMITTED, which the PostgreSQL engine pins, the second reads after the
+first commits. A caller that checks a view and then writes (`ledger.pay`) takes `lock` first.
 """
 
 from __future__ import annotations
@@ -92,7 +97,8 @@ class LedgerStore:
             event.listen(self.engine, "connect", _sqlite_connect)
             event.listen(self.engine, "begin", _sqlite_begin)
         else:
-            self.engine = create_engine(url)
+            # The account locks serialize only if each statement after a lock reads anew.
+            self.engine = create_engine(url, isolation_level="READ COMMITTED")
         migrations.upgrade(self.engine)
 
     # ------------------------------------------------------------------------- transactions
@@ -175,8 +181,7 @@ class LedgerStore:
     def _apply(self, c: Connection, journal: Journal) -> Journal:
         if not journal.postings:
             raise LedgerRefusal("zero_amount", journal_id=journal.journal_id)
-        held = {r.account_id: r for r in c.execute(select(accounts).where(
-            accounts.c.account_id.in_({p.account_id for p in journal.postings})))}
+        held = {r.account_id: r for r in self._locked(c, {p.account_id for p in journal.postings})}
         rows, totals = [], defaultdict(int)
         for p in journal.postings:
             amount = minor_amount(p.amount_minor)
@@ -203,8 +208,12 @@ class LedgerStore:
         return Journal(**{**journal.__dict__, "seq": seq})
 
     def _free(self, c: Connection, account_id: str) -> tuple[Any, str, int, int]:
-        """(account, observability, settled, free): free = settled − everything promised."""
-        acc = self._account(c, account_id)
+        """(account, observability, settled, free): free = settled − everything promised.
+
+        The account row is locked first, so no other transaction can claim the same units
+        between this read and the caller's commit.
+        """
+        acc = self._account(c, account_id, lock=True)
         observability = c.execute(select(account_observations.c.observability).where(
             account_observations.c.account_id == account_id)).scalar_one()
         settled = _sum(c, postings, account_id)
@@ -380,7 +389,7 @@ class LedgerStore:
         """A movement not yet settled: a receivable, a withdrawal, an advance in flight."""
         amount = minor_amount(amount_minor, positive=True)
         with self.transaction(conn) as c:
-            currency = self._account(c, account_id).currency
+            currency = self._account(c, account_id, lock=direction == "out").currency
             flow_id = flow_id or self._next_id(c, expected_flows, "flow")
             c.execute(insert(expected_flows).values(
                 flow_id=flow_id, account_id=account_id, direction=direction, currency=currency,
@@ -499,8 +508,31 @@ class LedgerStore:
 
     # ------------------------------------------------------------------------------ helpers
 
-    def _account(self, c: Connection, account_id: str, required: bool = True) -> Any:
-        row = c.execute(select(accounts).where(accounts.c.account_id == account_id)).first()
+    def lock(self, *account_ids: str, conn: Connection) -> None:
+        """Lock accounts until `conn`'s transaction ends, before a check that a write relies on.
+
+        Every account named must exist. A no-op on SQLite, whose writers are already serial.
+        """
+        found = {r.account_id for r in self._locked(conn, set(account_ids))}
+        missing = sorted(set(account_ids) - found)
+        if missing:
+            raise UnknownAccount(missing[0])
+
+    @staticmethod
+    def _locked(c: Connection, account_ids: set[str]) -> list[Any]:
+        """The account rows, locked in id order so two lockers never wait on each other.
+
+        NO KEY UPDATE, not UPDATE: a concurrent insert referencing the account (a posting, a
+        reservation) takes KEY SHARE, which this does not block.
+        """
+        return c.execute(select(accounts).where(accounts.c.account_id.in_(account_ids))
+                         .order_by(accounts.c.account_id)
+                         .with_for_update(key_share=True)).all()
+
+    def _account(self, c: Connection, account_id: str, required: bool = True,
+                 lock: bool = False) -> Any:
+        query = select(accounts).where(accounts.c.account_id == account_id)
+        row = c.execute(query.with_for_update(key_share=True) if lock else query).first()
         if row is None and required:
             raise UnknownAccount(account_id)
         return row
