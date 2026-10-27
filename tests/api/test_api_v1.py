@@ -249,10 +249,6 @@ def test_the_stale_examples_are_what_the_api_answers(route):
     later = build(observed(stressed=True), clock=lambda: NOW + timedelta(hours=7))
     body = check(client(later).get(f"/api/v1/{route}"), f"{route.capitalize()}Response")
     path = ROOT / f"contracts/examples/c6_api/{STALE_EXAMPLES[route]}.json"
-    if os.environ.get("LW_RECORD_EXAMPLES"):
-        doc = json.loads(path.read_text(encoding="utf-8")) | {"instance": body}
-        path.write_text(json.dumps(doc, indent=1, sort_keys=True, ensure_ascii=False) + "\n",
-                        encoding="utf-8")
     assert body == json.loads(path.read_text(encoding="utf-8"))["instance"]
 
 

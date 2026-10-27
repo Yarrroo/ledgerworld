@@ -6,7 +6,8 @@
     </p>
     <p v-if="body.completeness.status === 'partial'" class="lw-note" data-test="partial">
       Partial: not current — {{ notCurrent }}.
-      A stale account was observed and keeps its last value; an unknown one has no value.
+      A stale account was observed and keeps its last value, and the figures that include it
+      say Stale; an unknown one has no value. Lender capacity counts known balances only.
     </p>
 
     <section class="lw-strip" aria-label="Answer">

@@ -11,7 +11,7 @@ import Overview from '../../src/views/Overview.vue'
 import Treasury from '../../src/views/Treasury.vue'
 import Lending from '../../src/views/Lending.vue'
 import {
-  contextKey, formatMoney, formatTime, latestOnly, metricText, useReading
+  contextKey, formatMoney, formatTime, freshness, latestOnly, metricText, useReading
 } from '../../src/api/v1.js'
 
 import moneyViews from '../../../prp/2026-10-20-ledgerworld/design/modules/ui/fixtures/money-views.json'
@@ -227,8 +227,9 @@ describe('a stale account is not current, and it is not unknown', () => {
     expect(partial).toContain('lender/venue · ? Unknown')
     expect(partial).not.toMatch(/operating · \? Unknown/)
     expect(partial).not.toContain('not observed')
-    // K_p counts only known balances: the note must not say a stale value feeds the figures.
-    expect(partial).not.toMatch(/figures that use it/i)
+    // Cash and S include a stale value and say Stale; K_p counts known balances only.
+    expect(partial).toContain('the figures that include it say Stale')
+    expect(partial).toContain('Lender capacity counts known balances only')
     expect(text(w, 'settled')).toContain('USD 70,000.00 · stale') // its last value, kept
   })
 
@@ -244,6 +245,14 @@ describe('a stale account is not current, and it is not unknown', () => {
     expect(shown).not.toContain('borrower-a/operating') // not the pool's
     expect(shown).not.toMatch(/not observed/i)
     expect(disabled(w, 'fund')).toBe(true)
+  })
+
+  it('only a stale account shows a time, whatever the response carries', () => {
+    const at = '2026-01-05T12:00:00Z'
+    expect(freshness({ account_id: 'lender/venue', status: 'unknown', as_of: at }).text)
+      .toBe('lender/venue · ? Unknown')
+    expect(freshness({ account_id: 'lender/operating', status: 'stale', as_of: at }).at)
+      .toBe('2026-01-05 12:00 UTC')
   })
 })
 
