@@ -59,7 +59,8 @@
    its success text and the incident view lists it; `unknown` shows "Outcome unknown; checking
    provider status. Do not send again." There is no reverse or resend control.
 7. **Polling**: every 5 s while a leg is pending, submitted or unknown, through `latestOnly`; it
-   updates text in place and never moves focus.
+   updates text in place and never moves focus. Leaving the screen ends it: a read or POST
+   answered after unmount applies nothing and schedules nothing.
 
 ## Contract gaps (recorded, not hard-coded)
 
