@@ -152,7 +152,8 @@ export const STATES = {
 
 export const stateOf = (status) => STATES[status] || STATES.unassessed
 
-/** A not-current account from completeness.accounts, with its own reason: a stale one was
+/** A not-current account (completeness.accounts, Lending's capacity.unobserved) with its own
+ * reason: a stale one was
  * observed and carries its as_of; an unknown one was not and carries none. ``text`` reads
  * "lender/venue · ? Unknown" or "lender/operating · ◷ Stale, as of 2026-01-05 12:00 UTC". */
 export function freshness (account) {

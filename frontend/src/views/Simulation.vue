@@ -43,7 +43,11 @@
         <p v-if="forkWhy" id="fork-why" class="lw-live__note" data-test="fork-why">{{ forkWhy }}</p>
         <p v-if="!compareTarget" id="compare-why" class="lw-live__note" data-test="compare-why">{{ compareWhy }}</p>
         <p v-if="forked" class="lw-live__note" role="status" data-test="forked">
-          Fork accepted at round {{ forked.round }}: {{ forked.branch_ids.join(', ') }}
+          Fork accepted at round {{ forked.round }}: {{ forked.branch_ids.join(', ') }} ·
+          {{ forked.done ? 'branches and cash paths loaded' : 'running; its branches appear here when it finishes' }}
+        </p>
+        <p v-if="forked?.lag" class="lw-live__note" role="status" data-test="fork-lag">
+          Fork progress not read: {{ forked.lag }}; still checking
         </p>
         <p v-if="forkError" class="lw-alert" role="alert" data-test="fork-error">{{ forkError }}</p>
       </section>
@@ -57,8 +61,8 @@
 
       <section class="lw-live-panel lw-live__graph" aria-label="Graph and actor inspector" data-test="graph">
         <div class="lw-live__graph-view">
-          <GraphPanel :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
-                      @refresh="reload" @toggle-maximize="graphExpanded = !graphExpanded" />
+          <LiveGraph ref="graphPanel" :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
+                     @refresh="reload" @toggle-maximize="graphExpanded = !graphExpanded" />
         </div>
         <div class="lw-live__inspector" data-test="inspector">
           <h2>Actors up to round {{ display ?? '–' }}</h2>
@@ -106,11 +110,12 @@
  * branch's first cash point plus its `t_hours`, and a cash point matches only at that instant.
  * Pause stops local playback; the job keeps running and keeps being polled. Fork and the
  * read-only interview carry the selected round and need the demo token, which lives in this
- * component's memory only — never storage, the URL, the export or a log. No POST is retried.
+ * component's memory only — never storage, the URL, the export or a log. An accepted fork is
+ * followed until its branches arrive or it fails. No POST is retried.
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import GraphPanel from '../components/GraphPanel.vue'
+import LiveGraph from '../components/LiveGraph.vue'
 import Scrubber from '../components/Scrubber.vue'
 import ActionFeed from '../components/ActionFeed.vue'
 import CashPaths from '../components/CashPaths.vue'
@@ -210,7 +215,8 @@ const graphData = computed(() => {
   if (!current.value) return { nodes: [], edges: [] }
   const r = display.value
   const posts = (body.value.feed ?? []).filter((p) => p.round <= r && p.branch_id === base.value.branch_id)
-  const intents = [...byRound.value].filter(([n]) => n <= r).flatMap(([, v]) => v.intents)
+  const views = [...byRound.value].filter(([n]) => n <= r).map(([, v]) => v)
+  const intents = views.flatMap((v) => v.intents)
   const nodes = new Map()
   const node = (uuid, name, label) => nodes.has(uuid) || nodes.set(uuid, { uuid, name, labels: ['Entity', label] })
   const edges = []
@@ -226,6 +232,7 @@ const graphData = computed(() => {
     node(`actor:${i.actor_id}`, i.actor_id, 'Actor')
     owner.set(i.intent_id, `actor:${i.actor_id}`)
   }
+  for (const [id, actorId] of requestOwners(views)) owner.set(id, `actor:${actorId}`)
   for (const i of intents) {
     for (const e of i.evidence_ids ?? []) {
       const target = owner.get(e)
@@ -238,6 +245,30 @@ const graphData = computed(() => {
   return same({ nodes: [...nodes.values()], edges })
 })
 
+/**
+ * The request messages the shown rounds minted, each to the borrower that asked. The coordinator
+ * turns a `request_advance` that drew on no offer (accepted, no journal) into the message
+ * `req:<actor>:r<round>`, then `-2`, `-3`… for that actor's later ones in the same round, and a
+ * lender cites that id, never the intent. An id no shown intent minted resolves to nothing.
+ */
+function requestOwners (views) {
+  const owners = new Map()
+  const minted = new Map()
+  for (const v of views) {
+    const asked = new Set(v.cleared
+      .filter((c) => c.status === 'accepted' && !c.journal_id)
+      .map((c) => c.intent_id))
+    for (const i of v.intents) {
+      if (i.type !== 'request_advance' || !asked.has(i.intent_id)) continue
+      const base = `req:${i.actor_id}:r${i.round}`
+      const n = (minted.get(base) ?? 0) + 1
+      minted.set(base, n)
+      owners.set(n === 1 ? base : `${base}-${n}`, i.actor_id)
+    }
+  }
+  return owners
+}
+
 // A poll that changes nothing the graph shows hands back the same object, so the graph view
 // keeps its layout, zoom and selection instead of re-rendering every few seconds.
 let shownGraph = { key: '', data: null }
@@ -249,6 +280,12 @@ function same (graph) {
 
 const graphExpanded = ref(false)
 const actor = ref(null)
+
+// A node or edge picked in the graph belongs to the run and round it was picked in: moving the
+// cursor (an unloaded round included) or showing another run closes its details. A poll that
+// moves neither keeps them.
+const graphPanel = ref(null)
+watch([runId, () => body.value?.run_id, display], () => graphPanel.value?.closeDetailPanel())
 
 // ----------------------------------------------------------------------- local playback
 
@@ -287,21 +324,23 @@ function scrub (round) {
 
 // ------------------------------------------------------------- polling a running job
 
-/** A reload someone asked for (or a run or fork changed): shown as loading, never as a poll. */
+/** A reload someone asked for (or the run changed): shown as loading, never as a poll. */
 function reload () {
   polling.value = false
   return refresh()
 }
 
 let poller = null
+/** A quiet re-read; false when a load already in flight meant nothing was read. */
 async function poll () {
-  if (state.status === 'loading') return
+  if (state.status === 'loading') return false
   polling.value = true
   try {
     await refresh()
   } finally {
     polling.value = false
   }
+  return true
 }
 watch(() => phase.value.running, (running) => {
   clearInterval(poller)
@@ -311,6 +350,8 @@ watch(() => phase.value.running, (running) => {
 onBeforeUnmount(() => {
   clearInterval(player)
   clearInterval(poller)
+  forked.value = null // a fork check still in flight finds no fork to follow on
+  clearTimeout(forkTimer)
 })
 
 // --------------------------------------------------------------------- fork, interview
@@ -329,6 +370,7 @@ watch(runId, () => {
   actor.value = null
   forked.value = answer.value = null
   forkError.value = interviewError.value = ''
+  follow()
   pause()
   paused.value = false
   reload()
@@ -340,6 +382,7 @@ const forkWhy = computed(() => {
   if (body.value?.status !== 'done') return 'A fork needs a finished run'
   if (!current.value) return 'Round not loaded: nothing to fork from'
   if (display.value >= HORIZON_ROUNDS) return `Fork before the horizon round ${HORIZON_ROUNDS}`
+  if (forked.value && !forked.value.done) return 'A fork is running: fork again once its branches arrive'
   if (!token.value) return 'Enter the demo token to fork'
   if (forking.value) return 'Submitting the fork'
   return ''
@@ -356,13 +399,67 @@ async function fork () {
       method: 'POST', token: token.value, body: { checkpoint_round: round, policies: POLICIES }
     })
     if (run !== runId.value) return // answered for a run no longer on screen
-    forked.value = { round, branch_ids: accepted?.branch_ids ?? [] }
-    reload() // the new branches and their cash paths
+    forked.value = { round, branch_ids: accepted?.branch_ids ?? [], decided: false, done: false, lag: '', reads: 0 }
+    follow() // the job was only queued: its branches are read once it has decided
   } catch (error) {
     if (run === runId.value) forkError.value = `Fork not accepted: ${error.message}`
   } finally {
     forking.value = false
   }
+}
+
+// An accepted fork is its own job, run after the run is done: the run's status never moves, so
+// the fork is followed on its own. Its decisions are read until they leave `pending` (a failed or
+// lost worker answers 409 fork_failed), then the run until every accepted branch is there from
+// this fork's checkpoint — a re-fork reuses the branch ids — with its cash path. The worker writes
+// the run right after the decisions, so a run that still lacks them after FORK_RUN_READS reads is
+// reported, not polled forever. Only reads repeat; a read that fails otherwise is said and retried.
+const FORK_RUN_READS = 5
+let forkTimer = null
+
+function follow () {
+  clearTimeout(forkTimer)
+  forkTimer = forked.value && !forked.value.done ? setTimeout(checkFork, POLL_MS) : null
+}
+
+function arrived (id, round) {
+  return body.value.branches.some((b) => b.branch_id === id && b.checkpoint_round === round) &&
+    body.value.cash_paths.some((p) => p.branch_id === id)
+}
+
+async function checkFork () {
+  const f = forked.value
+  if (!f) return
+  try {
+    if (!f.decided) {
+      const decided = await request(`/decisions/${encodeURIComponent(runId.value)}`)
+      if (forked.value !== f) return // another fork or run took the screen
+      f.decided = decided.status !== 'pending'
+      f.lag = ''
+    }
+    if (f.decided && await poll()) { // false: a load in flight, so nothing was read this time
+      if (forked.value !== f) return
+      if (!currentRun.value) {
+        f.lag = state.error?.message ?? 'the run was not re-read'
+      } else {
+        f.lag = ''
+        f.done = f.branch_ids.every((id) => arrived(id, f.round))
+        if (!f.done && ++f.reads >= FORK_RUN_READS) {
+          forked.value = null
+          forkError.value = 'Fork decided, but its branches have not reached the run: Refresh, or fork again'
+        }
+      }
+    }
+  } catch (error) {
+    if (forked.value !== f) return
+    if (error.code === 'fork_failed') {
+      forked.value = null
+      forkError.value = `Fork failed: ${error.message}`
+    } else {
+      f.lag = error.message
+    }
+  }
+  follow()
 }
 
 const interviewWhy = computed(() => {
@@ -406,11 +503,37 @@ const compareWhy = computed(() => (phase.value.invalid
   : 'The decisions screen is not part of this build'))
 
 const exportName = computed(() => `${runId.value}-${base.value.branch_id}-round-${display.value}.json`)
+const provenance = (replay) => (replay === true ? LABELS.replay : replay === false ? 'Fresh run' : 'Provenance not loaded')
+
+// Each exported cash row keeps its own branch's replay provenance; the document's label covers
+// every branch in it (mixed when they differ) and `round_label` covers the base branch's round.
 const exportHref = computed(() => {
   if (!current.value) return null
   const b = shellReading.value.body
+  const meta = new Map((b.branches ?? []).map((x) => [x.branch_id, x]))
+  const replayOf = (id) => {
+    const replay = meta.get(id)?.replay
+    return typeof replay === 'boolean' ? replay : null
+  }
+  const cash = (b.cash_paths ?? []).map((p) => {
+    const branch = meta.get(p.branch_id)
+    const replay = replayOf(p.branch_id)
+    return {
+      branch_id: p.branch_id,
+      parent_branch_id: branch?.parent_branch_id ?? null,
+      checkpoint_round: branch?.checkpoint_round ?? null,
+      policy: branch?.policy ?? null,
+      replay,
+      label: provenance(replay),
+      account_id: p.account_id,
+      value: p.points.find((x) => Date.parse(x.t) === roundAt.value)?.value ?? null
+    }
+  })
+  const roundLabel = provenance(replayOf(base.value.branch_id))
+  const labels = [...new Set([roundLabel, ...cash.map((c) => c.label)])]
   const doc = {
-    label: base.value.replay ? LABELS.replay : 'Fresh run',
+    label: labels.length === 1 ? labels[0] : `Mixed: ${labels.join(' + ')}`,
+    round_label: roundLabel,
     source: sourceLabel(b),
     mode: LABELS[b.mode] || b.mode,
     as_of: b.as_of,
@@ -422,11 +545,7 @@ const exportHref = computed(() => {
     intents: current.value.intents,
     cleared: current.value.cleared,
     journal_ids: current.value.journal_ids,
-    cash: (b.cash_paths ?? []).map((p) => ({
-      branch_id: p.branch_id,
-      account_id: p.account_id,
-      value: p.points.find((x) => Date.parse(x.t) === roundAt.value)?.value ?? null
-    }))
+    cash
   }
   return `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(doc, null, 2))}`
 })
