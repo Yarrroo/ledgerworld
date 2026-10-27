@@ -15,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from app.simulation import interview
 from app.simulation.interview import Interview, ReadOnlyViolation
 from app.simulation.memory import BranchMemory, NamespaceViolation, namespace_for
 from app.simulation.transcripts import Transcript
@@ -83,13 +84,14 @@ def prompt(model) -> str:
 
 
 def run_interviewed(tmp_path, check):
-    """Two committed rounds of treasury and borrower-c, their graph memory, then ``check``."""
+    """Two committed rounds of treasury and borrower-c (payroll is a rule actor), their graph
+    memory, then ``check``."""
 
     plan = ScriptedPlan(PLAN)
     scenario = [{"round": 9, "kind": "message", "id": "msg-future", "to": "treasury",
                  "text": FUTURE}]
     world = World(WORLD, BRANCH, snapshot(),
-                  [ACTOR_SPECS["treasury"], ACTOR_SPECS["borrower-c"]],
+                  [ACTOR_SPECS["treasury"], ACTOR_SPECS["borrower-c"], ACTOR_SPECS["payroll"]],
                   model=lambda actor_id, w: plan.model(actor_id, lambda: w.clock.round),
                   workdir=tmp_path, scenario=scenario)
     store = GraphMemoryStore()
@@ -152,7 +154,7 @@ def test_an_interview_never_sees_a_future_event(tmp_path):
 
 
 def test_an_interview_offers_no_tool_and_submits_no_intent(tmp_path):
-    acting = SimpleNamespace(run=lambda messages: SimpleNamespace(choices=[SimpleNamespace(
+    acting = SimpleNamespace(run=lambda messages, tools: SimpleNamespace(choices=[SimpleNamespace(
         message=SimpleNamespace(content=None, tool_calls=[
             SimpleNamespace(function=SimpleNamespace(name="request_advance"))]))]))
 
@@ -175,6 +177,43 @@ def test_an_interview_offers_no_tool_and_submits_no_intent(tmp_path):
     assert not any(isinstance(v, (BranchMemory, Transcript, World)) for v in held)
 
 
+def test_an_interview_offers_no_tool_even_to_a_backend_configured_with_tools(tmp_path):
+    def check(world, memory, _store):
+        model = interview_model([{"actor_id": "treasury", "round": 2, "content": "no"}],
+                                "treasury", 2)
+        model.model_config_dict["tools"] = [  # a backend whose default request carries a tool
+            {"type": "function", "function": {"name": "request_advance", "parameters": {}}}]
+        Interview.from_world(world, memory, "treasury").ask(model, "Draw now?")
+        return model
+
+    (call,) = run_interviewed(tmp_path, check).calls
+    assert call.tools == ()
+
+
+def test_an_interview_cannot_be_asked_past_the_committed_round(tmp_path):
+    def check(world, memory, _store):
+        with pytest.raises(ValueError, match="round 3"):
+            Interview.open(memory, world.transcript, "treasury", as_of_round=3)
+        with pytest.raises(ValueError, match="round 3"):
+            Interview.from_world(world, memory, "treasury", as_of_round=3)
+        return Interview.from_world(world, memory, "treasury", as_of_round=1)
+
+    assert run_interviewed(tmp_path, check).as_of_round == 1
+
+
+def test_the_context_hash_covers_everything_the_model_was_shown(tmp_path, monkeypatch):
+    def check(world, memory, _store):
+        session = Interview.from_world(world, memory, "treasury")
+        entry = [{"actor_id": "treasury", "round": 2, "content": "fine"}]
+        first = session.ask(interview_model(entry, "treasury", 2), "How are you?")
+        monkeypatch.setattr(interview, "SYSTEM_PROMPT", interview.SYSTEM_PROMPT + " Be brief.")
+        second = session.ask(interview_model(entry, "treasury", 2), "How are you?")
+        return first, second
+
+    first, second = run_interviewed(tmp_path, check)
+    assert first.context_hash != second.context_hash
+
+
 def test_an_interview_leaves_the_world_state_hash_unchanged(tmp_path):
     def check(world, memory, store):
         before = state_of(world, memory, store)
@@ -194,6 +233,8 @@ def test_an_interview_reads_only_its_own_branch(tmp_path):
             Interview.from_world(world, sibling, "treasury")
         with pytest.raises(LookupError):
             Interview.from_world(world, _memory, "lender")
+        with pytest.raises(LookupError, match="no model"):  # a rule actor has no answers
+            Interview.from_world(world, _memory, "payroll")
         return True
 
     assert run_interviewed(tmp_path, check)

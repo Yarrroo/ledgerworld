@@ -2,14 +2,17 @@
 
 ``Interview.open`` copies, once, what one actor of one branch remembers (its records in the
 branch's ``BranchMemory``) and what it answered (its calls in the branch's ``Transcript``), each up
-to and including ``as_of_round``, into frozen tuples. The session keeps no reference to the
+to and including ``as_of_round``, into frozen tuples; ``as_of_round`` may not pass the last round
+the transcript recorded. The session keeps no reference to the
 memory, the transcript, the world, the ledger or the intent queue, so it has nothing to write
 through: asking a question changes no state anywhere. Another actor's records and calls and
 anything after ``as_of_round`` are never copied, so the model cannot be shown them.
 
-``ask`` puts the question to a model with no tool offered. An answer that carries a tool call is
-refused with ``ReadOnlyViolation``; an interview never becomes an intent. ``Interview.from_world``
-interviews a world's actor as of its last committed round, from the world's own transcript.
+``ask`` puts the question to a model with no tool offered, whatever tools the backend carries by
+default. An answer that carries a tool call is refused with ``ReadOnlyViolation``; an interview
+never becomes an intent. ``Interview.from_world`` interviews a world's model actor as of its last
+committed round (or an earlier one), from the world's own transcript; a rule actor has no answers
+to be interviewed on and is refused.
 """
 
 from __future__ import annotations
@@ -69,22 +72,34 @@ class Interview:
             raise ValueError(f"an interview names its actor, got {actor_id!r}")
         if not isinstance(as_of_round, int) or isinstance(as_of_round, bool) or as_of_round < 0:
             raise ValueError(f"as_of_round must be a non-negative integer, got {as_of_round!r}")
+        calls = transcript.calls()
+        last = calls[-1].round if calls else 0
+        if as_of_round > last:
+            raise ValueError(f"round {as_of_round} is past the last recorded round {last}")
         return cls(
             actor_id,
             memory.namespace,
             as_of_round,
             tuple(r for r in memory.retrieve(actor_id=actor_id) if r.round <= as_of_round),
-            tuple(c for c in transcript.calls()
-                  if c.actor_id == actor_id and c.round <= as_of_round),
+            tuple(c for c in calls if c.actor_id == actor_id and c.round <= as_of_round),
         )
 
     @classmethod
-    def from_world(cls, world: Any, memory: BranchMemory, actor_id: str) -> Interview:
-        """A world's actor, as of the world's last committed round."""
+    def from_world(
+        cls, world: Any, memory: BranchMemory, actor_id: str, *, as_of_round: int | None = None
+    ) -> Interview:
+        """A world's model actor, as of its last committed round unless an earlier one is named."""
 
         if actor_id not in world.actors:
             raise LookupError(f"{world.world_id}/{world.branch_id} has no actor {actor_id}")
-        return cls.open(memory, world.transcript, actor_id, as_of_round=world.committed_round)
+        if actor_id not in world.agents:
+            raise LookupError(f"{actor_id} is a rule actor: no model answered for it")
+        committed = world.committed_round
+        if as_of_round is None:
+            as_of_round = committed
+        elif isinstance(as_of_round, int) and as_of_round > committed:
+            raise ValueError(f"round {as_of_round} is past the committed round {committed}")
+        return cls.open(memory, world.transcript, actor_id, as_of_round=as_of_round)
 
     def context(self) -> dict[str, Any]:
         """Everything the model is shown besides the question."""
@@ -105,12 +120,16 @@ class Interview:
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
     def ask(self, model: Any, question: str) -> InterviewAnswer:
-        """Put ``question`` to ``model`` (a camel model backend) with no tool offered."""
+        """Put ``question`` to ``model`` (a camel model backend) with no tool offered.
+
+        ``model`` is the interview's own backend, never the one the actor runs on in its world:
+        a scripted model spends a plan entry on every answer.
+        """
 
         if not isinstance(question, str) or not question.strip():
             raise ValueError("an interview question is non-empty text")
         messages = self.messages(question)
-        message = model.run(messages).choices[0].message
+        message = model.run(messages, tools=[]).choices[0].message  # [] is no tools, None default
         if message.tool_calls:
             names = [c.function.name for c in message.tool_calls]
             raise ReadOnlyViolation(f"{self.actor_id} tried to call {names} in an interview")
@@ -118,5 +137,5 @@ class Interview:
             raise TypeError(f"{self.actor_id} gave no text answer")
         return InterviewAnswer(
             self.actor_id, self.namespace, self.as_of_round, question, message.content,
-            hashlib.sha256(messages[1]["content"].encode()).hexdigest(),
+            hashlib.sha256(canonical(messages).encode()).hexdigest(),
         )

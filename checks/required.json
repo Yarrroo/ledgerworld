@@ -226,6 +226,9 @@
       "tests/simulation/test_interview.py::test_an_interview_sees_only_the_actors_own_history",
       "tests/simulation/test_interview.py::test_an_interview_never_sees_a_future_event",
       "tests/simulation/test_interview.py::test_an_interview_offers_no_tool_and_submits_no_intent",
+      "tests/simulation/test_interview.py::test_an_interview_offers_no_tool_even_to_a_backend_configured_with_tools",
+      "tests/simulation/test_interview.py::test_an_interview_cannot_be_asked_past_the_committed_round",
+      "tests/simulation/test_interview.py::test_the_context_hash_covers_everything_the_model_was_shown",
       "tests/simulation/test_interview.py::test_an_interview_leaves_the_world_state_hash_unchanged",
       "tests/simulation/test_interview.py::test_an_interview_reads_only_its_own_branch"
     ]}
