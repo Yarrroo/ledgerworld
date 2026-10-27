@@ -4,12 +4,13 @@
 //
 // C6 RunResponse carries cash paths, not a per-round lender capacity: the fixture's K_p is
 // projected onto a lender-account cash path, which is how the screen shows any account's path.
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { defineComponent, h, watch } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import Simulation from '../../src/views/Simulation.vue'
+import i18n from '../../src/i18n/index.js'
 
 import scrubber from '../../../prp/2026-10-20-ledgerworld/design/modules/ui/fixtures/scrubber.json'
 
@@ -35,28 +36,35 @@ const GraphStub = defineComponent({
   }
 })
 
-/** An intent of the fixture's chain: each cites the step before it (post → request → disbursal). */
-function intent (id, round, actor, evidence) {
+/** An intent of the fixture's chain, citing what its actor saw (a post, then a request). */
+function intent (id, round, actor, evidence, type = actor === 'lender' ? 'disburse' : 'request_advance') {
   return {
-    intent_id: id, branch_id: ctx.branch_id, round, actor_id: actor,
-    type: actor === 'lender' ? 'disburse' : 'request_advance',
+    intent_id: id, branch_id: ctx.branch_id, round, actor_id: actor, type,
     params: { amount: { minor: 1200000, currency: 'USD' } },
     evidence_ids: evidence, obs_hash: '0'.repeat(64)
   }
 }
 
+// The chain as the coordinator clears it (agent-world coupled-chain.json): borrower-c's request
+// posts no journal and becomes the message req:borrower-c:r4; the lender cites that request id,
+// accepts it and disburses against it (one journal).
+const CHAIN = {
+  'i-r4-borrower-c-1': { evidence: ['p-r3-1'], journal: false },
+  'i-r5-lender-1': { evidence: ['req:borrower-c:r4'], type: 'accept', journal: false },
+  'i-r5-lender-2': { evidence: ['req:borrower-c:r4'], type: 'disburse', journal: true }
+}
+
 /** A C6 RunResponse holding exactly the fixture's rounds: round 1 and 2 were not returned. */
 function run (change = {}) {
   const c = { ...ctx, ...change }
-  const previous = new Map()
   const rounds = scrubber.rounds.map((r) => {
     const intents = r.feed_ids.filter((id) => id.startsWith('i-'))
-      .map((id) => intent(id, r.round, r.highlight_actor, previous.get(r.round - 1) ?? []))
-    previous.set(r.round, [...r.feed_ids])
+      .map((id) => intent(id, r.round, r.highlight_actor, CHAIN[id].evidence, CHAIN[id].type))
+    const journal = (i) => (CHAIN[i.intent_id].journal ? `j-${i.intent_id}` : null)
     return {
       round: r.round, branch_id: c.branch_id, t_hours: r.t_h, intents,
-      cleared: intents.map((i) => ({ intent_id: i.intent_id, status: 'accepted', journal_id: `j-${i.intent_id}`, round: r.round })),
-      journal_ids: intents.map((i) => `j-${i.intent_id}`)
+      cleared: intents.map((i) => ({ intent_id: i.intent_id, status: 'accepted', journal_id: journal(i), round: r.round })),
+      journal_ids: intents.map(journal).filter(Boolean)
     }
   })
   const feed = scrubber.rounds.flatMap((r) => r.feed_ids.filter((id) => id.startsWith('p-')).map((id) => ({
@@ -110,7 +118,7 @@ function held () {
   return { promise, resolve }
 }
 
-async function open (body, posts) {
+async function open (body, posts, { realGraph = false } = {}) {
   const calls = serve(body, posts)
   const r = createRouter({
     history: createMemoryHistory(),
@@ -122,7 +130,8 @@ async function open (body, posts) {
   })
   await r.push(`/simulation?run_id=${ctx.run_id}`)
   await r.isReady()
-  const wrapper = mount(Simulation, { attachTo: document.body, global: { plugins: [r], stubs: { GraphPanel: GraphStub } } })
+  const global = realGraph ? { plugins: [r, i18n] } : { plugins: [r], stubs: { GraphPanel: GraphStub } }
+  const wrapper = mount(Simulation, { attachTo: document.body, global })
   await flushPromises()
   mounted.push(wrapper)
   return { wrapper, calls, router: r }
@@ -167,6 +176,28 @@ describe('scrubber fixture', () => {
     expect(text(w, 'cash-value')).toBe('USD 30,000.00')
     expect(feedIds(w)).toEqual(scrubber.rounds[2].feed_ids)
     expect(text(w, 'inspector')).toContain('lender · acted this round')
+  })
+
+  it('the graph links the lender to borrower-c through the request id it cites', async () => {
+    const { wrapper: w } = await open(run())
+    const links = (g) => g.edges.filter((e) => e.fact.endsWith('cites req:borrower-c:r4'))
+      .map((e) => [e.name, e.source_node_uuid, e.target_node_uuid])
+    expect(links(graphs[graphs.length - 1])).toEqual([
+      ['ACCEPT', 'actor:lender', 'actor:borrower-c'],
+      ['DISBURSE', 'actor:lender', 'actor:borrower-c']
+    ])
+    await scrubTo(w, 4) // the lender has not cited the request yet
+    expect(links(graphs[graphs.length - 1])).toEqual([])
+  })
+
+  it('a request id draws no link unless a shown request_advance minted it', async () => {
+    const body = run()
+    const r4 = body.rounds.find((r) => r.round === 4)
+    r4.cleared[0].journal_id = 'j-drawn' // drawn on an offer: no request message was minted
+    const lender = body.rounds.find((r) => r.round === 5).intents[0]
+    lender.evidence_ids = ['req:borrower-c:r4', 'req:borrower-c:r4-2', 'req:lender:r4']
+    await open(body)
+    expect(graphs[graphs.length - 1].edges.filter((e) => e.fact.includes('cites req:'))).toEqual([])
   })
 
   it('pause: playback stops locally and no request asks the server to stop', async () => {
@@ -395,6 +426,45 @@ describe('review findings, each pinned', () => {
     expect(text(w, 'cursor')).toBe('Round 2 of 5 · simulated time not loaded')
   })
 
+  it('an export of a fresh base with a replayed child keeps each branch\'s provenance', async () => {
+    const body = run()
+    const child = 'b-child-replayed'
+    body.branches.push({ branch_id: child, parent_branch_id: ctx.branch_id, checkpoint_round: 4,
+      policy: 'integrated', replay: true })
+    body.cash_paths.push({ ...clone(body.cash_paths[0]), branch_id: child })
+    const { wrapper: w } = await open(body)
+    const exported = JSON.parse(decodeURIComponent(w.get('[data-test="export"]').attributes('href').split(',').slice(1).join(',')))
+    expect(exported.label).not.toBe('Fresh run') // the cash mixes fresh and replayed branches
+    expect(exported.label).toContain('Replay')
+    expect(exported.round_label).toBe('Fresh run') // posts and intents are the fresh base's
+    const cash = new Map(exported.cash.map((c) => [c.branch_id, c]))
+    expect(cash.get(ctx.branch_id)).toMatchObject({ replay: false, label: 'Fresh run', parent_branch_id: null })
+    expect(cash.get(child)).toMatchObject({ replay: true, label: 'Replay', parent_branch_id: ctx.branch_id,
+      checkpoint_round: 4, policy: 'integrated' })
+  })
+
+  it('an export whose every branch was replayed is labelled Replay, not mixed', async () => {
+    const body = run({ replay: true })
+    body.branches.push({ branch_id: 'b-child', parent_branch_id: ctx.branch_id, checkpoint_round: 4,
+      policy: 'no-action', replay: true })
+    body.cash_paths.push({ ...clone(body.cash_paths[0]), branch_id: 'b-child' })
+    const { wrapper: w } = await open(body)
+    const exported = JSON.parse(decodeURIComponent(w.get('[data-test="export"]').attributes('href').split(',').slice(1).join(',')))
+    expect(exported.label).toBe('Replay')
+    expect(exported.round_label).toBe('Replay')
+    expect(exported.cash.every((c) => c.replay === true)).toBe(true)
+  })
+
+  it('an export whose base branch carries no replay flag never claims a fresh run', async () => {
+    const body = run()
+    delete body.branches[0].replay
+    const { wrapper: w } = await open(body)
+    const exported = JSON.parse(decodeURIComponent(w.get('[data-test="export"]').attributes('href').split(',').slice(1).join(',')))
+    expect(exported.round_label).toBe('Provenance not loaded')
+    expect(exported.label).toBe('Provenance not loaded')
+    expect(exported.cash[0]).toMatchObject({ replay: null, label: 'Provenance not loaded' })
+  })
+
   it('a reload asked for while a poll is in flight shows as loading, not as a quiet poll', async () => {
     vi.useFakeTimers()
     const body = run()
@@ -570,5 +640,23 @@ describe('an accepted fork is followed until its branches arrive or it fails', (
     await flushPromises()
     await vi.advanceTimersByTimeAsync(20000)
     expect(of(calls, `/decisions/${ctx.run_id}`)).toHaveLength(0)
+  })
+})
+
+describe('the real graph view', () => {
+  // happy-dom lays out no text: the edge labels' boxes are the one geometry the graph asks for.
+  const circles = (w) => w.findAll('[data-test="graph"] svg.graph-svg circle').length
+
+  it('draws a completed run on first load, with no scrub or resize, and keeps it after an unchanged refresh', async () => {
+    const had = 'getBBox' in SVGElement.prototype
+    if (!had) SVGElement.prototype.getBBox = () => ({ x: 0, y: 0, width: 40, height: 12 })
+    onTestFinished(() => { if (!had) delete SVGElement.prototype.getBBox })
+    const { wrapper: w, calls } = await open(run(), undefined, { realGraph: true })
+    const drawn = circles(w)
+    expect(drawn).toBeGreaterThan(0)
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(calls.filter((c) => c.method === 'GET').length).toBe(2)
+    expect(circles(w)).toBe(drawn)
   })
 })

@@ -5,8 +5,9 @@
       reserve floor. Each figure comes from the API; open a tile to see its inputs.
     </p>
     <p v-if="body.completeness.status === 'partial'" class="lw-note" data-test="partial">
-      Partial: not observed — {{ body.completeness.missing.join(', ') }}. Figures that depend on
-      them read Unknown, not zero.
+      Partial: not current — {{ notCurrent }}.
+      A stale account was observed and keeps its last value, and the figures that include it
+      say Stale; an unknown one has no value. Lender capacity counts known balances only.
     </p>
 
     <section class="lw-strip" aria-label="Answer">
@@ -108,8 +109,8 @@
 import { computed } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import {
-  STATES, ScreenShell, floorState, formatTime, getOverview, hoursFrom, metricText, money,
-  routeExists, stateOf, useReading
+  STATES, ScreenShell, floorState, formatTime, freshness, getOverview, hoursFrom, metricText,
+  money, routeExists, stateOf, useReading
 } from '../api/v1.js'
 
 const router = useRouter()
@@ -118,6 +119,8 @@ const { state, refresh } = useReading(() => getOverview())
 const next = computed(() => state.body?.upcoming_outflows[0] ?? null)
 const due = computed(() => formatTime(next.value?.due_at))
 const floor = computed(() => floorState(state.body?.coverage.headroom))
+const notCurrent = computed(() =>
+  state.body?.completeness.accounts.map((a) => freshness(a).text).join('; '))
 
 const runId = computed(() => state.body?.demo.run_id ?? null)
 const simulationTarget = computed(() => {

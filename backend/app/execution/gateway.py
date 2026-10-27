@@ -23,6 +23,10 @@ id; the client has no deposit list or GET, so an unknown deposit stays unknown f
 
 from __future__ import annotations
 
+from app.execution.boundary import require_execution
+
+require_execution()
+
 from collections import defaultdict
 from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import contextmanager
