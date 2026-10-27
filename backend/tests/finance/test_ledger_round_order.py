@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from app.finance import contracts
 from app.finance.ledger import check_outflow, from_snapshot, pay, settle_due
-from app.finance.lending import capacity, disburse
+from app.finance.lending import capacity, disburse, observe_revenue, repay
 from app.finance.models import Journal, LedgerRefusal, Posting
 from app.finance.schemas import RevenueAdvance
 from app.finance.store import LedgerStore
@@ -80,19 +80,39 @@ def test_a_refused_payment_lands_no_arrival():
     assert store.dump() == before  # the arrival is left for step 8, still pending
 
 
-def test_an_advance_funded_by_an_arrival_due_now_disburses():
-    """K_p sums the pool's cash; the source account's S counts its arrival due now."""
+def lender_world() -> LedgerStore:
+    """LF-2 from its snapshot, an offered 30k advance to borrower-a, and a second pool account."""
     store = LedgerStore("sqlite://")
     lf2 = json.loads((ROOT / "fixtures/lf2_lender.json").read_text(encoding="utf-8"))
     from_snapshot(store, lf2["snapshot"])
     store.open_account("borrower-a/operating", "borrower-a", "USD", as_of=T0)
     store.open_account("lender/collections", "lender", "USD", as_of=T0)
-    store.expect("lender/collections", "in", 3000000, T0, kind="receivable")
     contracts.register(store, RevenueAdvance(
         contract_id="adv-30k", kind="revenue_advance", lender="lender", borrower="borrower-a",
         state="offered", principal={"minor": 3000000, "currency": "USD"}, fee_bps=800,
         repay_share_bps=1500), as_of=T0)
+    return store
+
+
+def test_an_advance_funded_by_an_arrival_due_now_disburses():
+    """K_p sums the pool's cash; the source account's S counts its arrival due now."""
+    store = lender_world()
+    store.expect("lender/collections", "in", 3000000, T0, kind="receivable")
     assert capacity(store, "lender", T0).K_p >= 3000000
     disburse(store, "adv-30k", now=T0, from_account="lender/collections")
     assert store.view("lender/collections").settled_minor == 0
     assert store.view("borrower-a/operating").settled_minor == 3000000
+
+
+def test_a_repayment_funded_by_an_arrival_due_now_posts():
+    store = lender_world()
+    disburse(store, "adv-30k", now=T0)
+    pay(store, "borrower-a/operating", 3000000, to_account=store.external_account("USD"), now=T0,
+        journal_id="spent")
+    end = T0 + timedelta(days=7)
+    store.observe("borrower-a/operating", "known", end)
+    store.expect("borrower-a/operating", "in", 150000, end, kind="receivable")
+    observe_revenue(store, "adv-30k", end, 1000000, observed_at=end, source="sales ledger")
+    paid = repay(store, "adv-30k", end, now=end)
+    assert paid.amount_minor == 150000
+    assert store.view("borrower-a/operating").settled_minor == 0

@@ -156,7 +156,9 @@ def _lock_cash(store: LedgerStore, c: Connection, currency: str,
 def _payable_from(store: LedgerStore, c: Connection, account_id: str, amount: int,
                   now: datetime) -> None:
     """A contractual payment (a line draw, a repayment) needs a known, fresh balance that covers
-    it in S(now); the reserve floor does not apply, since the payment is owed, not chosen."""
+    it in S(now); the reserve floor does not apply, since the payment is owed, not chosen.
+    S(now) counts arrivals due by `now`, so the caller lands them (`land_arrivals`) before it
+    posts."""
     view = store.view(account_id, conn=c)
     state = state_of(view, now)
     if state == "unknown":
@@ -245,6 +247,7 @@ def draw_line(store: LedgerStore, facility_id: str, amount_minor: int, *, now: d
         if held is not None:
             store.release(held.reservation_id, conn=c)
         _payable_from(store, c, source, amount, now)  # the released hold is free again
+        land_arrivals(store, source, now, round=round, conn=c)
         payable = f"{f.borrower}/line-payable:{f.facility_id}"
         ensure_account(store, payable, f.borrower, f.currency, "payable", c)
         journal = store.apply(Journal(
@@ -330,6 +333,7 @@ def repay(store: LedgerStore, facility_id: str, period_end: datetime, *, now: da
         payee = to_account or f"{f.pool}/operating"
         _lock_cash(store, c, f.currency, (payer, f.borrower), (payee, f.pool))
         _payable_from(store, c, payer, amount, now)
+        land_arrivals(store, payer, now, round=round, conn=c)
         journal = store.apply(Journal(
             journal_id=journal_id, kind="advance_repayment", round=round, sim_time=now,
             source_intent_id=source_intent_id, source_leg_id=source_leg_id, mode=mode,
