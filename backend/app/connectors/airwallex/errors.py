@@ -66,7 +66,10 @@ class DuplicateRequest(AirwallexError):
 class OutcomeUnknown(AirwallexError):
     """The request may have moved money; find it by `request_id` before anything else."""
 
-    def __init__(self, request_id: str | None, reason: str) -> None:
+    def __init__(self, request_id: str | None, reason: str, *, provider_id: str | None = None):
         self.request_id = request_id
         self.reason = reason
-        super().__init__(f"outcome unknown for request_id {request_id}: {reason}")
+        self.provider_id = provider_id  # the object a call without a request_id was about
+        about = f"provider id {provider_id}" if request_id is None and provider_id else (
+            f"request_id {request_id}")
+        super().__init__(f"outcome unknown for {about}: {reason}")

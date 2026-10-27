@@ -8,8 +8,9 @@ typed results or raises the typed errors of `errors.py`:
 - a 429 → retried here with the same `request_id`, exponential backoff with jitter, at most 3
   attempts; a GET that times out or fails with a 5xx is retried the same way (it moves nothing);
 - a 401 → one re-login, then the same request once; a second 401 → `ProviderError(auth_fail)`;
-- a replayed `request_id` (`duplicate_request_id`, `request_id_duplicate`, 409) →
-  `DuplicateRequest`; the caller finds the original with `find_transfer`/`find_conversion`.
+- a replayed `request_id` (`duplicate_request_id`, `request_id_duplicate`, 409, or the
+  conversions' `400 invalid_argument` "request_id '…' has been used") → `DuplicateRequest`; the
+  caller finds the original with `find_transfer`/`find_conversion`.
 
 The bearer token is cached until 60 s before its 30-minute lifetime ends. No message, log line or
 exception built here carries the key, the client id or the token.
@@ -20,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -43,6 +45,9 @@ RENEW_BEFORE_S = 60
 MAX_ATTEMPTS = 3
 BACKOFF_BASE_S = 0.5
 DUPLICATE_CODES = frozenset({"duplicate_request_id", "request_id_duplicate"})
+# The conversions endpoint refuses a replay as `400 invalid_argument` with this message
+# (sandbox, api_version 2024-09-27): "request_id '<id>' has been used in the past. ...".
+USED_REQUEST_ID = re.compile(r"\brequest_id\b.*\bhas been used\b", re.IGNORECASE | re.DOTALL)
 # A quote is refused without its validity (`field_required`); the conversion follows at once.
 QUOTE_VALIDITY = "MIN_15"
 # `reason` and `reference` are required on a payout; the reason is one of the provider's own.
@@ -318,7 +323,7 @@ class AirwallexClient:
                 continue
             if request_id is not None and status == 409:
                 raise DuplicateRequest(request_id, in_flight=True, code=code)
-            if request_id is not None and code in DUPLICATE_CODES:
+            if request_id is not None and _replayed(status, code, envelope):
                 raise DuplicateRequest(request_id, in_flight=False, code=code)
             if status >= 500 and method != "GET":
                 raise OutcomeUnknown(request_id, f"http {status}")
@@ -368,6 +373,15 @@ class AirwallexClient:
 
     def global_accounts(self) -> list[dict]:
         return self._items(self._request("GET", "/api/v1/global_accounts"))
+
+    def global_account_in(self, currency: str) -> str | None:
+        """The id of the first Global Account that takes `currency` (`account_currencies`)."""
+        for account in self.global_accounts():
+            if isinstance(account, dict) and currency in account_currencies(account):
+                account_id = account.get("id")
+                if isinstance(account_id, str) and account_id:
+                    return account_id
+        return None
 
     def probe_connected(self, setting: ConnectedSetting | None = None) -> LegMode:
         """Mode A only when the connected-accounts list answers 200 with an `ACTIVE` account;
@@ -484,12 +498,38 @@ class AirwallexClient:
     def simulate_transition(
         self, transfer_id: str, next_status: str, *, failure_type: str | None = None
     ) -> ProviderObject:
-        """Sandbox only: move a transfer to its next status (`PAID`, or `FAILED`)."""
+        """Sandbox only: move a transfer to its next status (`PAID`, or `FAILED`).
+
+        The sandbox moves a payout on by itself (it reads back `PROCESSING` straight after the
+        create) and answered a transition with a 500. So a transition that is refused or left
+        unknown is read back, and a transfer already at `next_status` is the answer. A refusal
+        otherwise stands. An unknown one whose transfer did not move is sent again (it is keyed
+        on the transfer and creates nothing), at most `MAX_ATTEMPTS` times, then raises
+        `OutcomeUnknown` naming the transfer and the status it holds."""
         body = {"next_status": next_status}
         if failure_type is not None:
             body["failure_type"] = failure_type
         path = f"/api/v1/simulation/transfers/{urlquote(transfer_id, safe='')}/transition"
-        return ProviderObject.parse("transfer", self._request("POST", path, body))
+        before: str | None = None
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                return ProviderObject.parse("transfer", self._request("POST", path, body))
+            except ProviderError:
+                now = self.get_transfer(transfer_id)
+                if now.status == next_status:
+                    return now
+                raise
+            except OutcomeUnknown as unknown:
+                now = self.get_transfer(transfer_id)
+                if now.status == next_status:
+                    return now
+                if attempt == MAX_ATTEMPTS or before not in (None, now.status):
+                    raise OutcomeUnknown(
+                        None, f"transition to {next_status}: {unknown.reason}, transfer at "
+                        f"{now.status}", provider_id=transfer_id) from None
+                before = now.status
+                self._backoff(attempt)
+        raise AssertionError("unreachable")
 
     def _create(
         self,
@@ -517,6 +557,32 @@ def active_account(answer: Any) -> str | None:
             if isinstance(account, str) and account:
                 return account
     return None
+
+
+def account_currencies(account: Mapping[str, Any]) -> list[str]:
+    """The currencies a Global Account takes, its own first: `currency` when it carries one (as
+    the sandbox did before 2024-09-27), then `required_features[].currency`, then
+    `supported_features[].currency` (the 2024-09-27 shape, which has no `currency` key)."""
+    found: list[str] = []
+    own = account.get("currency")
+    candidates = [own] if isinstance(own, str) else []
+    for key in ("required_features", "supported_features"):
+        features = account.get(key)
+        for feature in features if isinstance(features, list) else []:
+            if isinstance(feature, dict):
+                candidates.append(feature.get("currency"))
+    for currency in candidates:
+        if isinstance(currency, str) and currency and currency not in found:
+            found.append(currency)
+    return found
+
+
+def _replayed(status: int, code: str | None, envelope: Mapping[str, Any]) -> bool:
+    """A refusal that says the `request_id` was used before, in any of the provider's spellings."""
+    if code in DUPLICATE_CODES:
+        return True
+    message = _text(envelope, "message") or ""
+    return status == 400 and code == "invalid_argument" and bool(USED_REQUEST_ID.search(message))
 
 
 def _text(envelope: Mapping[str, Any], key: str) -> str | None:

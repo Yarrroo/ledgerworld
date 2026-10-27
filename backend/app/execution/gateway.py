@@ -237,10 +237,9 @@ class ConnectorProvider:
     def _global_account(self, currency: str) -> str:
         if self.global_account_id:
             return self.global_account_id
-        for account in self.client.global_accounts():
-            if isinstance(account, dict) and account.get("currency") == currency:
-                self.global_account_id = account["id"]
-                return account["id"]
+        if found := self.client.global_account_in(currency):
+            self.global_account_id = found
+            return found
         raise ob.Rejected(f"no Global Account in {currency} for the Mode B advance")
 
 

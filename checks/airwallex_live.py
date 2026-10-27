@@ -40,6 +40,7 @@ from typing import Any
 from app.connectors.airwallex.client import (
     LOGIN_PATH,
     AirwallexClient,
+    account_currencies,
     active_account,
     client_from_env,
     connected_setting,
@@ -270,7 +271,7 @@ class ContractPass:
     def global_accounts(self) -> tuple[bool, str | None, str]:
         accounts = self.client.global_accounts()
         self._observe()
-        wanted = [a for a in accounts if isinstance(a, dict) and a.get("currency") == "USD"
+        wanted = [a for a in accounts if isinstance(a, dict) and "USD" in account_currencies(a)
                   and self.global_account_id in (None, a.get("id"))]
         if not wanted:
             return False, None, f"no USD global account among {len(accounts)}"
@@ -344,8 +345,16 @@ class ContractPass:
 
     def payout_to_paid(self) -> tuple[bool, str | None, str]:
         transfer = self._need("transfer")
-        for status in TO_PAID:
-            self.client.simulate_transition(transfer.provider_id, status)
+        # The sandbox moves a payout on by itself: only the steps it has not taken are asked.
+        now = self.client.get_transfer(transfer.provider_id).status
+        steps = TO_PAID[TO_PAID.index(now) + 1:] if now in TO_PAID else TO_PAID
+        try:
+            for status in steps:
+                self.client.simulate_transition(transfer.provider_id, status)
+        except AirwallexError as failed:
+            self._observe()
+            return False, transfer.provider_id, self._scrub(
+                f"from {now}, to {status}: {type(failed).__name__}: {failed}")
         final = self.client.get_transfer(transfer.provider_id)
         self._observe()
         delta = self._usd() - self.state["usd_before_payout"]

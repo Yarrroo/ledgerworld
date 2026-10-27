@@ -177,8 +177,8 @@ def gateway_from_env(services: Services) -> Gateway:
     leg_mode = client.probe_connected(services.connected_setting)
     treasury = treasury_entity(services.snapshot)
     currency = next(a.currency for a in services.snapshot.accounts if a.entity == treasury)
-    global_account = os.environ.get("AIRWALLEX_GLOBAL_ACCOUNT_ID") or next(
-        (g["id"] for g in client.global_accounts() if g.get("currency") == currency), None)
+    global_account = (os.environ.get("AIRWALLEX_GLOBAL_ACCOUNT_ID")
+                      or client.global_account_in(currency))
     return Gateway(services.store, client, mode=services.mode, leg_mode=leg_mode,
                    beneficiaries=set(services.beneficiaries.values()),
                    clock=services.now, global_account_id=global_account)
