@@ -77,11 +77,15 @@ export function contextKey ({ mode, snapshot_id: snapshot, run_id: run, branch_i
  * A guard for one polled resource. `select(key)` names the context on screen; `issue()` stamps
  * a request; `accept(ticket, key)` says whether its answer may be applied: only for the selected
  * context, and never one older than an answer already applied (out-of-order polls).
+ * `current(ticket, key)` asks the same without recording it: a failed request is not an answer,
+ * so it must not discard the answers to requests issued before it.
  */
 export function latestOnly (selected = null) {
   let issued = 0
   let applied = 0
   let context = selected
+  const current = (ticket, key = ticket.context) =>
+    ticket.context === context && key === context && ticket.generation >= applied
   return {
     select (key) {
       if (key !== context) applied = 0
@@ -91,9 +95,9 @@ export function latestOnly (selected = null) {
       issued += 1
       return { generation: issued, context }
     },
+    current,
     accept (ticket, key = ticket.context) {
-      if (ticket.context !== context || key !== context) return false
-      if (ticket.generation < applied) return false
+      if (!current(ticket, key)) return false
       applied = ticket.generation
       return true
     }
