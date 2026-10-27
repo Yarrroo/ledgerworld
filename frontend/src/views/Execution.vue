@@ -22,10 +22,10 @@
 
     <p v-if="flow.blocked" class="lw-alert" role="alert" data-test="blocked">{{ flow.blocked }}</p>
     <p v-else-if="flow.message" class="lw-note" role="status" data-test="message">{{ flow.message }}</p>
-    <p v-for="[run, sent] in pending" :key="run" class="lw-actions">
+    <p v-for="[run, held] in waiting" :key="run" class="lw-actions">
       <RouterLink class="lw-button lw-button--quiet" data-test="elsewhere"
-                  :to="{ path: route.path, query: { run_id: run, execution_id: sent.id } }">
-        Read execution {{ sent.id }} of run {{ run }}
+                  :to="{ path: route.path, query: { run_id: run, execution_id: held.followedId } }">
+        Read execution {{ held.followedId }} of run {{ run }}
       </RouterLink>
     </p>
 
@@ -163,11 +163,24 @@
 </template>
 
 <script>
-import { ref } from 'vue'
+import { reactive, ref } from 'vue'
 
 // The operator token: this tab's memory only. Module scope survives moving between screens and
 // dies with the page; it is never written to storage, a URL, markup or a log.
 const token = ref('')
+
+// An operation whose outcome this tab does not know, kept in the same tab memory as the token:
+// run id -> { blocked, followedId, readBy, unseen }. Leaving the screen and coming back restores
+// the block and resumes reading the execution, so the token never outlives its quarantine. Forget
+// token does not lift it: only a reload does. `unseen` marks an execution that answered after its
+// screen moved on: it is linked until its own run's screen shows it.
+const unresolved = reactive(new Map())
+
+/** The tab reloaded, as far as this screen can tell: token and quarantine both forgotten. */
+export function forgetTab () {
+  token.value = ''
+  unresolved.clear()
+}
 </script>
 
 <script setup>
@@ -302,12 +315,22 @@ function refusal (error) {
   return REFUSALS[error.code] || `Refused: ${error.message}`
 }
 
+/** Remember, against the run it was sent for, what this tab still has to resolve or read. */
+function hold (runId, patch) {
+  unresolved.set(runId, { ...unresolved.get(runId), ...patch })
+}
+
+/** Still showing the run a POST was sent for: its answer belongs on this screen, not another's. */
+const here = (runId) => state.body?.run_id === runId
+
 let screen = 0 // bumped by every navigation to another run or execution: the flow on it is reset
 
 /** Where a POST was sent from, fixed when it is sent: the run, and the screen it was asked on. */
 const origin = () => ({ run: state.body.run_id, screen })
 /** The screen a POST was asked on is gone: its answer is never shown in that review again. */
 const moved = (from) => from.screen !== screen
+
+const waiting = computed(() => [...unresolved].filter(([, held]) => held.unseen))
 
 async function openReview () {
   if (reviewWhy.value) return
@@ -331,15 +354,16 @@ async function closeReview () {
 async function confirmApproval () {
   if (confirmWhy.value || flow.approval) return
   const from = origin()
+  const runId = from.run
   flow.submitting = true
   flow.message = ''
   try {
     const answer = await request('/approvals', {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
-      body: { run_id: from.run, policy: policy.value }
+      body: { run_id: runId, policy: policy.value }
     })
     if (moved(from)) { // never offered outside the review it was asked in; unused, it expires
-      flow.message = `Approval ${answer.approval.approval_id} for run ${from.run} was created after ` +
+      flow.message = `Approval ${answer.approval.approval_id} for run ${runId} was created after ` +
         'this screen moved on; it was not executed and expires unused.'
       return
     }
@@ -351,9 +375,10 @@ async function confirmApproval () {
     await nextTick()
     heading.value?.focus()
   } catch (error) {
-    const where = moved(from) ? `Run ${from.run}: ` : ''
-    if (unanswered(error)) flow.blocked = where + APPROVAL_UNKNOWN
-    else flow.message = where + refusal(error)
+    if (unanswered(error)) {
+      hold(runId, { blocked: APPROVAL_UNKNOWN })
+      if (here(runId)) flow.blocked = APPROVAL_UNKNOWN
+    } else flow.message = (moved(from) ? `Run ${runId}: ` : '') + refusal(error)
   } finally {
     flow.submitting = false
   }
@@ -363,60 +388,43 @@ async function executePlan () {
   if (executeWhy.value) return
   const id = flow.approval.approval_id
   const from = origin()
+  const runId = from.run
   flow.submitting = true
   flow.executed = true
-  let sentId = id // an unanswered POST is read back by its approval id
-  let unknown = false
   try {
     const answer = await request('/executions', {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { approval_id: id }
     })
-    sentId = answer.execution_id
+    if (!moved(from)) {
+      hold(runId, { followedId: answer.execution_id })
+      flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
+      follow(answer.execution_id)
+    } else {
+      hold(runId, { followedId: answer.execution_id, unseen: true })
+      flow.message = `Execution ${answer.execution_id} for run ${runId} was accepted after this screen moved on.`
+    }
   } catch (error) {
     if (!unanswered(error)) {
       flow.submitting = false
-      if (moved(from)) flow.message = `Run ${from.run}: ${refusal(error)}`
+      if (moved(from)) flow.message = `Run ${runId}: ${refusal(error)}`
       else flow.invalid = refusal(error)
       return
     }
-    unknown = true
+    const blocked = `Execution outcome unknown; reading its status by approval id ${id}. Do not send again.`
+    if (!moved(from)) {
+      hold(runId, { blocked, followedId: id, readBy: id })
+      flow.blocked = blocked
+      follow(id)
+    } else {
+      hold(runId, { blocked, followedId: id, readBy: id, unseen: true })
+      flow.message = `Execution outcome unknown for run ${runId}; its status is read by approval id ` +
+        `${id} on that run's screen. Do not send again.`
+    }
   }
   flow.submitting = false
-  if (!moved(from)) {
-    announce({ id: sentId, unknown })
-    follow(sentId)
-    await closeReview()
-    return
-  }
-  // the screen moved on: the outcome waits for its own run's screen, and is shown there only
-  pending.set(from.run, { id: sentId, unknown })
-  if (state.status === 'loaded' && deliver(state.body)) return
-  if (unknown) {
-    flow.blocked = `Execution outcome unknown for run ${from.run}; its status is read by approval id ` +
-      `${id} on that run's screen. Do not send again.`
-  } else {
-    flow.message = `Execution ${sentId} for run ${from.run} was accepted after this screen moved on.`
-  }
-}
-
-function announce ({ id, unknown }) {
-  if (unknown) flow.blocked = `Execution outcome unknown; reading its status by approval id ${id}. Do not send again.`
-  else flow.message = `Execution ${id} accepted; reading its provider state.`
-}
-
-/** Show an outcome that answered after its screen moved on, once its own run is on screen. */
-function deliver (body) {
-  const sent = pending.get(body.run_id)
-  const asked = route.query.execution_id
-  if (!sent || (asked && asked !== sent.id)) return false
-  pending.delete(body.run_id)
-  if (!flow.submitting) { // a review opened meanwhile closes, as after an execution sent in place
-    Object.assign(flow, { open: false, approval: null, invalid: '', executed: false })
-  }
-  announce(sent)
-  follow(sent.id)
-  return true
+  if (!moved(from)) await closeReview()
+  else if (state.status === 'loaded' && here(runId)) restore(state.body) // moved on to the same run
 }
 
 // ----------------------------------------------------------------- provider state, polled
@@ -429,9 +437,6 @@ const guard = latestOnly()
 let timer = null
 const followedId = shallowRef(null)
 let followed = false // an execution this tab sent: a refresh re-reads it, never swaps it for another
-// run id -> an execution this tab sent that answered after its screen moved on; each is linked
-// until its own run's screen shows it
-const pending = reactive(new Map())
 let autoReviewed = false // review=1 opens the review once, not on every refresh
 
 const execution = computed(() =>
@@ -472,6 +477,12 @@ async function poll () {
   schedule()
 }
 
+/** A held block, said truthfully: its lookup is claimed only while this screen is reading it. */
+function blockFor (held) {
+  if (!held.readBy || followedId.value === held.readBy) return held.blocked
+  return `Execution outcome unknown for approval ${held.readBy}; not read on this screen. Do not send again.`
+}
+
 function follow (id) {
   followed = true
   followedId.value = id
@@ -482,18 +493,44 @@ function follow (id) {
   poll()
 }
 
+/**
+ * What this tab holds for the run now shown decides the block and the execution followed: a block
+ * or an execution sent for another run is not this screen's. Unresolved work from before the
+ * screen was last left is restored, and its execution read again unless the address names another
+ * one. Returns whether it resumed reading a held execution.
+ */
+function restore (body) {
+  const held = unresolved.get(body.run_id)
+  if (followed && held?.followedId !== followedId.value) {
+    followed = false
+    followedId.value = null
+  }
+  const named = route.query.execution_id
+  const resume = held?.followedId && !followed && (!named || named === held.followedId)
+  if (resume) follow(held.followedId)
+  if (held?.unseen && followedId.value === held.followedId) {
+    held.unseen = false // shown on its own run's screen at last
+    if (!held.readBy) flow.message = `Execution ${held.followedId} accepted; reading its provider state.`
+    if (!flow.submitting) { // a review opened meanwhile closes, as after an execution sent in place
+      Object.assign(flow, { open: false, approval: null, invalid: '', executed: false })
+    }
+  }
+  flow.blocked = held?.blocked ? blockFor(held) : ''
+  return Boolean(resume)
+}
+
 watch(() => state.body, (body) => {
   if (!body) return
+  if (restore(body)) return
   if (followed) {
     poll() // Refresh re-reads the execution this tab sent
     return
   }
-  pollError.value = ''
-  if (deliver(body)) return
   activeId.value = body.execution_id
   guard.select(body.execution_id)
   live.value = null
   notFound.value = Boolean(body.execution_id && !body.execution)
+  pollError.value = ''
   schedule()
   if (route.query.review === '1' && !autoReviewed && !reviewWhy.value) {
     autoReviewed = true

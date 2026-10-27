@@ -321,6 +321,8 @@ const closeDetailPanel = () => {
   expandedSelfLoops.value = new Set() // 重置展开状态
 }
 
+defineExpose({ closeDetailPanel })
+
 let currentSimulation = null
 let linkLabelsRef = null
 let linkLabelBgRef = null
