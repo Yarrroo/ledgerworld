@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from sqlalchemy.engine import Connection, Engine
 
-from . import v0001_initial
+from . import v0001_initial, v0002_one_obligation_per_reservation
 
-STEPS = (v0001_initial,)
+STEPS = (v0001_initial, v0002_one_obligation_per_reservation)
 
 
 def upgrade(bind: Engine | Connection) -> None:

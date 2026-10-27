@@ -181,18 +181,12 @@ class ToolCallError:
     detail: str
 
 
-def parse_tool_call(
-    name: str, args: Any, mandate: Iterable[FinancialActionType]
-) -> _Args | ToolCallError:
-    """Validate one tool call against the actor's mandate and the tool's argument schema.
+def decode_args(name: str, args: Any) -> Mapping[str, Any] | ToolCallError:
+    """A tool call's arguments as an object, from the object or the JSON text a model wrote.
 
-    ``args`` is an object or the JSON text a model wrote; anything that does not decode to an
-    object (bad JSON, an integer too long to parse, nesting too deep) is malformed, never raised.
+    Anything that does not decode to an object (bad JSON, an integer too long to parse, nesting
+    too deep) is malformed, never raised.
     """
-    allowed = {a.value for a in mandate}
-    if name not in allowed:
-        return ToolCallError(name, "tool_not_in_mandate",
-                             f"{name!r} is not one of your tools {sorted(allowed)}")
     if isinstance(args, str):
         try:
             args = json.loads(args) if args.strip() else {}
@@ -201,6 +195,23 @@ def parse_tool_call(
                                  f"{name}: arguments are not JSON ({str(error)[:200]})")
     if not isinstance(args, Mapping):
         return ToolCallError(name, "malformed_tool_args", f"{name}: arguments are not an object")
+    return args
+
+
+def parse_tool_call(
+    name: str, args: Any, mandate: Iterable[FinancialActionType]
+) -> _Args | ToolCallError:
+    """Validate one tool call against the actor's mandate and the tool's argument schema.
+
+    ``args`` is an object or the JSON text a model wrote (``decode_args``).
+    """
+    allowed = {a.value for a in mandate}
+    if name not in allowed:
+        return ToolCallError(name, "tool_not_in_mandate",
+                             f"{name!r} is not one of your tools {sorted(allowed)}")
+    args = decode_args(name, args)
+    if isinstance(args, ToolCallError):
+        return args
     try:
         return ARGS[FinancialActionType(name)].model_validate(dict(args))
     except ValidationError as error:

@@ -16,7 +16,15 @@ from pathlib import Path
 
 import pytest
 from app.finance.ledger import check_outflow, from_snapshot, pay, settle_due
-from app.finance.models import Journal, LedgerRefusal, Posting, metadata, pledges, postings
+from app.finance.models import (
+    Journal,
+    LedgerRefusal,
+    Posting,
+    metadata,
+    obligations,
+    pledges,
+    postings,
+)
 from app.finance.spendability import projected_cash, spendability
 from app.finance.store import LedgerStore
 from hypothesis import HealthCheck, given, settings
@@ -497,6 +505,40 @@ def test_an_unknown_balance_never_reads_as_a_missed_obligation():
     assert store.rows("obligations")[0]["state"] == "open"
 
 
+def test_an_unknown_balance_never_pays_a_held_reservation():
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="r1")
+    store.add_obligation("ob", "a/operating", 500, h(1), kind="rent", reservation_id="r1")
+    store.observe("a/operating", "unknown", h(1))
+    assert settle_due(store, h(1)) == []
+    assert store.rows("obligations")[0]["state"] == "open"
+    assert store.reservation("r1").state == "held"
+    assert store.view("a/operating").settled_minor == 7000000
+    store.observe("a/operating", "known", h(2))
+    settle_due(store, h(2))
+    assert store.rows("obligations")[0]["state"] == "met"
+    assert store.view("a/operating").settled_minor == 7000000 - 500
+
+
+def test_an_unknown_balance_never_pays_a_committed_flow():
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="r1")
+    store.add_obligation("ob", "a/operating", 500, h(1), kind="rent", reservation_id="r1")
+    store.commit("r1", due_at=h(1))
+    store.expect("a/operating", "in", 200, h(1), kind="receivable")
+    store.observe("a/operating", "unknown", h(1))
+    settled = settle_due(store, h(2))
+    assert [j.kind for j in settled] == ["settle_receivable"]  # arrivals still land
+    assert store.rows("obligations")[0]["state"] == "open"
+    assert store.reservation("r1").state == "committed"
+    out = [f for f in store.rows("expected_flows") if f["direction"] == "out"]
+    assert [f["state"] for f in out] == ["pending"]
+    store.observe("a/operating", "known", h(3))
+    settle_due(store, h(3))
+    assert store.rows("obligations")[0]["state"] == "met"
+    assert store.view("a/operating").settled_minor == 7000000 + 200 - 500
+
+
 def test_an_obligation_whose_reservation_settled_is_met():
     store = lifecycle_world()
     store.hold("a/operating", 500, now=T0, reservation_id="r1")
@@ -506,6 +548,119 @@ def test_an_obligation_whose_reservation_settled_is_met():
     settle_due(store, h(2))
     assert store.rows("obligations")[0]["state"] == "met"
     assert projected_cash(store.view("a/operating"), h(2)) == 7000000 - 500
+
+
+@pytest.mark.parametrize("attach", [False, True], ids=["add_obligation", "attach_reservation"])
+@pytest.mark.parametrize("state", ["held", "committed", "settled"])
+def test_a_reservation_backs_one_obligation_only(state, attach):
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="r1")
+    store.add_obligation("first", "a/operating", 500, h(1), kind="payroll", reservation_id="r1")
+    if state != "held":
+        store.commit("r1", due_at=h(1))
+    if state == "settled":
+        settle_due(store, h(1))
+        assert store.rows("obligations")[0]["state"] == "met"
+    if attach:
+        store.add_obligation("second", "a/operating", 500, h(2), kind="payroll")
+    before = store.dump()
+    with pytest.raises(ValueError, match="already backs obligation first"):
+        if attach:
+            store.attach_reservation("second", "r1")
+        else:
+            store.add_obligation("second", "a/operating", 500, h(2), kind="payroll",
+                                 reservation_id="r1")
+    assert store.dump() == before
+
+
+def test_two_obligations_on_one_reservation_cannot_be_met_by_one_payment():
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="shared")
+    store.add_obligation("one", "a/operating", 500, h(1), kind="payroll", reservation_id="shared")
+    with pytest.raises(ValueError, match="already backs"):
+        store.add_obligation("two", "a/operating", 500, h(1), kind="payroll",
+                             reservation_id="shared")
+    store.add_obligation("two", "a/operating", 500, h(1), kind="payroll")
+    assert projected_cash(store.view("a/operating"), h(1)) == 7000000 - 1000
+    store.commit("shared", due_at=h(1))
+    assert projected_cash(store.view("a/operating"), h(1)) == 7000000 - 1000
+    settle_due(store, h(1))
+    assert [o["state"] for o in store.rows("obligations")] == ["met", "met"]
+    assert store.view("a/operating").settled_minor == 7000000 - 1000
+
+
+def test_the_database_refuses_a_second_obligation_on_one_reservation():
+    store = lifecycle_world()
+    row = {"entity_id": "a", "account_id": "a/operating", "currency": "USD",
+           "amount_minor": 500, "due_at": datetime(2026, 1, 5, 1), "kind": "payroll",
+           "state": "open", "reservation_id": "r1"}
+    with store.engine.begin() as c:
+        c.execute(insert(obligations).values(obligation_id="one", **row))
+    with pytest.raises(IntegrityError), store.engine.begin() as c:
+        c.execute(insert(obligations).values(obligation_id="two", **row))
+    with store.engine.begin() as c:  # many obligations may still name no reservation
+        for n in range(2):
+            c.execute(insert(obligations).values(
+                obligation_id=f"free-{n}", **{**row, "reservation_id": None}))
+
+
+def test_upgrade_adds_the_one_obligation_per_reservation_index(tmp_path):
+    url = f"sqlite:///{tmp_path / 'old.db'}"
+    store = LedgerStore(url)
+    with store.engine.begin() as c:
+        c.exec_driver_sql("DROP INDEX obligations_one_per_reservation")
+    LedgerStore(url)
+    assert "obligations_one_per_reservation" in {
+        i["name"] for i in inspect(create_engine(url)).get_indexes("obligations")}
+
+
+def test_upgrade_names_obligations_already_sharing_a_reservation(tmp_path):
+    url = f"sqlite:///{tmp_path / 'old.db'}"
+    store = lifecycle_world(url)
+    with store.engine.begin() as c:
+        c.exec_driver_sql("DROP INDEX obligations_one_per_reservation")
+    for n in ("one", "two"):
+        store.add_obligation(n, "a/operating", 500, h(1), kind="payroll", reservation_id="r1",
+                             state="met")
+    with pytest.raises(ValueError, match=r"\('r1', 'one'\), \('r1', 'two'\)"):
+        LedgerStore(url)
+
+
+def test_a_refused_second_backer_leaves_the_callers_transaction_usable():
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="r1")
+    with store.transaction() as c:
+        store.add_obligation("one", "a/operating", 500, h(1), kind="payroll",
+                             reservation_id="r1", conn=c)
+        with pytest.raises(ValueError, match="already backs obligation one"):
+            store.add_obligation("two", "a/operating", 500, h(1), kind="payroll",
+                                 reservation_id="r1", conn=c)
+        store.add_obligation("two", "a/operating", 500, h(1), kind="payroll", conn=c)
+    assert [o["obligation_id"] for o in store.rows("obligations")] == ["one", "two"]
+
+
+def test_a_duplicate_obligation_id_is_not_read_as_a_shared_reservation():
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="r1")
+    store.hold("a/operating", 500, now=T0, reservation_id="r2")
+    store.add_obligation("one", "a/operating", 500, h(1), kind="payroll", reservation_id="r1")
+    with pytest.raises(IntegrityError):
+        store.add_obligation("one", "a/operating", 500, h(1), kind="payroll",
+                             reservation_id="r2")
+
+
+def test_a_snapshot_cannot_pay_two_obligations_from_one_reservation():
+    snap = lf1_snapshot()
+    snap["accounts"][0]["buckets"]["reserved"]["minor"] = 0
+    snap["accounts"][0]["buckets"]["pending_out"] = [{
+        "flow_id": "pay-1", "amount": {"minor": 5000000, "currency": "USD"},
+        "expected_at": "2026-01-06T16:00:00Z", "kind": "payroll",
+        "reservation_id": "res-payroll-1"}]
+    snap["obligations"].append({**snap["obligations"][0], "obligation_id": "payroll-twin"})
+    store = LedgerStore(URL)
+    with pytest.raises(ValueError, match="already backs"):
+        from_snapshot(store, snap)
+    assert store.rows("obligations") == [] and store.rows("reservations") == []
 
 
 def test_a_duplicate_reservation_id_is_named():
