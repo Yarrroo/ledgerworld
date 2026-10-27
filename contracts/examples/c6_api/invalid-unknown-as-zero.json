@@ -5,7 +5,8 @@
  "reason": "an unknown metric has a value",
  "error": {
   "path": "/lender_capacity/minor",
-  "keyword": "type"
+  "keyword": "type",
+  "model_message": "any other has none"
  },
  "instance": {
   "as_of": "2026-01-05T00:00:00Z",

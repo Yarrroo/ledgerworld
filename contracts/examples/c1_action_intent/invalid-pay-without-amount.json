@@ -4,7 +4,8 @@
  "reason": "a pay intent needs params.amount",
  "error": {
   "path": "/params",
-  "keyword": "required"
+  "keyword": "required",
+  "model_message": "needs params.amount"
  },
  "instance": {
   "intent_id": "i-r0-treasury-1",

@@ -9,6 +9,17 @@
     "entity_id": "lender",
     "name": "Harbor Pool (synthetic)",
     "kind": "lender pool"
+   },
+   {
+    "entity_id": "borrower-a",
+    "name": "Northwind Parts (synthetic)",
+    "kind": "treasury",
+    "escalation": "treasury operator"
+   },
+   {
+    "entity_id": "borrower-b",
+    "name": "Juniper Freight (synthetic)",
+    "kind": "borrower"
    }
   ],
   "accounts": [

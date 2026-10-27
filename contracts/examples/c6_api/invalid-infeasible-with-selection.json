@@ -5,7 +5,8 @@
  "reason": "an all-infeasible decision selects a policy",
  "error": {
   "path": "/selected",
-  "keyword": "type"
+  "keyword": "type",
+  "model_message": "selects nothing"
  },
  "instance": {
   "as_of": "2026-11-05T10:00:00Z",

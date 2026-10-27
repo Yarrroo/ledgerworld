@@ -5,7 +5,8 @@
  "reason": "as_of is missing",
  "error": {
   "path": "",
-  "keyword": "required"
+  "keyword": "required",
+  "model_message": "Field required"
  },
  "instance": {
   "mode": "fake",

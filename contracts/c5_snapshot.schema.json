@@ -6,6 +6,17 @@
       "additionalProperties": false,
       "allOf": [
         {
+          "else": {
+            "properties": {
+              "buckets": {
+                "properties": {
+                  "settled": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          },
           "if": {
             "properties": {
               "observability": {
@@ -129,6 +140,7 @@
       "properties": {
         "minor": {
           "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
           "title": "Minor",
           "type": "integer"
         },
@@ -209,11 +221,6 @@
           "title": "Contract Id",
           "type": "string"
         },
-        "kind": {
-          "const": "collateral",
-          "title": "Kind",
-          "type": "string"
-        },
         "lender": {
           "maxLength": 128,
           "minLength": 1,
@@ -224,6 +231,22 @@
           "maxLength": 128,
           "minLength": 1,
           "title": "Borrower",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "offered",
+            "active",
+            "repaid",
+            "defaulted",
+            "closed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "kind": {
+          "const": "collateral",
+          "title": "Kind",
           "type": "string"
         },
         "limit": {
@@ -240,28 +263,17 @@
           "minimum": 1,
           "title": "Advance Rate Bps",
           "type": "integer"
-        },
-        "state": {
-          "enum": [
-            "offered",
-            "active",
-            "repaid",
-            "defaulted",
-            "closed"
-          ],
-          "title": "State",
-          "type": "string"
         }
       },
       "required": [
         "contract_id",
-        "kind",
         "lender",
         "borrower",
+        "state",
+        "kind",
         "limit",
         "collateral_ref",
-        "advance_rate_bps",
-        "state"
+        "advance_rate_bps"
       ],
       "title": "CollateralFacility",
       "type": "object"
@@ -276,11 +288,6 @@
           "title": "Contract Id",
           "type": "string"
         },
-        "kind": {
-          "const": "committed_line",
-          "title": "Kind",
-          "type": "string"
-        },
         "lender": {
           "maxLength": 128,
           "minLength": 1,
@@ -293,12 +300,6 @@
           "title": "Borrower",
           "type": "string"
         },
-        "limit": {
-          "$ref": "#/$defs/Amount"
-        },
-        "drawn": {
-          "$ref": "#/$defs/NonNegativeMoney"
-        },
         "state": {
           "enum": [
             "offered",
@@ -309,6 +310,17 @@
           ],
           "title": "State",
           "type": "string"
+        },
+        "kind": {
+          "const": "committed_line",
+          "title": "Kind",
+          "type": "string"
+        },
+        "limit": {
+          "$ref": "#/$defs/Amount"
+        },
+        "drawn": {
+          "$ref": "#/$defs/NonNegativeMoney"
         },
         "reservation_id": {
           "anyOf": [
@@ -341,12 +353,12 @@
       },
       "required": [
         "contract_id",
-        "kind",
         "lender",
         "borrower",
+        "state",
+        "kind",
         "limit",
-        "drawn",
-        "state"
+        "drawn"
       ],
       "title": "CommittedLine",
       "type": "object"
@@ -409,7 +421,7 @@
     },
     "Exposure": {
       "additionalProperties": false,
-      "description": "A venue or counterparty that two entities depend on: one shock reaches both.",
+      "description": "A venue or counterparty that two entities depend on: one shock reaches both.\n\n`shared_with` may name an entity of another snapshot of the same world, so it is not\nresolved here.",
       "properties": {
         "exposure_id": {
           "maxLength": 128,
@@ -523,6 +535,8 @@
       "description": "An amount in integer minor units of an ISO-4217 currency; signed inside the ledger.",
       "properties": {
         "minor": {
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775807,
           "title": "Minor",
           "type": "integer"
         },
@@ -553,6 +567,7 @@
       "description": "An amount that is zero or more: a reserved or pledged bucket, a floor, a fee.",
       "properties": {
         "minor": {
+          "maximum": 9223372036854775807,
           "minimum": 0,
           "title": "Minor",
           "type": "integer"
@@ -688,11 +703,6 @@
           "title": "Contract Id",
           "type": "string"
         },
-        "kind": {
-          "const": "revenue_advance",
-          "title": "Kind",
-          "type": "string"
-        },
         "lender": {
           "maxLength": 128,
           "minLength": 1,
@@ -703,6 +713,22 @@
           "maxLength": 128,
           "minLength": 1,
           "title": "Borrower",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "offered",
+            "active",
+            "repaid",
+            "defaulted",
+            "closed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "kind": {
+          "const": "revenue_advance",
+          "title": "Kind",
           "type": "string"
         },
         "principal": {
@@ -719,28 +745,17 @@
           "minimum": 1,
           "title": "Repay Share Bps",
           "type": "integer"
-        },
-        "state": {
-          "enum": [
-            "offered",
-            "active",
-            "repaid",
-            "defaulted",
-            "closed"
-          ],
-          "title": "State",
-          "type": "string"
         }
       },
       "required": [
         "contract_id",
-        "kind",
         "lender",
         "borrower",
+        "state",
+        "kind",
         "principal",
         "fee_bps",
-        "repay_share_bps",
-        "state"
+        "repay_share_bps"
       ],
       "title": "RevenueAdvance",
       "type": "object"

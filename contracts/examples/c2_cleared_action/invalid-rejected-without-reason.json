@@ -4,7 +4,8 @@
  "reason": "a rejection names its reason",
  "error": {
   "path": "",
-  "keyword": "required"
+  "keyword": "required",
+  "model_message": "names its reason"
  },
  "instance": {
   "intent_id": "i-r3-borrower-a-1",

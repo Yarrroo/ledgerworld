@@ -234,6 +234,7 @@
       "properties": {
         "minor": {
           "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
           "title": "Minor",
           "type": "integer"
         },
@@ -261,7 +262,38 @@
     },
     "ApprovalLeg": {
       "additionalProperties": false,
-      "description": "One provider operation the approval binds, in execution order by `after`.",
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "to_currency": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "fx"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "to_currency": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "to_currency"
+            ]
+          }
+        }
+      ],
+      "description": "One provider operation the approval binds; `after` names earlier legs it waits for.",
       "properties": {
         "index": {
           "minimum": 1,
@@ -824,6 +856,7 @@
         "missing": {
           "items": {
             "maxLength": 128,
+            "minLength": 1,
             "type": "string"
           },
           "title": "Missing",
@@ -890,6 +923,9 @@
             "properties": {
               "selected": {
                 "type": "string"
+              },
+              "escalation": {
+                "type": "null"
               }
             }
           }
@@ -912,6 +948,28 @@
               },
               "escalation": {
                 "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "pending"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "selected": {
+                "type": "null"
+              },
+              "escalation": {
+                "type": "null"
               }
             }
           }
@@ -1762,19 +1820,6 @@
     "InterviewResponse": {
       "additionalProperties": false,
       "properties": {
-        "as_of": {
-          "format": "date-time",
-          "title": "As Of",
-          "type": "string"
-        },
-        "mode": {
-          "enum": [
-            "fake",
-            "sandbox"
-          ],
-          "title": "Mode",
-          "type": "string"
-        },
         "run_id": {
           "maxLength": 128,
           "minLength": 1,
@@ -1791,6 +1836,19 @@
           "minimum": 0,
           "title": "Round",
           "type": "integer"
+        },
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "fake",
+            "sandbox"
+          ],
+          "title": "Mode",
+          "type": "string"
         },
         "actor_id": {
           "maxLength": 128,
@@ -1823,11 +1881,11 @@
         }
       },
       "required": [
-        "as_of",
-        "mode",
         "run_id",
         "branch_id",
         "round",
+        "as_of",
+        "mode",
         "actor_id",
         "answer",
         "read_only",
@@ -1975,6 +2033,8 @@
         "minor": {
           "anyOf": [
             {
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775807,
               "type": "integer"
             },
             {
@@ -2034,6 +2094,8 @@
       "description": "An amount in integer minor units of an ISO-4217 currency; signed inside the ledger.",
       "properties": {
         "minor": {
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775807,
           "title": "Minor",
           "type": "integer"
         },
@@ -2064,6 +2126,7 @@
       "description": "An amount that is zero or more: a reserved or pledged bucket, a floor, a fee.",
       "properties": {
         "minor": {
+          "maximum": 9223372036854775807,
           "minimum": 0,
           "title": "Minor",
           "type": "integer"
@@ -2786,12 +2849,48 @@
     },
     "TreasuryAccount": {
       "additionalProperties": false,
-      "description": "An account with S (spendable now) and P (projected cash) kept as separate measures.",
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "buckets": {
+                "properties": {
+                  "settled": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "observability": {
+                "const": "known"
+              }
+            },
+            "required": [
+              "observability"
+            ]
+          },
+          "then": {
+            "properties": {
+              "buckets": {
+                "properties": {
+                  "settled": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "description": "A C5 account with S (spendable now) and P (projected cash) as separate measures.",
       "properties": {
-        "account_id": {
+        "id": {
           "maxLength": 128,
           "minLength": 1,
-          "title": "Account Id",
+          "title": "Id",
           "type": "string"
         },
         "entity": {
@@ -2813,6 +2912,44 @@
           ],
           "title": "Currency",
           "type": "string"
+        },
+        "kind": {
+          "default": "cash",
+          "enum": [
+            "cash",
+            "receivable",
+            "payable",
+            "income",
+            "expense",
+            "external"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "venue": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Venue"
+        },
+        "floor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NonNegativeMoney"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "observability": {
           "enum": [
@@ -2841,9 +2978,6 @@
           "title": "Authority",
           "type": "string"
         },
-        "floor": {
-          "$ref": "#/$defs/Metric"
-        },
         "projected": {
           "items": {
             "$ref": "#/$defs/CashPoint"
@@ -2853,7 +2987,7 @@
         }
       },
       "required": [
-        "account_id",
+        "id",
         "entity",
         "currency",
         "observability",
@@ -2861,7 +2995,6 @@
         "buckets",
         "spendable",
         "authority",
-        "floor",
         "projected"
       ],
       "title": "TreasuryAccount",

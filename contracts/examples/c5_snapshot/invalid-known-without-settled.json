@@ -4,7 +4,8 @@
  "reason": "a known account has no settled balance",
  "error": {
   "path": "/accounts/0/buckets/settled",
-  "keyword": "type"
+  "keyword": "type",
+  "model_message": "settled balance exactly when known"
  },
  "instance": {
   "snapshot_id": "lf1",

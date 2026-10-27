@@ -4,7 +4,8 @@
  "reason": "a settled leg has no journal_id",
  "error": {
   "path": "",
-  "keyword": "required"
+  "keyword": "required",
+  "model_message": "has a journal"
  },
  "instance": {
   "leg_id": "2072516a1b79-1-advance",

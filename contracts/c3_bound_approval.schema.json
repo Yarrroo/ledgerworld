@@ -8,6 +8,7 @@
       "properties": {
         "minor": {
           "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
           "title": "Minor",
           "type": "integer"
         },
@@ -35,7 +36,38 @@
     },
     "ApprovalLeg": {
       "additionalProperties": false,
-      "description": "One provider operation the approval binds, in execution order by `after`.",
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "to_currency": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "fx"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "to_currency": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "to_currency"
+            ]
+          }
+        }
+      ],
+      "description": "One provider operation the approval binds; `after` names earlier legs it waits for.",
       "properties": {
         "index": {
           "minimum": 1,
