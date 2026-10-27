@@ -958,6 +958,385 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
   })
 })
 
+describe('a POST answered after a query navigation stays with its own run', () => {
+  /** Review on the demo run (run-1) with the given POST held until ``hold.release`` is called. */
+  async function heldOn (route) {
+    const hold = {}
+    let approvals = 0
+    const { w, calls } = await reviewReady({
+      // each approval is a new one, and its execution is named by its id
+      'POST /approvals': () => approvalBody({ approval_id: `apr-${++approvals}` }),
+      [route]: () => new Promise((resolve, reject) => { hold.release = resolve; hold.fail = reject }),
+      'GET /decisions/run-2': { ...decisionsBody(), run_id: 'run-2' },
+      'GET /decisions/run-3': { ...decisionsBody(), run_id: 'run-3' },
+      'GET /executions/apr-1': executionBody({ legs: [paidPayout()] })
+    })
+    return { w, calls, hold }
+  }
+
+  /** Execute on run-1, open run-2 while the POST is held, then answer it. */
+  async function answeredOnRun2 (answer = { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' }) {
+    const held = await heldOn('POST /executions')
+    await approve(held.w)
+    await held.w.get('[data-test="execute"]').trigger('click')
+    await held.w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    held.hold.release(answer)
+    await flushPromises()
+    return held
+  }
+
+  it('an accepted execution is not shown under the newly selected run, and is read on return', async () => {
+    const { w, calls, hold } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    expect(w.find('[data-test="review"]').exists()).toBe(false)
+    hold.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    await flushPromises()
+    expect(text(w, 'context')).toContain('Run run-2')
+    expect(text(w, 'context')).not.toContain('apr-1')
+    expect(w.find('[data-test="leg-payout"]').exists()).toBe(false)
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(0)
+    expect(text(w, 'message')).toContain('Execution apr-1 for run run-1 was accepted')
+    await w.get('[data-test="elsewhere"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'context')).toContain('Run run-1 · execution apr-1')
+    expect(text(w, 'leg-status')).toContain('PAID · reconciled as of')
+  })
+
+  it('an unanswered execution keeps its unknown outcome with its own run, never another\'s', async () => {
+    const { w, calls, hold } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    hold.fail(timeout())
+    await flushPromises()
+    expect(text(w, 'context')).toContain('Run run-2')
+    expect(text(w, 'context')).not.toContain('apr-1')
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(0)
+    expect(text(w, 'message')).toContain('unknown for run run-1')
+    expect(text(w, 'message')).toContain('Do not send again')
+    expect(w.find('[data-test="blocked"]').exists()).toBe(false) // the block is run-1's, not run-2's
+    expect(text(w, 'elsewhere')).toBe('Read execution apr-1 of run run-1')
+    await w.vm.$router.push('/execution')
+    await flushPromises()
+    expect(text(w, 'context')).toContain('Run run-1 · execution apr-1')
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(1)
+    expect(text(w, 'blocked')).toContain('reading its status by approval id apr-1')
+  })
+
+  it('the outcome reaches its run by any address that names it', async () => {
+    const { w } = await answeredOnRun2()
+    await w.vm.$router.push('/execution?run_id=run-1')
+    await flushPromises()
+    expect(text(w, 'context')).toContain('Run run-1 · execution apr-1')
+    expect(w.find('[data-test="elsewhere"]').exists()).toBe(false)
+  })
+
+  it('the link to the outcome survives a further navigation until its run is read', async () => {
+    const { w } = await answeredOnRun2()
+    await w.vm.$router.push('/execution?run_id=run-3')
+    await flushPromises()
+    expect(text(w, 'context')).toContain('Run run-3')
+    expect(text(w, 'elsewhere')).toBe('Read execution apr-1 of run run-1')
+  })
+
+  it('two outcomes that answered on other screens each keep their own link', async () => {
+    const { w, hold } = await answeredOnRun2()
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-3')
+    await flushPromises()
+    hold.release({ as_of: '2026-11-05T10:00:09Z', mode: 'fake', execution_id: 'apr-2' })
+    await flushPromises()
+    expect(w.findAll('[data-test="elsewhere"]').map((l) => l.text())).toEqual([
+      'Read execution apr-1 of run run-1', 'Read execution apr-2 of run run-2'
+    ])
+  })
+
+  it('an outcome answered after moving to the same run is shown there, with no review opened meanwhile', async () => {
+    const { w, hold } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-1')
+    await flushPromises()
+    expect(disabled(w, 'review-plan')).toBe(true)
+    hold.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    await flushPromises()
+    expect(w.find('[data-test="review"]').exists()).toBe(false)
+    expect(text(w, 'context')).toContain('Run run-1 · execution apr-1')
+  })
+
+  /** Leave the screen (the router unmounts it) and come back to a fresh mount in the same tab. */
+  async function remount (w, path = '/execution') {
+    mounted.splice(mounted.indexOf(w), 1)
+    w.unmount()
+    return open(Execution, path)
+  }
+
+  it('an execution answered after the view was left is linked on another run\'s screen, not read by the old view', async () => {
+    const { w, calls, hold } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    const back = await remount(w, '/execution?run_id=run-2')
+    hold.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(0)
+    await back.get('[data-test="elsewhere"]').trigger('click')
+    await flushPromises()
+    expect(text(back, 'context')).toContain('Run run-1 · execution apr-1')
+  })
+
+  it('an approval answered unknown after the view was left blocks the screen that came back at once', async () => {
+    const { w, hold } = await heldOn('POST /approvals')
+    await w.get('[data-test="confirm"]').trigger('click')
+    const back = await remount(w)
+    hold.fail(timeout())
+    await flushPromises()
+    expect(text(back, 'blocked')).toBe(kase('approval-post-timeout').expect.message)
+    expect(disabled(back, 'review-plan')).toBe(true)
+  })
+
+  it('an approval answered unknown after moving to another run says so there', async () => {
+    const { w, hold } = await heldOn('POST /approvals')
+    await w.get('[data-test="confirm"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    hold.fail(timeout())
+    await flushPromises()
+    expect(text(w, 'message')).toBe(`Run run-1: ${kase('approval-post-timeout').expect.message}`)
+  })
+
+  it('a run whose execution answered while away is not reviewed again until that one is read', async () => {
+    const { w, calls } = await answeredOnRun2()
+    await w.vm.$router.push('/execution?run_id=run-1&execution_id=apr-7')
+    await flushPromises()
+    expect(text(w, 'review-why')).toBe('Execution apr-1 of this run answered while you were away: read it first')
+    expect(disabled(w, 'review-plan')).toBe(true)
+    await w.get('[data-test="elsewhere"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'context')).toContain('execution apr-1')
+    expect(disabled(w, 'review-plan')).toBe(false)
+    expect(posts(calls, '/executions')).toHaveLength(1)
+  })
+
+  it('an execution answered after leaving is shown at once on a returned screen of its run', async () => {
+    const { w, hold } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    const back = await remount(w)
+    hold.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    await flushPromises()
+    expect(text(back, 'context')).toContain('Run run-1 · execution apr-1')
+    expect(back.find('[data-test="elsewhere"]').exists()).toBe(false)
+    expect(text(back, 'message')).toBe('Execution apr-1 accepted; reading its provider state.')
+  })
+
+  it('a read in flight when the view is left does not keep polling from the dead view', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    let first
+    let reads = 0
+    const { w, calls } = await reviewReady({
+      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'GET /executions/apr-1': () => (++reads === 1 ? new Promise((resolve) => { first = resolve }) : refuse(404, 'not_found'))
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    await remount(w)
+    first(refuse(404, 'not_found'))
+    await flushPromises()
+    const before = gets(calls, '/executions/apr-1').length
+    vi.advanceTimersByTime(5000)
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1').length - before).toBe(1) // the live view's read only
+  })
+
+  it('an unknown approval for a run left behind keeps a link until that run is open', async () => {
+    const { w, hold } = await heldOn('POST /approvals')
+    await w.get('[data-test="confirm"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    hold.fail(timeout())
+    await flushPromises()
+    await w.vm.$router.push('/execution?run_id=run-3')
+    await flushPromises()
+    expect(text(w, 'elsewhere')).toBe('Open run run-1: approval outcome unknown')
+    await w.get('[data-test="elsewhere"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'blocked')).toBe(kase('approval-post-timeout').expect.message)
+    expect(w.find('[data-test="elsewhere"]').exists()).toBe(false)
+  })
+
+  it('forgetting the tab lifts a block shown on screen', async () => {
+    const { w } = await reviewReady({ 'POST /approvals': timeout() })
+    await approve(w)
+    expect(w.find('[data-test="blocked"]').exists()).toBe(true)
+    forgetTab()
+    await flushPromises()
+    expect(w.find('[data-test="blocked"]').exists()).toBe(false)
+  })
+
+  it('a returned screen does not send for a run while a left view\'s POST for it is unanswered', async () => {
+    const { w, hold } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    const back = await remount(w)
+    expect(text(back, 'review-why')).toBe('A request for this run, sent from a screen since left, is not answered yet')
+    expect(disabled(back, 'review-plan')).toBe(true)
+    hold.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    await flushPromises()
+    expect(text(back, 'context')).toContain('execution apr-1')
+    expect(disabled(back, 'review-plan')).toBe(false)
+  })
+
+  it('an unknown approval is linked as an approval, not as the run\'s earlier execution', async () => {
+    let approvals = 0
+    const held = {}
+    const { w } = await reviewReady({
+      'POST /approvals': () => (++approvals === 1 ? approvalBody() : new Promise((resolve, reject) => { held.fail = reject })),
+      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'GET /executions/apr-1': executionBody({ legs: [paidPayout()] }),
+      'GET /decisions/run-2': { ...decisionsBody(), run_id: 'run-2' }
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-test="confirm"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    held.fail(timeout())
+    await flushPromises()
+    expect(text(w, 'elsewhere')).toBe('Open run run-1: approval outcome unknown')
+    expect(w.get('[data-test="elsewhere"]').attributes('href')).toBe('/execution?run_id=run-1')
+  })
+
+  it('returning to a run in the same view while its POST is unanswered does not offer a review', async () => {
+    const { w } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    await w.vm.$router.push('/execution')
+    await flushPromises()
+    expect(text(w, 'review-why')).toBe('A request for this run, sent from a screen since left, is not answered yet')
+    expect(disabled(w, 'review-plan')).toBe(true)
+  })
+
+  it('another run is not reviewed while this view\'s approval POST from the last screen is unanswered', async () => {
+    const { w, hold } = await heldOn('POST /approvals')
+    await w.get('[data-test="confirm"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    expect(text(w, 'review-why')).toBe('A request sent from the last screen is not answered yet')
+    expect(disabled(w, 'review-plan')).toBe(true)
+    hold.release(approvalBody())
+    await flushPromises()
+    expect(disabled(w, 'review-plan')).toBe(false)
+  })
+
+  it('another run is not reviewed while this view\'s POST from the last screen is unanswered', async () => {
+    const { w, hold } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    // a review opened now could be neither confirmed nor closed until run-1 answers
+    expect(text(w, 'review-why')).toBe('A request sent from the last screen is not answered yet')
+    expect(disabled(w, 'review-plan')).toBe(true)
+    hold.release(accepted())
+    await flushPromises()
+    expect(disabled(w, 'review-plan')).toBe(false)
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-test="review"]').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(w.find('[data-test="review"]').exists()).toBe(false)
+  })
+
+  it('a refusal for another run is shown even while this run is blocked', async () => {
+    let approvals = 0
+    const held = {}
+    const { w } = await reviewReady({
+      'POST /approvals': () => (++approvals === 1 ? timeout() : approvalBody()),
+      'POST /executions': () => new Promise((resolve) => { held.release = resolve }),
+      'GET /decisions/run-2': { ...decisionsBody(), run_id: 'run-2' }
+    })
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    await approve(w) // run-2's approval outcome is unknown: run-2 is blocked
+    await w.vm.$router.push('/execution?run_id=run-1')
+    await flushPromises()
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    held.release(refuse(409, 'approval_expired'))
+    await flushPromises()
+    expect(w.find('[data-test="blocked"]').exists()).toBe(true)
+    expect(text(w, 'message')).toBe('Run run-1: Approval expired')
+  })
+
+  it('a refusal answered after leaving and returning is shown, and does not disable the next approval', async () => {
+    const { w, hold } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    await w.vm.$router.push('/execution')
+    await flushPromises()
+    hold.release(refuse(409, 'snapshot_moved'))
+    await flushPromises()
+    expect(text(w, 'message')).toBe(`Run run-1: ${kase('snapshot-moved').expect.message}`)
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    await approve(w)
+    expect(text(w, 'execute-why')).toBe('')
+  })
+
+  it('an approval answered after leaving and returning is not installed in a closed review', async () => {
+    const { w, hold } = await heldOn('POST /approvals')
+    await w.get('[data-test="confirm"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    await w.vm.$router.push('/execution')
+    await flushPromises()
+    hold.release(approvalBody())
+    await flushPromises()
+    expect(text(w, 'message')).toContain('for run run-1')
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="execute"]').exists()).toBe(false)
+  })
+
+  it('an approval answered after the navigation is not offered for execution on the new run', async () => {
+    const { w, calls, hold } = await heldOn('POST /approvals')
+    await w.get('[data-test="confirm"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    hold.release(approvalBody())
+    await flushPromises()
+    expect(w.find('[data-test="review"]').exists()).toBe(false)
+    expect(text(w, 'message')).toContain('for run run-1')
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="execute"]').exists()).toBe(false)
+    expect(text(w, 'review')).toContain('run-2')
+    expect(posts(calls, '/executions')).toHaveLength(0)
+  })
+})
+
 describe('leaving and returning to Execution (board item 95)', () => {
   const APPROVAL_UNKNOWN = kase('approval-post-timeout').expect.message
 
