@@ -13,24 +13,29 @@
     {"id": "ledger_balance", "name": "ledger invariant: journals balance", "tests": [
       "tests/finance/test_ledger.py::test_every_journal_balances_per_currency",
       "tests/finance/test_ledger.py::test_zero_and_float_amounts_are_refused",
-      "tests/finance/test_ledger.py::test_property_any_sequence_of_journals_keeps_every_currency_balanced"
+      "tests/finance/test_ledger.py::test_property_any_sequence_of_journals_keeps_every_currency_balanced",
+      "tests/finance/test_ledger_stateful.py::test_random_ledger_sequences_match_the_reference_and_keep_every_invariant"
     ]},
     {"id": "ledger_no_orphan_posting", "name": "ledger invariant: no orphan posting", "tests": [
-      "tests/finance/test_ledger.py::test_no_posting_without_a_journal"
+      "tests/finance/test_ledger.py::test_no_posting_without_a_journal",
+      "tests/finance/test_ledger_stateful.py::test_random_ledger_sequences_match_the_reference_and_keep_every_invariant"
     ]},
     {"id": "ledger_reserved_le_settled", "name": "ledger invariant: reserved <= settled", "tests": [
       "tests/finance/test_ledger.py::test_reserved_never_exceeds_settled",
       "tests/finance/test_ledger.py::test_a_committed_outflow_is_not_respendable",
       "tests/finance/test_ledger.py::test_reservation_lifecycle",
-      "tests/finance/test_ledger.py::test_a_committed_reservation_is_counted_once"
+      "tests/finance/test_ledger.py::test_a_committed_reservation_is_counted_once",
+      "tests/finance/test_ledger_stateful.py::test_random_ledger_sequences_match_the_reference_and_keep_every_invariant"
     ]},
     {"id": "ledger_no_double_pledge", "name": "ledger invariant: no double pledge", "tests": [
       "tests/finance/test_ledger.py::test_the_same_units_are_never_pledged_twice",
-      "tests/finance/test_ledger.py::test_property_no_collateral_ref_is_in_two_active_pledges"
+      "tests/finance/test_ledger.py::test_property_no_collateral_ref_is_in_two_active_pledges",
+      "tests/finance/test_ledger_stateful.py::test_random_ledger_sequences_match_the_reference_and_keep_every_invariant"
     ]},
     {"id": "ledger_unknown_not_zero", "name": "ledger invariant: unknown != zero", "tests": [
       "tests/finance/test_ledger.py::test_unknown_is_not_zero_and_lowers_authority",
-      "tests/finance/test_ledger.py::test_stale_means_strictly_older_than_six_hours"
+      "tests/finance/test_ledger.py::test_stale_means_strictly_older_than_six_hours",
+      "tests/finance/test_ledger_stateful.py::test_random_ledger_sequences_match_the_reference_and_keep_every_invariant"
     ]},
     {"id": "lf2_reproduction", "name": "LF-2 reproduction", "tests": [
       "tests/finance/test_lending.py::test_the_repo_fixture_carries_the_design_expectations_unchanged",
