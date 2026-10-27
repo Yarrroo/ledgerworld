@@ -8,7 +8,16 @@
       "tests/finance/test_fixtures.py::test_lf1_payment_at_t0",
       "tests/finance/test_fixtures.py::test_lf1_double_pledge",
       "tests/finance/test_fixtures.py::test_lf1_inaction_keeps_the_obligation",
-      "tests/finance/test_fixtures.py::test_every_lf1_rejection_is_reproduced"
+      "tests/finance/test_fixtures.py::test_every_lf1_rejection_is_reproduced",
+      "tests/decisions/test_policies.py::test_each_branch_is_judged_on_its_realised_ledger[no-action-s1]",
+      "tests/decisions/test_policies.py::test_each_branch_is_judged_on_its_realised_ledger[fixed-reserve-s1]",
+      "tests/decisions/test_policies.py::test_each_branch_is_judged_on_its_realised_ledger[integrated-s1]",
+      "tests/decisions/test_policies.py::test_each_branch_is_judged_on_its_realised_ledger[integrated-s3]",
+      "tests/decisions/test_policies.py::test_the_ranking_keys_ties_and_selection",
+      "tests/decisions/test_policies.py::test_plan_for_now_redecides_on_the_observed_snapshot_and_binds_the_approval_legs",
+      "tests/decisions/test_policies.py::test_when_no_plan_is_feasible_nothing_is_offered_and_someone_is_named[lender-cannot-fund]",
+      "tests/decisions/test_policies.py::test_when_no_plan_is_feasible_nothing_is_offered_and_someone_is_named[obligation-unmet]",
+      "tests/decisions/test_policies.py::test_the_infeasible_ranking_and_its_escalation[lender-cannot-fund]"
     ]},
     {"id": "ledger_balance", "name": "ledger invariant: journals balance", "tests": [
       "tests/finance/test_ledger.py::test_every_journal_balances_per_currency",
@@ -97,7 +106,11 @@
       "tests/decisions/test_nonanticipativity.py::test_the_view_shows_nothing_early_and_hands_out_copies",
       "tests/decisions/test_nonanticipativity.py::test_every_honest_policy_passes_and_every_clairvoyant_one_is_named",
       "tests/decisions/test_nonanticipativity.py::test_a_policy_that_moves_the_views_clock_is_caught",
-      "tests/decisions/test_nonanticipativity.py::test_a_policy_that_erases_its_violation_is_caught_by_the_pair"
+      "tests/decisions/test_nonanticipativity.py::test_a_policy_that_erases_its_violation_is_caught_by_the_pair",
+      "tests/decisions/test_policies.py::test_a_policy_that_peeks_inside_a_branch_is_rejected_with_the_path",
+      "tests/decisions/test_policies.py::test_the_integrated_draw_at_t12_is_the_same_whether_the_receipt_comes_at_16_or_252",
+      "tests/decisions/test_policies.py::test_a_policy_never_sees_the_scenario",
+      "tests/decisions/test_policies.py::test_every_policy_runs_on_the_same_checkpoint_seed_and_schedule"
     ]},
     {"id": "credential_isolation", "name": "credential isolation", "tests": [
       "tests/execution/test_import_fence.py::test_simulation_side_never_reaches_airwallex",
