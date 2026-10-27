@@ -43,7 +43,10 @@
      "minor": 4500000,
      "status": "known"
     }
-   }
+   },
+   "unobserved": [
+    "lender/venue"
+   ]
   },
   "facilities": [
    {

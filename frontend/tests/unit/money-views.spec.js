@@ -205,6 +205,26 @@ describe('money-views fixture', () => {
     expect(text(w, 'authority')).toContain('reduced')
   })
 
+  it('Lending shows one moment across the six-hour freshness boundary, not two', async () => {
+    // Lending read at t0 + 6 h (pool fresh, full authority); the overview of the same snapshot
+    // read a second later, past the boundary, already lists the pool accounts as stale.
+    const later = clone(overviewLf1.instance)
+    later.completeness = { status: 'partial', missing: ['lender/operating', 'lender/venue'] }
+    serveLending(lendingLf2.instance, later)
+    let w = await open(Lending, '/lending')
+    expect(text(w, 'authority')).toContain('full')
+    expect(w.find('[data-test="unobserved"]').exists()).toBe(false)
+    // and the other way: Lending past the boundary, the overview still before it
+    const stale = clone(lendingFreeze.instance)
+    stale.capacity.unobserved = ['lender/operating', 'lender/venue']
+    serveLending(stale)
+    w = await open(Lending, '/lending')
+    expect(text(w, 'authority')).toContain('reduced')
+    expect(text(w, 'unobserved')).toContain('lender/operating')
+    expect(text(w, 'unobserved')).toContain('lender/venue')
+    expect(disabled(w, 'fund')).toBe(true)
+  })
+
   it('Lending refuses to merge two snapshots into one apparent state', async () => {
     serve({ '/lending': lendingFreeze.instance, '/overview': overviewLf1.instance })
     const w = await open(Lending, '/lending')

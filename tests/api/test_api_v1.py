@@ -189,6 +189,33 @@ def test_venue_freeze_is_partial_and_unknown_is_never_zero():
     assert lending["capacity"]["parts"]["settled_known"]["minor"] == 4_500_000
 
 
+def test_lending_carries_its_own_completeness_across_the_freshness_boundary():
+    """Authority and the unobserved pool accounts come from one read: at t + 6 h the pool is
+    fresh and nothing is unobserved; a second later both turn together, whatever the overview."""
+    now = [NOW + timedelta(hours=6)]
+    http = client(build(clock=lambda: now[0]))
+    fresh = check(http.get("/api/v1/lending"), "LendingResponse")["capacity"]
+    assert (fresh["authority"], fresh["unobserved"]) == ("full", [])
+    now[0] += timedelta(seconds=1)
+    later = check(http.get("/api/v1/lending"), "LendingResponse")["capacity"]
+    assert (later["authority"], later["unobserved"]) == (
+        "reduced", ["lender/operating", "lender/venue"])
+    assert later["K_p"]["status"] == "stale"
+    missing = check(http.get("/api/v1/overview"), "OverviewResponse")["completeness"]["missing"]
+    assert set(later["unobserved"]) <= set(missing)
+    stressed = check(client(build(observed(stressed=True))).get("/api/v1/lending"),
+                     "LendingResponse")["capacity"]
+    assert (stressed["authority"], stressed["unobserved"]) == ("reduced", ["lender/venue"])
+
+
+def test_lending_capacity_full_authority_means_nothing_unobserved():
+    body = check(client(build()).get("/api/v1/lending"), "LendingResponse")
+    for authority, unobserved in (("full", ["lender/venue"]), ("reduced", [])):
+        capacity = body["capacity"] | {"authority": authority, "unobserved": unobserved}
+        with pytest.raises(ValueError, match="authority is full exactly when"):
+            c6.LendingResponse.model_validate(body | {"capacity": capacity})
+
+
 def test_lending_shows_k_p_its_parts_and_an_unassessed_revenue():
     body = check(client(build()).get("/api/v1/lending"), "LendingResponse")
     assert (body["pool"], body["capacity"]["K_p"]["minor"]) == ("lender", 4_200_000)

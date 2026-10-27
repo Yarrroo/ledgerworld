@@ -637,7 +637,7 @@
     },
     "Capacity": {
       "additionalProperties": false,
-      "description": "K_p and the parts it is computed from.",
+      "description": "K_p, the parts it is computed from, and the pool's cash accounts it could not count, all\nread at one moment: authority is full exactly when nothing is unobserved.",
       "properties": {
         "K_p": {
           "$ref": "#/$defs/Metric"
@@ -652,12 +652,22 @@
         },
         "parts": {
           "$ref": "#/$defs/CapacityParts"
+        },
+        "unobserved": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Unobserved",
+          "type": "array"
         }
       },
       "required": [
         "K_p",
         "authority",
-        "parts"
+        "parts",
+        "unobserved"
       ],
       "title": "Capacity",
       "type": "object"

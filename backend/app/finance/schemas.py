@@ -664,11 +664,19 @@ class CapacityParts(_Shape):
 
 
 class Capacity(_Shape):
-    """K_p and the parts it is computed from."""
+    """K_p, the parts it is computed from, and the pool's cash accounts it could not count, all
+    read at one moment: authority is full exactly when nothing is unobserved."""
 
     K_p: Metric
     authority: Authority
     parts: CapacityParts
+    unobserved: list[Id]
+
+    @model_validator(mode="after")
+    def _full_means_all_observed(self) -> Capacity:
+        if (self.authority == "full") != (not self.unobserved):
+            raise ValueError("authority is full exactly when no pool account is unobserved")
+        return self
 
 
 class FacilityView(_Shape):

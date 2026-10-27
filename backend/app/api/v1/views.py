@@ -221,5 +221,5 @@ def lending(store: LedgerStore, snapshot: Snapshot, now: datetime) -> Body | Non
         })
     return {"snapshot_id": snapshot.snapshot_id, "pool": pool,
             "capacity": {"K_p": metric(cap.K_p, c, status, now), "authority": cap.authority,
-                         "parts": parts},
+                         "parts": parts, "unobserved": list(cap.unobserved)},
             "facilities": facilities}
