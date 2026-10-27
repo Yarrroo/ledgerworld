@@ -323,7 +323,8 @@ function hold (runId, patch) {
 /** Still showing the run a POST was sent for: its answer belongs on this screen, not another's. */
 const here = (runId) => state.body?.run_id === runId
 
-let screen = 0 // bumped by every navigation to another run or execution: the flow on it is reset
+let screen = 0 // bumped by every navigation to another run or execution, and on leaving the view
+let gone = false // unmounted: an answer arriving now belongs to whichever screen shows its run next
 
 /** Where a POST was sent from, fixed when it is sent: the run, and the screen it was asked on. */
 const origin = () => ({ run: state.body.run_id, screen })
@@ -331,6 +332,9 @@ const origin = () => ({ run: state.body.run_id, screen })
 const moved = (from) => from.screen !== screen
 
 const waiting = computed(() => [...unresolved].filter(([, held]) => held.unseen))
+const accepted = (id) => `Execution ${id} accepted; reading its provider state.`
+/** The review and its approval go: after a navigation, or when a waiting outcome is shown. */
+const dropReview = () => Object.assign(flow, { open: false, approval: null, invalid: '', executed: false })
 
 async function openReview () {
   if (reviewWhy.value) return
@@ -378,6 +382,7 @@ async function confirmApproval () {
     if (unanswered(error)) {
       hold(runId, { blocked: APPROVAL_UNKNOWN })
       if (here(runId)) flow.blocked = APPROVAL_UNKNOWN
+      else flow.message = `Run ${runId}: ${APPROVAL_UNKNOWN}`
     } else flow.message = (moved(from) ? `Run ${runId}: ` : '') + refusal(error)
   } finally {
     flow.submitting = false
@@ -397,8 +402,8 @@ async function executePlan () {
       body: { approval_id: id }
     })
     if (!moved(from)) {
-      hold(runId, { followedId: answer.execution_id })
-      flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
+      hold(runId, { followedId: answer.execution_id, unseen: false })
+      flow.message = accepted(answer.execution_id)
       follow(answer.execution_id)
     } else {
       hold(runId, { followedId: answer.execution_id, unseen: true })
@@ -413,7 +418,7 @@ async function executePlan () {
     }
     const blocked = `Execution outcome unknown; reading its status by approval id ${id}. Do not send again.`
     if (!moved(from)) {
-      hold(runId, { blocked, followedId: id, readBy: id })
+      hold(runId, { blocked, followedId: id, readBy: id, unseen: false })
       flow.blocked = blocked
       follow(id)
     } else {
@@ -424,7 +429,7 @@ async function executePlan () {
   }
   flow.submitting = false
   if (!moved(from)) await closeReview()
-  else if (state.status === 'loaded' && here(runId)) restore(state.body) // moved on to the same run
+  else if (!gone && state.status === 'loaded' && here(runId)) restore(state.body) // moved on to the same run
 }
 
 // ----------------------------------------------------------------- provider state, polled
@@ -510,10 +515,8 @@ function restore (body) {
   if (resume) follow(held.followedId)
   if (held?.unseen && followedId.value === held.followedId) {
     held.unseen = false // shown on its own run's screen at last
-    if (!held.readBy) flow.message = `Execution ${held.followedId} accepted; reading its provider state.`
-    if (!flow.submitting) { // a review opened meanwhile closes, as after an execution sent in place
-      Object.assign(flow, { open: false, approval: null, invalid: '', executed: false })
-    }
+    if (!held.readBy) flow.message = accepted(held.followedId)
+    if (!flow.submitting) dropReview() // a review opened meanwhile closes, as after one sent in place
   }
   flow.blocked = held?.blocked ? blockFor(held) : ''
   return Boolean(resume)
@@ -538,12 +541,18 @@ watch(() => state.body, (body) => {
   }
 })
 
+// A block held for the run on screen shows as soon as it is held, even when its POST was sent from
+// a screen since left (an answer to an unmounted view), not only on the next load.
+watch(() => state.body && unresolved.get(state.body.run_id)?.blocked, (blocked) => {
+  if (blocked) flow.blocked = blockFor(unresolved.get(state.body.run_id))
+})
+
 // The view is reused across query-only navigation: a new run or execution is a new screen. A
 // POST still in flight answers to the screen it was sent from (origin), never to this one.
 watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
   screen += 1
-  flow.open = false
-  Object.assign(flow, { approval: null, invalid: '', executed: false, message: '' })
+  dropReview()
+  flow.message = ''
   followed = false
   followedId.value = null
   activeId.value = null
@@ -553,6 +562,8 @@ watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
 })
 
 onUnmounted(() => {
+  screen += 1
+  gone = true
   clearTimeout(timer)
   clearInterval(clock)
 })

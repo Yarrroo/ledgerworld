@@ -800,6 +800,60 @@ describe('a POST answered after a query navigation stays with its own run', () =
     expect(text(w, 'context')).toContain('Run run-1 · execution apr-1')
   })
 
+  /** Leave the screen (the router unmounts it) and come back to a fresh mount in the same tab. */
+  async function remount (w, path = '/execution') {
+    mounted.splice(mounted.indexOf(w), 1)
+    w.unmount()
+    return open(Execution, path)
+  }
+
+  it('an execution answered after the view was left is linked on the screen that came back, not read by the old one', async () => {
+    const { w, calls, hold } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    const back = await remount(w)
+    hold.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(0)
+    await back.get('[data-test="elsewhere"]').trigger('click')
+    await flushPromises()
+    expect(text(back, 'context')).toContain('Run run-1 · execution apr-1')
+  })
+
+  it('an approval answered unknown after the view was left blocks the screen that came back at once', async () => {
+    const { w, hold } = await heldOn('POST /approvals')
+    await w.get('[data-test="confirm"]').trigger('click')
+    const back = await remount(w)
+    hold.fail(timeout())
+    await flushPromises()
+    expect(text(back, 'blocked')).toBe(kase('approval-post-timeout').expect.message)
+    expect(disabled(back, 'review-plan')).toBe(true)
+  })
+
+  it('an approval answered unknown after moving to another run says so there', async () => {
+    const { w, hold } = await heldOn('POST /approvals')
+    await w.get('[data-test="confirm"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    hold.fail(timeout())
+    await flushPromises()
+    expect(text(w, 'message')).toBe(`Run run-1: ${kase('approval-post-timeout').expect.message}`)
+  })
+
+  it('an execution answered in place is not linked as waiting, though an earlier one was', async () => {
+    const { w, hold } = await answeredOnRun2()
+    await w.vm.$router.push('/execution?run_id=run-1&execution_id=apr-7')
+    await flushPromises()
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    hold.release({ as_of: '2026-11-05T10:00:09Z', mode: 'fake', execution_id: 'apr-2' })
+    await flushPromises()
+    expect(text(w, 'context')).toContain('execution apr-2')
+    expect(w.findAll('[data-test="elsewhere"]').map((l) => l.text())).not.toContain('Read execution apr-2 of run run-1')
+  })
+
   it('a refusal answered after leaving and returning is shown, and does not disable the next approval', async () => {
     const { w, hold } = await heldOn('POST /executions')
     await approve(w)
