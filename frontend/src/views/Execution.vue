@@ -197,6 +197,10 @@ async function optional (path) {
   }
 }
 
+// One generation for every read of an execution's state, the screen's own and the polls: an
+// answer is applied only if no read issued after it has been applied already.
+const guard = latestOnly()
+
 const { state, refresh } = useReading(async () => {
   const overview = await getOverview()
   const asked = route.query.run_id || null
@@ -204,6 +208,7 @@ const { state, refresh } = useReading(async () => {
   const demo = !asked || asked === overview.demo.run_id
   const executionId = route.query.execution_id || (demo ? overview.demo.execution_id : null) || null
   let decisionsError = ''
+  const { generation } = guard.issue()
   const [decisions, execution] = await Promise.all([
     // the receipts still read when this fails; only the review needs the decision
     runId ? optional(`/decisions/${enc(runId)}`).catch((error) => { decisionsError = error.message; return null }) : null,
@@ -212,7 +217,7 @@ const { state, refresh } = useReading(async () => {
   const head = execution ?? overview
   return {
     as_of: head.as_of, mode: head.mode, snapshot_id: head.snapshot_id, run_id: runId,
-    execution_id: executionId, decisions, decisionsError, execution
+    execution_id: executionId, decisions, decisionsError, execution, generation
   }
 })
 
@@ -370,7 +375,6 @@ const activeId = shallowRef(null)
 const live = shallowRef(null)
 const notFound = shallowRef(false)
 const pollError = shallowRef('')
-const guard = latestOnly()
 let timer = null
 const followedId = shallowRef(null)
 let followed = false // an execution this tab sent: a refresh re-reads it, never swaps it for another
@@ -432,9 +436,13 @@ watch(() => state.body, (body) => {
   }
   activeId.value = body.execution_id
   guard.select(body.execution_id)
-  live.value = null
-  notFound.value = Boolean(body.execution_id && !body.execution)
-  pollError.value = ''
+  // this read replaces any poll answered before it and invalidates every poll issued before it;
+  // a poll issued after it and already answered is newer, and stays
+  if (guard.accept({ generation: body.generation, context: body.execution_id })) {
+    live.value = null
+    notFound.value = Boolean(body.execution_id && !body.execution)
+    pollError.value = ''
+  }
   schedule()
   if (route.query.review === '1' && !autoReviewed && !reviewWhy.value) {
     autoReviewed = true

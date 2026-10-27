@@ -685,3 +685,104 @@ describe('vet round 2, re-read', () => {
     await flushPromises()
   })
 })
+
+describe('correction: a status read never overwrites a newer one', () => {
+  const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  const tick = async () => { vi.advanceTimersByTime(5000); await flushPromises() }
+  const settledOnly = () => ({ ...paidPayout(), reconciled: false })
+  const withIncident = () => {
+    const leg = paidPayout()
+    return executionBody({
+      legs: [leg],
+      incidents: [{ incident_id: 'inc-1', leg_id: leg.leg_id, kind: 'paid_then_failed', state: 'open', opened_at: '2026-11-05T10:05:00Z' }]
+    })
+  }
+  /** GET /executions/apr-1 answered from a queue: a function entry is a held answer. */
+  function queued (first) {
+    const queue = [first]
+    let held
+    const answer = () => {
+      const next = queue.length > 1 ? queue.shift() : queue[0]
+      return next === 'hold' ? new Promise((resolve) => { held = resolve }) : next
+    }
+    return { queue, answer, release: (body) => held(body) }
+  }
+
+  it('a poll started before Refresh cannot overwrite the reconciled receipt Refresh read', async () => {
+    fakeTimers()
+    const reads = queued(executionBody({ legs: [settledOnly()] }))
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': reads.answer
+    })
+    const w = await open(Execution, '/execution')
+    expect(text(w, 'leg-status')).toContain('not reconciled')
+    reads.queue.splice(0, 1, 'hold', executionBody({ legs: [paidPayout()] }))
+    await tick() // the poll is now in flight, holding the older state
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'leg-status')).toContain('PAID · reconciled as of')
+    reads.release(executionBody({ legs: [settledOnly()] }))
+    await flushPromises()
+    expect(text(w, 'leg-status')).toContain('PAID · reconciled as of')
+  })
+
+  it('a poll started before Refresh cannot clear the incident Refresh read', async () => {
+    fakeTimers()
+    const reads = queued(executionBody({ legs: [settledOnly()] }))
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': reads.answer
+    })
+    const w = await open(Execution, '/execution')
+    reads.queue.splice(0, 1, 'hold', withIncident())
+    await tick()
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'incident')).toContain('paid then failed')
+    reads.release(executionBody({ legs: [settledOnly()] }))
+    await flushPromises()
+    expect(text(w, 'incident')).toContain('paid then failed')
+  })
+
+  it('a poll answered after Refresh began reading stays: the older Refresh read does not replace it', async () => {
+    fakeTimers()
+    const reads = queued(executionBody({ legs: [settledOnly()] }))
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': reads.answer
+    })
+    const w = await open(Execution, '/execution')
+    reads.queue.splice(0, 1, 'hold', withIncident())
+    await w.get('[data-test="refresh"]').trigger('click') // Refresh's read is now in flight
+    await flushPromises()
+    await tick() // a later poll answers with the newer state first
+    expect(text(w, 'incident')).toContain('paid then failed')
+    reads.release(executionBody({ legs: [settledOnly()] }))
+    await flushPromises()
+    expect(text(w, 'incident')).toContain('paid then failed')
+  })
+
+  it('an execution this tab sent: a poll started before Refresh cannot overwrite its re-read', async () => {
+    fakeTimers()
+    const reads = queued(executionBody({ legs: [sentPayout()] }))
+    const { w } = await reviewReady({
+      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'GET /executions/apr-1': reads.answer
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    reads.queue.splice(0, 1, 'hold', withIncident())
+    await tick()
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'incident')).toContain('paid then failed')
+    reads.release(executionBody({ legs: [sentPayout()] }))
+    await flushPromises()
+    expect(text(w, 'incident')).toContain('paid then failed')
+  })
+})
