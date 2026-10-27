@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import Connection, insert
 
+from . import contracts
 from .models import HORIZON, Journal, LedgerRefusal, Posting, lending_pools
 from .schemas import Account, CommittedLine, Snapshot
 from .spendability import AccountView, headroom, spendability, state_of
@@ -119,7 +120,8 @@ def from_snapshot(store: LedgerStore, snapshot: Snapshot | dict) -> None:
     pending_out flow carrying a reservation is a committed reservation. The reserved bucket is
     split into the named holds of open obligations and committed lines not already committed,
     and the rest is one hold `<account>:reserved`; the pledged bucket is one pledge
-    `<account>#snapshot`. On an unknown account the buckets are taken as observed.
+    `<account>#snapshot`. On an unknown account the buckets are taken as observed. Every contract
+    becomes a facility of its lender's pool (`contracts.load`).
     """
     snap = snapshot if isinstance(snapshot, Snapshot) else Snapshot.model_validate(snapshot)
     committed = {f.reservation_id for a in snap.accounts for f in a.buckets.pending_out
@@ -147,6 +149,7 @@ def from_snapshot(store: LedgerStore, snapshot: Snapshot | dict) -> None:
             store.add_obligation(ob.obligation_id, ob.account, ob.amount.minor, ob.due_at,
                                  kind=ob.kind, reservation_id=ob.reservation_id,
                                  mandatory=ob.mandatory, state=ob.state, conn=c)
+        contracts.load(store, snap, conn=c)
 
 
 def _load_account(store: LedgerStore, c: Connection, a: Account, as_of: datetime,
