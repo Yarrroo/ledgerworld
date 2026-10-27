@@ -2,7 +2,8 @@
 # One image for every LedgerWorld process: the API (which also serves the built frontend), and
 # the simulation worker. LEDGERWORLD_ROLE picks the process at start (deploy/entrypoint.sh).
 # Build from the repository root:  docker build -f deploy/Dockerfile .
-# No value is baked in: every setting arrives by name at run time (.env.example).
+# No value is baked in but the source link: every setting arrives by name at run time
+# (.env.example), and VITE_SOURCE_URL, which the frontend bundle carries, arrives as a build argument.
 
 # ---- frontend: the Vue app, built once; the API serves it from the same origin
 FROM node:22-slim AS frontend
@@ -13,6 +14,9 @@ COPY locales ./locales
 COPY frontend ./frontend
 # "/" makes every API call relative to the page's own origin
 ENV VITE_API_BASE_URL=/
+# Every page footer links the source (AGPL-3.0 §13); a bundle built without it would omit the link
+ARG VITE_SOURCE_URL
+RUN case "$VITE_SOURCE_URL" in http://?*|https://?*) ;; *) echo "VITE_SOURCE_URL must be the public http(s) URL of this source: --build-arg VITE_SOURCE_URL=<url>" >&2; exit 1 ;; esac
 RUN npm --prefix frontend run build
 
 # ---- app: Python 3.12 slim, the uv workspace installed from the lockfile
