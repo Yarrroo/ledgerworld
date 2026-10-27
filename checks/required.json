@@ -15,7 +15,14 @@
     {"id": "timeout_resolved_by_query", "name": "timeout resolved by query", "tests": []},
     {"id": "reconciliation_closes_advance", "name": "reconciliation closes the advance", "tests": []},
     {"id": "clairvoyant_policy_rejected", "name": "clairvoyant policy rejected", "tests": []},
-    {"id": "credential_isolation", "name": "credential isolation", "tests": []},
+    {"id": "credential_isolation", "name": "credential isolation", "tests": [
+      "tests/execution/test_import_fence.py::test_simulation_side_never_reaches_airwallex",
+      "tests/execution/test_import_fence.py::test_fence_catches_a_planted_live_import",
+      "tests/execution/test_import_fence.py::test_fence_catches_every_import_form",
+      "tests/execution/test_import_fence.py::test_fence_catches_every_credential_read",
+      "tests/execution/test_import_fence.py::test_fence_catches_a_chain_through_another_module",
+      "tests/execution/test_import_fence.py::test_fence_passes_clean_simulation_code"
+    ]},
     {"id": "money_safety_hunts", "name": "the eight money-safety hunts", "tests": []}
   ],
   "g2": [
