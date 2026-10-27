@@ -21,8 +21,7 @@ ALLOWED: frozenset[tuple[str, str]] = frozenset((t["from"], t["to"]) for t in MA
 FORBIDDEN: frozenset[tuple[str, str]] = frozenset(
     (t["from"], t["to"]) for t in MACHINE["forbidden"] if "when" not in t and t["from"] != "*"
 )
-_path = MACHINE["ledger_only"]["path"]
-LEDGER_ONLY: frozenset[tuple[str, str]] = frozenset(pairwise(_path))
+LEDGER_ONLY: frozenset[tuple[str, str]] = frozenset(pairwise(MACHINE["ledger_only"]["path"]))
 LEDGER_ONLY_LABEL: str = MACHINE["ledger_only"]["receipt_label"]
 
 if not ALLOWED.isdisjoint(FORBIDDEN) or {s for pair in ALLOWED for s in pair} - set(STATES):

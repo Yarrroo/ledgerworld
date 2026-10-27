@@ -16,6 +16,7 @@ import sqlite3
 import tempfile
 from collections import Counter, defaultdict
 from dataclasses import replace
+from decimal import Decimal
 from itertools import pairwise
 from pathlib import Path
 
@@ -30,6 +31,8 @@ FIXTURES = state.DESIGN / "fixtures"
 MACHINE = json.loads((FIXTURES / "leg-state-machine.json").read_text())
 CRASH = json.loads((FIXTURES / "crash-and-retry.json").read_text())
 BASE = json.loads((FIXTURES / "approval-binding.json").read_text())["base"]
+RECONCILIATION = {c["id"]: c for c in json.loads((FIXTURES / "reconciliation.json").read_text())[
+    "cases"]}
 
 
 def plan_hash(base: dict) -> str:
@@ -81,7 +84,11 @@ class FakeProvider:
         self.objects: dict[str, list[ob.ProviderObject]] = defaultdict(list)
         self.posts: Counter[str] = Counter()
         self.ids_used: dict[int, set[str]] = defaultdict(set)
-        self.timeouts: dict[int, str] = {}  # leg index → "before_send" | "after_accept", once
+        # leg index → "before_send" | "after_accept" | "landed_unseen" (the transport reports
+        # a timeout before send, but the request landed), once
+        self.timeouts: dict[int, str] = {}
+        self.overrides: dict[int, dict] = {}  # leg index → fields a `GET` reports instead
+        self.foreign: list[ob.ProviderObject] = []  # objects a lookup returns that are not ours
         self.rejects: set[int] = set()
         self.find_errors = 0
         self.stale_finds = 0
@@ -102,6 +109,8 @@ class FakeProvider:
         self.faults.hit("after_send_before_response", leg)
         if timeout == "after_accept":
             raise ob.OutcomeUnknown(may_have_sent=True)
+        if timeout == "landed_unseen":
+            raise ob.OutcomeUnknown(may_have_sent=False)
         return obj
 
     def find(self, leg: ob.Leg) -> list[ob.ProviderObject]:
@@ -111,11 +120,12 @@ class FakeProvider:
         if self.stale_finds:
             self.stale_finds -= 1
             return []
-        return list(self.objects[leg.request_id])
+        return [*self.objects[leg.request_id], *self.foreign]
 
     def get(self, leg: ob.Leg) -> ob.ProviderObject:
         (obj,) = [o for o in self.objects[leg.request_id] if o.provider_id == leg.provider_id]
-        return replace(obj, status="PAID" if leg.kind == "payout" else "SETTLED")
+        settled = {"status": "PAID" if leg.kind == "payout" else "SETTLED"}
+        return replace(obj, **settled | self.overrides.get(leg.index, {}))
 
 
 def post_journal(conn: sqlite3.Connection, leg: ob.Leg) -> str:
@@ -208,8 +218,8 @@ def arm(world: World, case: dict) -> int:
             world.provider.timeouts[1] = "after_accept"
         case "timeout-before-send":
             world.provider.timeouts[1] = "before_send"
-        case "duplicate-on-resubmit":  # the first send landed, the first lookup misses it
-            world.faults.armed.add(("after_send_before_response", 1))
+        case "duplicate-on-resubmit":  # the first send landed unseen, the first lookup misses it
+            world.provider.timeouts[1] = "landed_unseen"
             world.provider.stale_finds = 1
         case "lookup-errors":
             world.provider.timeouts[1] = "after_accept"
@@ -353,8 +363,9 @@ def test_ledger_only_leg_settles_without_a_provider(tmp_path: Path) -> None:
     plan = {1: ob.LegPlan(state.LEDGER_ONLY_LABEL, ledger_only=True)}
     world = World(tmp_path / "store.db", approval(base), plan)
     (leg,) = world.run()
-    assert (leg.state, leg.provider_id, leg.receipt_label) == (
-        "settled", None, MACHINE["ledger_only"]["receipt_label"])
+    assert (leg.state, leg.provider_id, leg.receipt_label, leg.reconciled) == (
+        "settled", None, MACHINE["ledger_only"]["receipt_label"],
+        RECONCILIATION["repayment-mode-b"]["expect"]["reconciled"])
     assert not world.provider.posts and world.journals(leg) == 1
     assert world.rows("SELECT from_state, to_state, cause FROM leg_events WHERE leg_id = ?"
                       " ORDER BY event_seq", leg.leg_id) == [
@@ -403,3 +414,87 @@ def test_queue_is_idempotent_and_ids_never_change(tmp_path: Path) -> None:
             " source_account, counterparty, currency, amount_minor, funded_by, after_legs,"
             " provider_op, ledger_only, state, provider_id, provider_status, receipt_label,"
             " journal_id, reconciled, attempts, updated_at FROM execution_legs WHERE leg_index = 1")
+
+
+# ------------------------------------------------------------------- review regressions
+
+def test_a_restart_after_the_send_never_resends_on_a_lookup_miss(tmp_path: Path) -> None:
+    """The request left, the process died, and the first lookup lags: the leg waits as unknown
+    rather than sending again; the next lookup adopts it."""
+    world = World(tmp_path / "store.db")
+    world.faults.armed.add(("after_send_before_response", 1))
+    world.provider.stale_finds = 1
+    advance, payout = world.run()
+    assert (advance.state, payout.state) == ("unknown", "pending")
+    assert world.provider.posts[advance.request_id] == 1
+    advance, payout = world.run()
+    assert (advance.state, payout.state) == ("settled", "settled")
+    assert world.provider.posts[advance.request_id] == 1
+    assert_money_moved_once(world)
+
+
+@pytest.mark.parametrize("case_id", ["amount-mismatch", "currency-mismatch"])
+def test_a_mismatched_settlement_posts_no_journal(case_id: str, tmp_path: Path) -> None:
+    """reconciliation.json: the provider settled other terms than the leg's → incident, no
+    journal, not reconciled; the payout after it does not start."""
+    case = RECONCILIATION[case_id]
+    index = {"advance": 1, "payout": 2}[case["leg"]["kind"]]
+    reported = case["provider"]
+    world = World(tmp_path / "store.db")
+    world.provider.overrides[index] = (
+        {"amount_minor": int(Decimal(reported["amount"]) * 100)} if "amount" in reported
+        else {"currency": reported["currency"]})
+    leg = world.run()[index - 1]
+    world.run()
+    assert (leg.state, leg.reconciled, world.journals(leg)) == ("submitted", False, 0)
+    assert case["expect"]["journal"] == "none"
+    assert world.rows("SELECT kind FROM incidents WHERE leg_id = ? AND closed_at IS NULL",
+                      leg.leg_id) == [(case["expect"]["incident"]["kind"],)]
+    assert all(leg.state != "settled" for leg in world.legs()[index - 1:])
+
+
+def test_paid_then_failed_opens_an_incident_and_never_unposts(tmp_path: Path) -> None:
+    """reconciliation.json paid-then-failed: the settled payout's GET later shows FAILED."""
+    expect = RECONCILIATION["paid-then-failed"]["expect"]
+    world = World(tmp_path / "store.db")
+    world.faults.armed.add(("after_journal_before_reconciled_flag", 2))
+    with pytest.raises(Crash):
+        world.outbox.drive(APPROVAL.approval_id, world.provider)
+    world.provider.overrides[2] = {"status": "FAILED"}
+    world.outbox = world.boot()
+    for _ in range(2):  # a second pass opens nothing new
+        _, payout = world.outbox.drive(APPROVAL.approval_id, world.provider)
+    assert (payout.state, payout.reconciled) == ("settled", expect["reconciled"])
+    assert world.journals(payout) == 1  # journals_added 0: the posting is never undone here
+    assert world.rows("SELECT kind, closed_at FROM incidents WHERE leg_id = ?",
+                      payout.leg_id) == [("paid_then_failed", None)]
+    assert world.rows("SELECT count(*) FROM leg_events WHERE leg_id = ? AND cause ="
+                      " 'paid_then_failed'", payout.leg_id) == [(1,)]
+    assert_money_moved_once(world)
+
+
+def test_a_lookup_never_adopts_another_request_ids_object(tmp_path: Path) -> None:
+    world = World(tmp_path / "store.db")
+    world.provider.timeouts[1] = "after_accept"
+    world.provider.foreign = [ob.ProviderObject("p-x", "not-ours-1", "PAID", 1000000, "USD")]
+    advance, payout = world.run()
+    assert (advance.state, payout.state) == ("settled", "settled")
+    assert advance.provider_id != "p-x"
+    assert_money_moved_once(world)
+
+
+def test_a_busy_commit_rolls_back_and_the_connection_recovers(tmp_path: Path) -> None:
+    """A reader holds the store when the claim commits: the commit fails busy, the claim is
+    rolled back, and the next drive runs on the same connection."""
+    world = World(tmp_path / "store.db")
+    world.outbox = ob.Outbox(sqlite3.connect(world.path, timeout=0), post_journal)
+    reader = sqlite3.connect(world.path, isolation_level=None)
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM execution_legs").fetchone()
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        world.outbox.drive(APPROVAL.approval_id, world.provider)
+    assert not world.outbox.conn.in_transaction
+    reader.execute("COMMIT")
+    assert [leg.state for leg in world.legs()] == ["pending", "pending"]
+    assert [leg.state for leg in world.run()] == ["settled", "settled"]
+    assert_money_moved_once(world)
