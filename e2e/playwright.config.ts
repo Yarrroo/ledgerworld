@@ -28,7 +28,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  // the 60 s limit is the wrapper's; this only stops a hung page from holding the run forever
+  // the 60 s limit is the wrapper's (--max-seconds); this only stops a hung page holding the run
   timeout: 120_000,
   expect: { timeout: 30_000 },
   reporter: [['list']],

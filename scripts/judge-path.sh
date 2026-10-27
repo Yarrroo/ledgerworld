@@ -26,7 +26,9 @@ while (($#)); do
 done
 [[ "$url" =~ ^https?:// ]] || { echo "judge-path: a URL (http or https) is required" >&2; usage; }
 
-fail() { echo "judge-path: $1" >&2; echo "judge_path_s 999"; exit 1; }
+# a failed run keeps its output (failure screenshots) and names where; a passing one removes it
+out="$(mktemp -d "${TMPDIR:-/tmp}/judge-path.XXXXXX")"
+fail() { echo "judge-path: $1; output kept in $out" >&2; echo "judge_path_s 999"; exit 1; }
 
 # dependencies and the browser: outside the timed window
 if [[ ! -d "$e2e/node_modules/@playwright/test" ]]; then
@@ -34,8 +36,6 @@ if [[ ! -d "$e2e/node_modules/@playwright/test" ]]; then
 fi
 (cd "$e2e" && npx --no-install playwright install chromium >&2) || fail "chromium install failed"
 
-out="$(mktemp -d "${TMPDIR:-/tmp}/judge-path.XXXXXX")"
-trap 'rm -rf "$out"' EXIT
 expected="$(node -e '
   const j = require(process.argv[1]); console.log(j.viewports.length * j.themes.length)
 ' "$root/prp/2026-10-20-ledgerworld/design/modules/ui/fixtures/judge-path.json")" || fail "fixture unreadable"
@@ -55,6 +55,7 @@ seconds="$(node -e '
 if ((status != 0)) || [[ -z "$seconds" ]]; then
   fail "a run failed (playwright exit $status; $(find "$out" -maxdepth 1 -name '*.json' | wc -l)/$expected timed runs passed)"
 fi
+rm -rf "$out"
 echo "judge-path: slowest run ${seconds} s, limit ${max} s, ${expected} runs" >&2
 echo "judge_path_s $seconds"
 awk -v s="$seconds" -v m="$max" 'BEGIN { exit !(s <= m) }' || exit 1

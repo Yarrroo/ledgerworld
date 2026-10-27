@@ -61,7 +61,7 @@ async function overview (page: Page): Promise<Demo> {
   await page.goto('/overview')
   const reply = await answer
   expect(reply.status(), 'GET /api/v1/overview').toBe(200)
-  const demo: Demo = (await reply.json()).demo
+  const demo: Demo = (await reply.json()).demo ?? { run_id: null, execution_id: null }
   await expect(test$(page, 'mode')).toHaveText(new RegExp(MODES.join('|')))
   await expect(test$(page, 'source')).not.toBeEmpty()
   await expect(test$(page, 'settled').locator('.lw-figure')).toHaveText(/\d/)
@@ -125,6 +125,8 @@ async function execution (page: Page, demo: Demo): Promise<void> {
     await expect(leg.locator('[data-test="leg-status"]')).toHaveText(/reconciled as of .* UTC/)
     await expect(leg.locator('[data-test="leg-status"]')).not.toHaveText(/not reconciled/)
     await expect(leg.locator('[data-test="receipt-mode"]')).toHaveText(new RegExp(MODES.join('|')))
+    // a reconciled leg has a receipt; setup funding is never one of these legs (the kinds above)
+    await expect(leg.locator('[data-test="receipt"]')).toHaveCount(1)
   }
 }
 
@@ -133,12 +135,15 @@ async function receipt (page: Page): Promise<void> {
   const details = test$(page, 'receipt').first()
   await click(page, 4, details.locator('summary'))
   await expect(details).toHaveAttribute('open', '')
-  const field = (name: string) => details.locator(`dt:text-is("${name}") + dd`)
-  await expect(field('Provider id')).toHaveText(/\S/)
-  await expect(field('Journal')).toHaveText(/\S/)
-  await expect(field('Journal')).not.toHaveText('not posted')
-  await expect(field('Observed')).toHaveText(/\d{4}-\d\d-\d\d \d\d:\d\d UTC/)
-  await expect(field('Provider')).toHaveText(new RegExp(MODES.join('|')))
+  // the opened one is read on screen; every other leg's receipt carries the same fields
+  for (const each of await test$(page, 'receipt').all()) {
+    const field = (name: string) => each.locator(`dt:text-is("${name}") + dd`)
+    await expect(field('Provider id')).toHaveText(/\S/)
+    await expect(field('Journal')).toHaveText(/\S/)
+    await expect(field('Journal')).not.toHaveText('not posted')
+    await expect(field('Observed')).toHaveText(/\d{4}-\d\d-\d\d \d\d:\d\d UTC/)
+    await expect(field('Provider')).toHaveText(new RegExp(MODES.join('|')))
+  }
   await expect(test$(page, 'review')).toHaveCount(0) // nothing was opened for approval
 }
 
@@ -199,16 +204,23 @@ function lowContrast (page: Page, root: string): Promise<Contrast[]> {
   }, { root, normal: CASE.contrast.expect.normal_text_min_ratio, large: CASE.contrast.expect.large_text_and_controls_min_ratio })
 }
 
-/** Tab (keyboard only) until ``control`` has focus; its focus must be visible. */
+/** The focus indicator ``el`` draws now: its outline and box shadow. */
+const ringOf = (el: Element): string => {
+  const s = getComputedStyle(el)
+  const outline = s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0
+    ? `${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor}` : 'none'
+  return `${outline} | ${s.boxShadow}`
+}
+
+/** Tab (keyboard only) until ``control`` has focus; focused, it must look different from at rest. */
 async function focusByKeyboard (page: Page, control: Locator, name: string): Promise<void> {
-  const handle = await control.elementHandle()
+  await control.scrollIntoViewIfNeeded()
+  const rest = await control.evaluate(ringOf)
   for (let i = 0; i < 120; i++) {
-    if (await page.evaluate((el) => document.activeElement === el, handle)) {
-      const ring = await control.evaluate((el) => {
-        const s = getComputedStyle(el)
-        return (s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0) || s.boxShadow !== 'none'
-      })
-      expect(ring, `${name}: keyboard focus is not visible`).toBe(true)
+    if (await control.evaluate((el) => el === document.activeElement)) {
+      const focused = await control.evaluate(ringOf)
+      expect(focused, `${name}: keyboard focus is not visible`).not.toBe(rest)
+      expect(focused, `${name}: keyboard focus is not visible`).not.toBe('none | none')
       return
     }
     await page.keyboard.press('Tab')
@@ -249,11 +261,11 @@ test('timed path: Overview → Live simulation → Decisions → Execution → r
   const seconds = (performance.now() - started) / 1000
   expect(writes, 'the path sent a write').toEqual([])
   info.annotations.push({ type: 'elapsed', description: `${seconds.toFixed(1)} s` })
+  // the limit is the wrapper's (--max-seconds, the fixture's 60 by default): it compares the slowest run
   if (OUT) {
     mkdirSync(OUT, { recursive: true })
     writeFileSync(join(OUT, `${info.project.name}.json`), JSON.stringify({ project: info.project.name, seconds }))
   }
-  expect(seconds, `elapsed over ${JUDGE.timing.limit_seconds} s`).toBeLessThanOrEqual(JUDGE.timing.limit_seconds)
 })
 
 test.describe('accessibility', () => {
