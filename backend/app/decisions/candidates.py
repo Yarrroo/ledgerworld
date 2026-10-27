@@ -242,10 +242,14 @@ class Integrated(_Policy):
         t = obs["t_h"]
         before = project(obs)
         actions: list[dict] = []
+        reason = detail = None
         for o in obs["obligations"]:
             currency = o.get("currency", obs["currency"])
-            if currency != obs["currency"] and t < o["due_h"] <= t + CONVERT_LEAD_H \
-                    and value_in(o["amount"], currency, obs) is not None:  # priced, or not now
+            if currency != obs["currency"] and t < o["due_h"] <= t + CONVERT_LEAD_H:
+                if value_in(o["amount"], currency, obs) is None:  # said, never sold blind
+                    reason = "unpriced_obligation"
+                    detail = f"no {currency}/{obs['currency']} price for {o['id']}"
+                    continue
                 actions.append({"type": "convert", "buy": {"minor": o["amount"],
                                                            "currency": currency},
                                 "sell_currency": obs["currency"], "for_obligation": o["id"]})
@@ -253,7 +257,6 @@ class Integrated(_Policy):
         after, cost = _defer(obs, before, actions, deferred)
         paid_now = cost  # deferral fees leave cash; an advance's fee is owed, not paid
         drawn: list[tuple[int, int]] = []
-        reason = detail = None
         if after.short_minor:
             arrival = t + HOURS_PER_ROUND
             refused = [c for c in obs["c2_seen"] if c.get("status") == "rejected"
@@ -274,7 +277,8 @@ class Integrated(_Policy):
                     after = trial
                     if not after.short_minor:
                         break
-            if after.short_minor and not any(a["type"] == "request_advance" for a in actions):
+            if after.short_minor and reason is None \
+                    and not any(a["type"] == "request_advance" for a in actions):
                 rank_ = {"facility_rejected": 0, "arrives_after_deadline": 1}
                 reason, detail = min(excluded, key=lambda w: rank_.get(w[0], 2),
                                      default=("no_eligible_advance", None))

@@ -545,7 +545,10 @@ def test_integrated_does_not_propose_a_conversion_it_cannot_price():
     case = next(c for c in RULES["cases"] if c["id"] == "integrated-converts-just-in-time")
     view = rules_view(case)
     del view["prices"]
-    assert Integrated().decide(PolicyView(view_world(view), view["t_h"] // 4)) == []
+    proposal = Integrated().propose(PolicyView(view_world(view), view["t_h"] // 4))
+    assert proposal.actions == []
+    assert proposal.reason == "unpriced_obligation"
+    assert proposal.detail == "no EUR/USD price for eur-inv-1"
 
 
 def test_the_binding_names_the_facility_whose_draw_was_refused():
@@ -559,7 +562,10 @@ def test_the_binding_names_the_facility_whose_draw_was_refused():
     intents = [{"intent_id": f"i-r3-treasury-p{n}",
                 "params": {"facility_id": d["facility"], "amount": usd(d["amount_minor"])}}
                for n, d in enumerate(draws, 1)]
-    c2 = [{"round": 3, "intent_id": "i-r3-treasury-p1", "status": "accepted"},
+    intents.append({"intent_id": "i-r3-treasury-p3", "params": {"to_currency": "EUR"}})
+    c2 = [{"round": 3, "intent_id": "i-r3-treasury-p3", "status": "rejected",
+           "reason": "no_fx_quote", "binding": "the round world has no FX quote"},
+          {"round": 3, "intent_id": "i-r3-treasury-p1", "status": "accepted"},
           {"round": 3, "intent_id": "i-r3-treasury-p2", "status": "rejected",
            "reason": "beyond_capacity", "binding": "K_p = 5.00"}]
     e = Evaluation("s1", "integrated", "b", f, actions=draws, c2=c2, intents=intents)

@@ -103,15 +103,16 @@ def _binding(earliest: dict, evals: list[Evaluation], tried: list[Evaluation],
              currency: str) -> str:
     """What binds: a remedy the world refused (``tried``, best ranked first) names its own
     constraint; else the cash short of the best-ranked policy's earliest unmet constraint."""
-    for e in tried:
-        params = {i["intent_id"]: i.get("params", {}) for i in e.intents}
-        for c in e.c2:
-            if c.get("status") == "rejected" and c.get("binding"):
-                p = params.get(c["intent_id"], {})
-                if p.get("facility_id") and p.get("amount"):
-                    return (f"{c['binding']} < {p['facility_id']} principal "
-                            f"{grouped(p['amount']['minor'], p['amount']['currency'])}")
-                return str(c["binding"])
+    refused = [(c, {i["intent_id"]: i.get("params", {}) for i in e.intents}
+                .get(c["intent_id"], {}))
+               for e in tried for c in e.c2
+               if c.get("status") == "rejected" and c.get("binding")]
+    for c, p in refused:  # a refused draw first: it is the remedy that would have closed it
+        if p.get("facility_id") and p.get("amount"):
+            return (f"{c['binding']} < {p['facility_id']} principal "
+                    f"{grouped(p['amount']['minor'], p['amount']['currency'])}")
+    if refused:
+        return str(refused[0][0]["binding"])
     e = next(e for e in evals if e.scenario == earliest["scenario"])
     if earliest["kind"] == "obligation":
         o = next(o for o in e.feasibility.obligations if o.id == earliest["id"])
