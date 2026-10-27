@@ -73,19 +73,29 @@ def stages() -> dict[str, list[tuple[str, str]]]:
     current = None
     for word, rest in dockerfile():
         if word == "FROM":
-            _image, as_, current = rest.split()
-            assert as_.upper() == "AS", f"FROM {rest} names no stage"
+            parts = rest.split()
+            assert len(parts) >= 3 and parts[-2].upper() == "AS", f"FROM {rest} names no stage"
+            current = parts[-1]
             named[current] = []
         assert current is not None, "the Dockerfile has an instruction before its first FROM"
         named[current].append((word, rest))
     return named
 
 
+def copies() -> list[tuple[set[str], list[str]]]:
+    """(flags, sources) of every COPY from the build context."""
+    out = []
+    for word, rest in dockerfile():
+        if word == "COPY" and not rest.startswith("--from"):
+            words = shlex.split(rest)[:-1]
+            out.append(({w for w in words if w.startswith("--")},
+                        [w.rstrip("/") for w in words if not w.startswith("--")]))
+    return out
+
+
 def copy_sources() -> set[str]:
     """Every path the Dockerfile copies from the build context."""
-    return {source.rstrip("/") for word, rest in dockerfile()
-            if word == "COPY" and not rest.startswith("--from")
-            for source in shlex.split(rest)[:-1]}
+    return {source for _, sources in copies() for source in sources}
 
 
 def compose() -> dict:
@@ -155,6 +165,18 @@ def test_the_image_copies_sources_not_a_checkout_s_run_time_output():
     copied = copy_sources()
     assert "backend" not in copied
     assert {"backend/app", "backend/scripts"} <= copied
+
+
+DOTENV = "." + "env"
+CODE_COPY_EXCLUDES = {f"--exclude=**/{DOTENV}", "--exclude=**/__pycache__"}
+
+
+def test_no_code_copy_brings_a_nested_dotenv_file_or_host_bytecode():
+    """The root .dockerignore matches its dotenv and __pycache__ entries at the context root
+    only, so every copy of a code tree excludes them itself."""
+    for flags, sources in copies():
+        if any((ROOT / s).is_dir() and any((ROOT / s).rglob("*.py")) for s in sources):
+            assert CODE_COPY_EXCLUDES <= flags, sources
 
 
 def test_the_entrypoint_is_the_role_switch():
@@ -311,6 +333,7 @@ def test_a_missing_file_or_a_write_is_not_answered_with_the_index(served):
     assert served.get("/favicon.ico").status_code == 404
     assert served.post("/simulation/run-1").status_code in (404, 405)
     assert served.get("/api/v1/nope").status_code == 404
+    assert served.get("/api").status_code == 404
 
 
 # --------------------------------------------------------------------------------- host config

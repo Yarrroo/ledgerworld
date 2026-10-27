@@ -31,10 +31,12 @@ COPY backend/pyproject.toml ./backend/
 COPY packages/oasis-finance/pyproject.toml ./packages/oasis-finance/
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-workspace
 
-# The workspace members; of backend/ only the code, never a checkout's logs, uploads or job dirs
-COPY backend/app ./backend/app
-COPY backend/scripts ./backend/scripts
-COPY packages ./packages
+# The workspace members; of backend/ only the code, never a checkout's logs, uploads or job dirs.
+# .dockerignore matches its dotenv and __pycache__ entries at the context root only, so each
+# code copy excludes them at any depth itself.
+COPY --exclude=**/.env --exclude=**/__pycache__ backend/app ./backend/app
+COPY --exclude=**/.env --exclude=**/__pycache__ backend/scripts ./backend/scripts
+COPY --exclude=**/.env --exclude=**/__pycache__ packages ./packages
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 
 # The data the code reads at run time, by repo-root relative path

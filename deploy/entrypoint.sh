@@ -63,8 +63,9 @@ index = (dist / "index.html").read_bytes() if (dist / "index.html").is_file() el
 
 def pages(environ, start_response):
     path = environ.get("PATH_INFO", "/")
-    route = (environ.get("REQUEST_METHOD") in ("GET", "HEAD") and not path.startswith("/api/")
-             and path != "/health" and "." not in path.rsplit("/", 1)[-1])
+    route = (environ.get("REQUEST_METHOD") in ("GET", "HEAD")
+             and path.lstrip("/").split("/", 1)[0] not in ("api", "health")
+             and "." not in path.rsplit("/", 1)[-1])
     if index is None or not route:
         return app(environ, start_response)
     start_response("200 OK", [("Content-Type", "text/html; charset=utf-8"),
