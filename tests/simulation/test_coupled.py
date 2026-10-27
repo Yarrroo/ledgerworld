@@ -1150,20 +1150,28 @@ def ledger_world(tmp_path, name, snap=None, scenario=(), epoch=DEFAULT_EPOCH,
                  epoch=epoch)
 
 
-def clear(world: World, round_: int, *intents: tuple) -> dict:
-    """Clear (actor, type, params[, intent_id]) intents at ``round_``; verdicts by intent id."""
+def clear(world: World, round_: int, *intents: tuple,
+          evidence: dict[str, list[str]] | None = None) -> dict:
+    """Clear (actor, type, params[, intent_id]) intents at ``round_``; verdicts by intent id.
+    ``evidence`` gives an intent's evidence ids by intent id; the valid intents are committed
+    for the trace, as step 10 does."""
     world.clock.round = round_
     built = []
     for n, (actor, type_, params, *given) in enumerate(intents, 1):
+        intent_id = given[0] if given else f"i-r{round_}-{actor}-{n}"
         built.append(ActionIntent(
-            intent_id=given[0] if given else f"i-r{round_}-{actor}-{n}", branch_id="shock",
-            round=round_, actor_id=actor, type=type_, params=params, evidence_ids=[],
+            intent_id=intent_id, branch_id="shock",
+            round=round_, actor_id=actor, type=type_, params=params,
+            evidence_ids=(evidence or {}).get(intent_id, []),
             obs_hash=HASH, priority_class=ACTOR_SPECS[actor]["priority_class"],
             sim_minute=world.clock.sim_minute))
     with world.store.engine.begin() as conn:
         deliver(world, conn)  # what is observable is refreshed every round
         valid, rejected = validate_intents(world, built)
-        return {c.intent_id: c for c in clear_intents(world, conn, valid) + rejected}
+        out = {c.intent_id: c for c in clear_intents(world, conn, valid) + rejected}
+    for intent in valid:
+        world.state.intents[intent.intent_id] = intent.model_dump(mode="json")
+    return out
 
 
 def verdict(cleared) -> tuple:
@@ -1239,6 +1247,51 @@ def test_a_borrower_drawing_an_accepted_request_closes_the_request(tmp_path):
     again = clear(world, 4, ("lender", "disburse", {"request": "req:borrower-c:r1",
                                                     "amount": usd(100_000)}))
     assert verdict(again["i-r4-lender-1"]) == ("rejected", "request_not_open")
+
+
+def offered_world(tmp_path, name: str) -> tuple[World, str]:
+    """A world where the lender, having seen a post, offered borrower-c an advance in round 1;
+    returns it and the offered facility's id."""
+    world = ledger_world(tmp_path, name)
+    world.state.items.append({"id": "p-1", "kind": "public_post", "owner": "feed",
+                              "visible_from_h": 0, "text": "borrower-c's buyer pays late"})
+    out = clear(world, 1, ("lender", "offer", {"amount": usd(100_000), "to": "borrower-c"}),
+                evidence={"i-r1-lender-1": ["p-1"]})
+    assert verdict(out["i-r1-lender-1"]) == ("accepted", None)
+    (offer,) = [i for i in world.state.items if i["id"].startswith("offer:")]
+    return world, offer["facility_id"]
+
+
+@pytest.mark.parametrize("named", [True, False], ids=["named", "implicit"])
+@pytest.mark.parametrize("cites", ["offer", "contract"])
+def test_an_offer_backed_draw_traces_back_to_the_lenders_offer(tmp_path, named, cites):
+    """The facility a draw names is not an item id, and an implicit draw names none: the trace
+    follows the offer the clearing drew on, whichever item the borrower cited."""
+    world, facility_id = offered_world(tmp_path, f"draw-{cites}-{named}")
+    params = {"amount": usd(100_000), "from": "lender",
+              **({"facility_id": facility_id} if named else {})}
+    drawn = clear(world, 2, ("borrower-c", "request_advance", params),
+                  evidence={"i-r2-borrower-c-1": [f"{cites}:{facility_id}"]})
+    journal = drawn["i-r2-borrower-c-1"].journal
+    assert journal.kind == "advance_disbursal"
+    assert world.trace(journal.journal_id) == [
+        journal.journal_id, "i-r2-borrower-c-1", f"offer:{facility_id}", "i-r1-lender-1", "p-1"]
+
+
+def test_a_draw_on_an_accepted_request_traces_through_the_accept_to_the_request(tmp_path):
+    world = ledger_world(tmp_path, "accepted")
+    world.state.items.append({"id": "p-1", "kind": "public_post", "owner": "feed",
+                              "visible_from_h": 0, "text": "rumour"})
+    advance = {"amount": usd(100_000), "from": "lender"}
+    clear(world, 1, ("borrower-c", "request_advance", advance),
+          evidence={"i-r1-borrower-c-1": ["p-1"]})
+    clear(world, 2, ("lender", "accept", {"request": "req:borrower-c:r1"}),
+          evidence={"i-r2-lender-1": ["req:borrower-c:r1"]})
+    drawn = clear(world, 3, ("borrower-c", "request_advance", advance))  # cites nothing
+    journal = drawn["i-r3-borrower-c-1"].journal
+    assert world.trace(journal.journal_id) == [
+        journal.journal_id, "i-r3-borrower-c-1", "offer:adv:req:borrower-c:r1", "i-r2-lender-1",
+        "req:borrower-c:r1", "i-r1-borrower-c-1", "p-1"]
 
 
 def deliver_round(world: World) -> None:

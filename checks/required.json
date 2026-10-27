@@ -196,7 +196,12 @@
       "tests/simulation/test_coupled.py::test_clearing_order_does_not_depend_on_arrival",
       "tests/simulation/test_coupled.py::test_the_coordinator_sorts_whatever_order_it_is_handed",
       "tests/simulation/test_coupled.py::test_a_late_receipt_is_overdue_before_observations",
-      "tests/simulation/test_coupled.py::test_an_offered_facility_clears_through_disburse_and_release_withdraws_an_offer"
+      "tests/simulation/test_coupled.py::test_an_offered_facility_clears_through_disburse_and_release_withdraws_an_offer",
+      "tests/simulation/test_coupled.py::test_an_offer_backed_draw_traces_back_to_the_lenders_offer[offer-named]",
+      "tests/simulation/test_coupled.py::test_an_offer_backed_draw_traces_back_to_the_lenders_offer[offer-implicit]",
+      "tests/simulation/test_coupled.py::test_an_offer_backed_draw_traces_back_to_the_lenders_offer[contract-named]",
+      "tests/simulation/test_coupled.py::test_an_offer_backed_draw_traces_back_to_the_lenders_offer[contract-implicit]",
+      "tests/simulation/test_coupled.py::test_a_draw_on_an_accepted_request_traces_through_the_accept_to_the_request"
     ]},
     {"id": "failed_round_rolls_back", "name": "failed round rolls back", "tests": [
       "tests/simulation/test_coupled.py::test_a_round_that_fails_mid_way_leaves_the_ledger_untouched",
