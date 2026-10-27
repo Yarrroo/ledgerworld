@@ -22,9 +22,7 @@ Each world has its own RNG, so one branch's draws never move another's: ``import
 OASIS's and camel's module-level draws (``oasis_finance.draws``) to the RNG of the world whose
 platform task or ``env.step`` is running.
 
-A step's social writes commit in the order of the agents it drives (``SocialOrder``), so OASIS
-numbers the round's posts the same way however fast each model answers, and a replay, which
-answers at once, shows the next round the observations that were recorded.
+The world's agents share one ``SocialOrder``, which the coordinator begins for step 5.
 """
 
 from __future__ import annotations
@@ -253,7 +251,6 @@ class World:
         # The platform task and every step (its agents' tasks too) draw from this world's RNG.
         self._own_draws(platform, "running")
         self._own_draws(self.env, "step")
-        self._order_social_writes()
         await self.env.reset()
         platform.sandbox_clock.time_step = self.clock.round
         self.rng.seed(self.seed)  # a started world draws from its seed, whatever reset drew
@@ -271,21 +268,6 @@ class World:
                 WORLD_RNG.reset(token)
 
         setattr(obj, name, owned)
-
-    def _order_social_writes(self) -> None:
-        """Begin each ``env.step`` with the agents its model actions drive, in the order given:
-        the order their social calls commit in."""
-        step = self.env.step
-        llm_action = self.oasis.LLMAction
-
-        async def ordered(actions: Mapping[Any, Any]) -> Any:
-            self.social_order.begin(
-                agent.social_agent_id for agent, action in actions.items()
-                if any(isinstance(a, llm_action)
-                       for a in (action if isinstance(action, list) else [action])))
-            return await step(actions)
-
-        self.env.step = ordered
 
     async def close(self) -> None:
         if self.env is not None and not self.env.platform_task.done():

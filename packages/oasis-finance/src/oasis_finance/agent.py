@@ -7,9 +7,8 @@
   empty (upstream reads empty as "every social tool") and never with ``purchase_product``.
 - S5: ``perform_action_by_llm`` shows the scoped financial observation first, then the social
   feed, and judges the whole response through the guardrail before any tool runs; finance calls
-  only queue C1 intents, and the accepted response's social calls run on the platform. With a
-  ``SocialOrder`` they run in the step's agent order, whatever order the models answer in, so a
-  post's platform id does not depend on which model was faster.
+  only queue C1 intents, and the accepted response's social calls run on the platform, in the
+  agent's turn of its ``SocialOrder``.
 - S6: ``perform_action_by_data`` runs only the actor's social subset; a finance act by data has
   no observation to cite and is refused. ``perform_action_by_hci`` is refused.
 - S8: the tool set is sealed once built (camel's registry refuses changes, and the social offer
@@ -52,14 +51,15 @@ def _name(action: str | ActionType) -> str:
 
 
 class SocialOrder:
-    """The order one step's agents commit their social calls in: each waits until every agent
-    before it has finished its turn, posted or not, failed or not.
+    """The order one step's agents commit their social calls in: an agent with calls to make
+    waits until every agent before it has finished its turn, posted or not, failed or not.
 
     The platform numbers posts as their writes arrive. Models answer in any order (a live one
     when it likes, a replayed one at once), so without this order a replay can hand the same
     posts other ids and show the next round another observation. Only the social calls wait: the
     feed is read and the model asked concurrently, as before. Upstream's step semaphore admits the
-    agents in this same order, so an agent that waits never holds a slot an earlier one needs.
+    agents in the step's order, so begun in that order an agent that waits never holds a slot an
+    earlier one needs. Outside a step (before ``begin``, after ``end``) nothing waits.
     """
 
     def __init__(self) -> None:
@@ -68,6 +68,10 @@ class SocialOrder:
     def begin(self, agent_ids: Iterable[int]) -> None:
         """A new step, its agents in the order they commit."""
         self._turns = {agent_id: asyncio.Event() for agent_id in agent_ids}
+
+    def end(self) -> None:
+        """The step is over, however it ended: a turn that never started holds nobody up."""
+        self._turns = {}
 
     async def wait(self, agent_id: int) -> None:
         """Until every agent before ``agent_id`` is done; at once for one outside the step."""
@@ -89,7 +93,6 @@ class FinanceAgent(SocialAgent):
     """One actor in one branch: its persona, its finance tools on the branch's queue, its feed."""
 
     _sealed = False
-    social_order: SocialOrder | None = None  # set by the world that steps this agent
 
     def __init__(
         self,
@@ -118,6 +121,7 @@ class FinanceAgent(SocialAgent):
         self._observed = False  # an observation given and not yet acted on
         self.last_turn: TurnResult | None = None
         self.last_social_results: tuple[tuple[str, Any], ...] = ()
+        self.social_order = SocialOrder()  # never begun, until a world shares its own
         finance = [FunctionTool(tool, openai_tool_schema=tool.openai_tool_schema)
                    for tool in make_finance_tools(queue, actor).values()]
         super().__init__(
@@ -183,30 +187,30 @@ class FinanceAgent(SocialAgent):
         (``last_turn.alert``). An error from the model or the platform is raised, not returned:
         the round fails and rolls back (system brief §7.2).
         """
-        order = self.social_order
         try:
-            if not self._observed:
-                raise RuntimeError(f"{self.finance_actor.actor_id} was asked to act before it "
-                                   "was given its observation")
-            observation, self._observed = self.observation, False
-            # The follower and follow counts are not part of the prompt upstream renders.
-            feed = await self.env.to_text_prompt(include_followers=False, include_follows=False)
-            result = await arun_turn(
-                amodel_responder(self.model_backend), self.intent_queue, self.finance_actor,
-                observation, social_prompt=f"Here is your social media environment: {feed}",
-                social=self._social_schemas,
-                system=self.system_message.content if self.system_message else None,
-            )
-            # Recorded before the posts run: a platform error leaves this turn, not the last, on
-            # view.
-            self.last_turn, self.last_social_results = result, ()
-            if order is not None:
-                await order.wait(self.social_agent_id)
-            outcomes = tuple([(call.name, await self._social_tools[call.name].async_call(
-                **call.arguments)) for call in result.social])
+            return await self._turn()
         finally:  # a turn that failed must not hold up the agents after it
-            if order is not None:
-                order.done(self.social_agent_id)
+            self.social_order.done(self.social_agent_id)
+
+    async def _turn(self) -> TurnResult:
+        if not self._observed:
+            raise RuntimeError(f"{self.finance_actor.actor_id} was asked to act before it was "
+                               "given its observation")
+        observation, self._observed = self.observation, False
+        # The follower and follow counts are not part of the prompt upstream renders.
+        feed = await self.env.to_text_prompt(include_followers=False, include_follows=False)
+        result = await arun_turn(
+            amodel_responder(self.model_backend), self.intent_queue, self.finance_actor,
+            observation, social_prompt=f"Here is your social media environment: {feed}",
+            social=self._social_schemas,
+            system=self.system_message.content if self.system_message else None,
+        )
+        # Recorded before the posts run: a platform error leaves this turn, not the last, on view.
+        self.last_turn, self.last_social_results = result, ()
+        if result.social:
+            await self.social_order.wait(self.social_agent_id)
+        outcomes = tuple([(call.name, await self._social_tools[call.name].async_call(
+            **call.arguments)) for call in result.social])
         self.last_social_results = outcomes
         self._remember(observation, result, outcomes)
         return result

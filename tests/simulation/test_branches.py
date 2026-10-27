@@ -75,13 +75,16 @@ def recs(records) -> list[tuple]:
     return [(r.actor_id, r.key, r.value, r.round) for r in records]
 
 
-def parent_world(tmp: Path, plan: ScriptedPlan, **kw):
-    """main on the coupled lender world, its model actors driven by ``plan``."""
+def parent_world(tmp: Path, plan: ScriptedPlan, *, model=None, posters=(), **kw):
+    """main on the coupled lender world, its model actors driven by ``plan`` (or ``model``);
+    each of ``posters`` may also post."""
     (tmp / PARENT).mkdir()
+    specs = [coupled.ACTOR_SPECS[a] for a in coupled.MODEL_ACTORS + ["payroll", "market-maker"]]
     return coupled.World(
         WORLD_ID, PARENT, coupled.snapshot(treasury=False),
-        [coupled.ACTOR_SPECS[a] for a in coupled.MODEL_ACTORS + ["payroll", "market-maker"]],
-        model=coupled.plan_model(plan), workdir=tmp / PARENT, **kw)
+        [{**s, "tools": [*s["tools"], "create_post"]} if s["actor_id"] in posters else s
+         for s in specs],
+        model=model or coupled.plan_model(plan), workdir=tmp / PARENT, **kw)
 
 
 def journal_bytes(world) -> bytes:
@@ -703,15 +706,23 @@ def test_siblings_draw_alike_whatever_order_they_run_in(tmp_path, order):
 POSTERS = ("borrower-b", "borrower-c")
 
 
-def posters_world(tmp: Path, branch: str, model) -> coupled.World:
-    """main with both borrowers able to post."""
-    specs = [{**coupled.ACTOR_SPECS[a],
-              "tools": [*coupled.ACTOR_SPECS[a]["tools"], *(["create_post"] if a in POSTERS
-                                                            else [])]}
-             for a in coupled.MODEL_ACTORS + ["payroll", "market-maker"]]
-    (tmp / branch).mkdir()
-    return coupled.World(WORLD_ID, branch, coupled.snapshot(treasury=False), specs, model=model,
-                         workdir=tmp / branch)
+class GatedModel(coupled.ScriptedModel):
+    """A scripted model whose round-1 answer for borrower-b waits until borrower-c has answered;
+    every answer is logged as (round, actor) in the order given."""
+
+    def __init__(self, plan, actor_id, world, answered: dict, log: list) -> None:
+        super().__init__(plan, actor_id, lambda: world.clock.round)
+        self.answered, self.log = answered, log
+
+    async def _arun(self, messages, response_format=None, tools=None):
+        rnd = self.round_source()
+        if (self.actor_id, rnd) == ("borrower-b", 1):
+            await self.answered["borrower-c"].wait()
+        out = await super()._arun(messages, response_format, tools)
+        self.log.append((rnd, self.actor_id))
+        if self.actor_id in self.answered:
+            self.answered[self.actor_id].set()
+        return out
 
 
 def test_concurrent_posts_replay_through_the_following_round(tmp_path):
@@ -722,29 +733,17 @@ def test_concurrent_posts_replay_through_the_following_round(tmp_path):
     plan = ScriptedPlan(copy.deepcopy(coupled.IDLE) + [
         {"actor_id": a, "round": 1, "tool_calls": [
             {"name": "create_post", "args": {"content": f"{a} posts"}}]} for a in POSTERS])
-    answered = {a: asyncio.Event() for a in POSTERS}
+    answered, log = {a: asyncio.Event() for a in POSTERS}, []
 
     def model(actor_id, world):
-        scripted = plan.model(actor_id, lambda: world.clock.round)
-        answer = scripted._arun
-
-        async def barrier(messages, response_format=None, tools=None):
-            if actor_id == "borrower-b" and world.clock.round == 1:
-                await answered["borrower-c"].wait()
-            out = await answer(messages, response_format, tools)
-            if actor_id in answered:
-                answered[actor_id].set()
-            return out
-
-        scripted._arun = barrier
-        return scripted
+        return GatedModel(plan, actor_id, world, answered, log)
 
     def posts(world) -> list[tuple]:
         return world.platform.db.execute(
             "SELECT post_id, user_id, content FROM post ORDER BY post_id").fetchall()
 
     async def go():
-        world = posters_world(tmp_path, PARENT, model)
+        world = parent_world(tmp_path, plan, model=model, posters=POSTERS)
         await world.start()
         cp = checkpoint(world)
         await world.run(2)
@@ -758,8 +757,28 @@ def test_concurrent_posts_replay_through_the_following_round(tmp_path):
         return out
 
     original, again, calls, replay_calls, journals, replay_journals = asyncio.run(go())
+    first = [a for r, a in log if r == 1 and a in POSTERS]
+    assert first == ["borrower-c", "borrower-b"], "the barrier reversed the answers"
     assert [c for _, _, c in original] == [f"{a} posts" for a in POSTERS]
     assert again == original
     assert {c.round for c in replay_calls} == {1, 2}
     assert replay_calls == calls
     assert replay_journals == journals
+
+
+def test_a_step_that_fails_before_any_turn_holds_no_later_turn(tmp_path):
+    """A step that fails before its agents' turns start leaves no order behind: an agent asked
+    to act afterwards, outside a step, is not held for agents that never ran."""
+    def refuse(agent):
+        raise coupled.InjectedFault("before any turn")
+
+    async def go():
+        async with parent_world(tmp_path, ScriptedPlan(copy.deepcopy(coupled.IDLE))) as world:
+            world.env._perform_llm_action = refuse
+            with pytest.raises(coupled.InjectedFault):
+                await world.run(1)
+            with world.store.reading() as conn:
+                world.observe_all(conn)
+            return await asyncio.wait_for(world.agents["borrower-c"].perform_action_by_llm(), 5)
+
+    assert [i.type for i in asyncio.run(go()).intents] == ["no_action"]
