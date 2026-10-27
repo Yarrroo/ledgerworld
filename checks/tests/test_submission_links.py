@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import http.client
+import re
 import shutil
 import subprocess
 import sys
@@ -14,8 +16,8 @@ from checks import submission, submission_links
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).parent / "fixtures" / "submission_links"
-REPO = "https://github.com/Yarrroo/ledgerworld"
-DEMO = "https://peterson-prefix-assumptions-hits.trycloudflare.com"
+REPO = "https://github.com/fixture-owner/fixture-repo"
+DEMO = "https://fixture-demo.trycloudflare.com"
 # Offline ids only; no test opens these URLs or claims a published video.
 SHORT = "https://www.youtube.com/watch?v=Fixture0001"
 LONG = "https://www.youtube.com/watch?v=Fixture0002"
@@ -38,7 +40,7 @@ ANSWERS = {
     SHORT: (200, "youtube_watch_short.html"),
     oembed(LONG): (200, "youtube_oembed.json"),
     LONG: (200, "youtube_watch_long.html"),
-    oembed(BARE): (200, "youtube_oembed.json"),
+    oembed("https://www.youtube.com/watch?v=Fixture0003"): (200, "youtube_oembed.json"),
     "https://www.youtube.com/watch?v=Fixture0003": (200, "youtube_watch_no_metadata.html"),
     oembed(PRIVATE): (401, ""),
     f"https://vimeo.com/api/oembed.json?url={urllib.parse.quote(VIMEO, safe='')}":
@@ -67,8 +69,13 @@ class Recorded:
 
 @pytest.fixture
 def doc(tmp_path: Path) -> Path:
+    """The real document with its Repository and Demo swapped for the offline fixtures."""
     path = tmp_path / "submission.md"
     shutil.copy(ROOT / "docs/submission.md", path)
+    text = path.read_text(encoding="utf-8")
+    text = re.sub(r"^- Repository: \S+$", f"- Repository: {REPO}", text, flags=re.MULTILINE)
+    text = re.sub(r"^- Demo: \S+$", f"- Demo: {DEMO}", text, flags=re.MULTILINE)
+    path.write_text(text, encoding="utf-8")
     return path
 
 
@@ -187,3 +194,68 @@ def test_cli_without_a_mode_is_bad_usage():
 def test_page_length_is_the_videos_own_not_a_recommendations():
     page = (FIXTURES / "youtube_watch_with_recommendation.html").read_text(encoding="utf-8")
     assert submission_links.page_seconds(page) == 253
+
+
+def test_youtube_oembed_is_asked_with_the_canonical_watch_url():
+    live = "https://www.youtube.com/live/Fixture0001"
+    fetch = Recorded()
+    assert submission_links.vet_video(live, fetch) == (True, "youtube: public, 4:13")
+    assert fetch.asked[0] == oembed(SHORT)
+
+
+def test_fractional_iso_length_falls_back_to_other_page_metadata():
+    page = '<meta itemprop="duration" content="PT4M13.5S"><meta property="og:video:duration" content="253">'
+    assert submission_links.page_seconds(page) == 253
+
+
+def test_apply_skips_a_video_line_inside_a_code_fence(tmp_path):
+    path = tmp_path / "s.md"
+    path.write_text("## Links\n\n```\n- Video: example\n```\n- Video: pending\n", encoding="utf-8")
+    submission_links.apply_video(path, SHORT)
+    assert path.read_text(encoding="utf-8") == f"## Links\n\n```\n- Video: example\n```\n- Video: {SHORT}\n"
+
+
+def test_health_url_replaces_the_demo_path_and_query(doc):
+    text = doc.read_text(encoding="utf-8").replace(f"- Demo: {DEMO}", f"- Demo: {DEMO}/?tab=demo")
+    fetch = Recorded(**{f"{DEMO}/?tab=demo": (200, "")})
+    rows = submission_links.probe(text, fetch)
+    assert rows[2][:3] == ("Demo health", f"{DEMO}/api/v1/health", True)
+
+
+def test_a_refused_video_still_runs_the_probe(doc, capsys):
+    assert submission_links.main(["--video", LONG, "--probe", "--file", str(doc)], Recorded()) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("refused: Video") and "ok: Repository" in out
+
+
+class Response:
+    def __init__(self, final: str, error: Exception | None = None):
+        self.status, self.final, self.error = 200, final, error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def geturl(self) -> str:
+        return self.final
+
+    def read(self, _size: int) -> bytes:
+        if self.error:
+            raise self.error
+        return b"<html>sign in</html>"
+
+
+def test_a_connection_cut_mid_body_is_no_answer_not_a_traceback(monkeypatch):
+    monkeypatch.setattr(submission_links.urllib.request, "urlopen",
+                        lambda *a, **k: Response(DEMO, http.client.IncompleteRead(b"")))
+    with pytest.raises(OSError):
+        submission_links.fetch(DEMO)
+
+
+def test_a_drive_redirect_to_sign_in_is_not_a_public_file(monkeypatch):
+    monkeypatch.setattr(submission_links.urllib.request, "urlopen",
+                        lambda *a, **k: Response("https://accounts.google.com/v3/signin/identifier?x=1"))
+    passes, reason = submission_links.vet_video(DRIVE)
+    assert not passes and "sign-in" in reason

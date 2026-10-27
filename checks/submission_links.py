@@ -19,6 +19,7 @@ someone supplies; it never supplies one.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import re
 import sys
@@ -48,10 +49,12 @@ def fetch(url: str) -> tuple[int, str]:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
+            if host_of(response.geturl()) == "accounts.google.com":
+                return 401, ""  # redirected to a sign-in: nothing here is public
             return response.status, response.read(2_000_000).decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         return exc.code, ""
-    except (urllib.error.URLError, ValueError) as exc:
+    except (urllib.error.URLError, http.client.HTTPException, ValueError) as exc:
         raise OSError(str(exc)) from exc
 
 
@@ -81,6 +84,8 @@ def video_kind(url: str) -> str | None:
 
 
 def oembed_url(kind: str, url: str) -> str | None:
+    if kind == "youtube":
+        url = watch_url(url)
     quoted = urllib.parse.quote(url, safe="")
     return {
         "youtube": f"https://www.youtube.com/oembed?format=json&url={quoted}",
@@ -97,17 +102,17 @@ def watch_url(url: str) -> str:
 
 
 def iso_seconds(value: str) -> int | None:
-    found = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", value)
+    found = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?", value)
     if not found or not any(found.groups()):
         return None
-    hours, minutes, seconds = (int(part or 0) for part in found.groups())
-    return hours * 3600 + minutes * 60 + seconds
+    hours, minutes, seconds = (float(part or 0) for part in found.groups())
+    return int(hours * 3600 + minutes * 60 + seconds)
 
 
 def page_seconds(html: str) -> int | None:
     """A duration a page states about itself, or None; never an estimate."""
     found = re.search(r'itemprop="duration"\s+content="(PT[^"]+)"', html)
-    if found:
+    if found and iso_seconds(found[1]) is not None:
         return iso_seconds(found[1])
     # Only the player's own videoDetails: recommendations carry lengthSeconds of other videos.
     found = re.search(r'"videoDetails"\s*:\s*\{[^{}]*?"lengthSeconds"\s*:\s*"(\d+)"', html)
@@ -148,6 +153,8 @@ def vet_video(url: str, get: Fetch = fetch) -> tuple[bool, str]:
                 seconds = int(data["duration"])
         if seconds is None:
             status, body = get(watch_url(url) if kind == "youtube" else url)
+            if status in (401, 403):
+                return False, f"{kind}: asks for a sign-in, so the video is not public (HTTP {status})"
             if status != 200:
                 return False, f"{kind}: video page answers HTTP {status}"
             if kind == "drive" and re.search(r"accounts\.google\.com/(?:ServiceLogin|v3/signin)", body):
@@ -184,8 +191,8 @@ def probe_one(url: str, get: Fetch) -> tuple[bool, str]:
 def probe(text: str, get: Fetch = fetch) -> list[tuple[str, str, bool, str]]:
     """One (label, url, alive, detail) per link: Repository, Demo, Demo health, Video."""
     links = read_links(text)
-    demo = links["Demo"].rstrip("/")
-    health = f"{demo}/api/v1/health" if demo else ""
+    demo = urllib.parse.urlsplit(links["Demo"])
+    health = demo._replace(path="/api/v1/health", query="", fragment="").geturl() if demo.netloc else ""
     pages = (("Repository", links["Repository"]), ("Demo", links["Demo"]), ("Demo health", health))
     rows = [(label, url, *probe_one(url, get)) for label, url in pages]
     video = links["Video"]
@@ -196,8 +203,9 @@ def probe(text: str, get: Fetch = fetch) -> list[tuple[str, str, bool, str]]:
 def apply_video(path: Path, url: str) -> None:
     """Rewrite only the `- Video:` line of the Links section; every other byte stays."""
     raw = path.read_bytes().decode("utf-8")
-    links = re.search(r"^## Links[ \t]*\n(.*?)(?=^## |^# |\Z)", outside_fences(raw), re.MULTILINE | re.DOTALL)
-    line = VIDEO_LINE.search(raw, links.start(1), links.end(1)) if links else None
+    masked = outside_fences(raw)
+    links = re.search(r"^## Links[ \t]*\n(.*?)(?=^## |^# |\Z)", masked, re.MULTILINE | re.DOTALL)
+    line = VIDEO_LINE.search(masked, links.start(1), links.end(1)) if links else None
     if line is None:
         raise ValueError(f"{path}: no '- Video:' line in a ## Links section")
     begin, end = line.span()
@@ -219,9 +227,8 @@ def main(argv: list[str] | None = None, get: Fetch = fetch) -> int:
     if args.video:
         passes, reason = vet_video(args.video, get)
         print(f"{'ok' if passes else 'refused'}: Video {args.video} ({reason})")
-        if not passes:
-            return 1
-        if args.apply:
+        failed = not passes
+        if args.apply and passes:
             try:
                 apply_video(args.file, args.video)
             except (OSError, ValueError) as exc:
