@@ -39,10 +39,13 @@ from tests.execution.test_gateway import BASE as APPROVAL
 from tests.execution.test_gateway import (
     NOW,
     OBSERVED,
+    REPAY,
     World,
     bind_terms,
     fund,
+    legs_of,
     plan_of,
+    repayable,
     snapshot,
 )
 from tests.finance.test_fixtures import ACCOUNT, h, horizon, lf1
@@ -68,11 +71,11 @@ def test_every_hunt_is_carried():
 
 # ----------------------------------------------------------------------------- the gateway
 
-def approve(world: World, approval_id: str, legs: list[dict], *, at=None):
-    """A validly bound approval of `legs` on the observed snapshot, recorded at `at`."""
+def approve(world: World, approval_id: str, legs: list[dict]):
+    """A validly bound approval of `legs` on the observed snapshot, bound at the world's now."""
     terms = copy.deepcopy(APPROVAL) | {"approval_id": approval_id, "legs": legs}
     approval = bind(plan_of(terms), terms["snapshot_id"], terms["approver"], terms["mode"],
-                    now=at or world.now, approval_id=approval_id)
+                    now=world.now, approval_id=approval_id)
     world.gateway.record(approval)
     return approval
 
@@ -93,11 +96,11 @@ def assert_refused_untouched(world: World, approval, code: str) -> Refusal:
     return verdict
 
 
-def refresh(world: World) -> None:
-    """Every known account observed at the gateway's now: fresh, nothing landed meanwhile."""
+def refresh(world: World, at=None) -> None:
+    """Every known account observed at `at` (the gateway's now): nothing landed meanwhile."""
     for row in world.store.rows("account_observations"):
         if row["observability"] == "known":
-            world.store.observe(row["account_id"], "known", world.now)
+            world.store.observe(row["account_id"], "known", at or world.now)
 
 
 # --------------------------------------------------------------------------------- hunts
@@ -235,6 +238,20 @@ def test_a_settled_advance_lands_no_overdue_arrival():
     assert world.store.view("lender/operating").settled_minor == before - leg.amount_minor
 
 
+def test_a_settled_repayment_lands_no_overdue_arrival():
+    """The repayment's settle: the borrower's overdue receivable stays pending, not cash."""
+    world = World()
+    repayable(world)
+    world.store.expect(ACCOUNT, "in", 500_000, NOW - timedelta(hours=1), kind="receivable",
+                       flow_id="late-in")
+    before = world.store.view(ACCOUNT).settled_minor
+    (leg,) = world.execute(legs_of("apr-hunt-repay-land", REPAY)).legs
+    assert leg.state == "settled"
+    (late,) = [f for f in world.store.rows("expected_flows") if f["flow_id"] == "late-in"]
+    assert late["state"] == "pending"
+    assert world.store.view(ACCOUNT).settled_minor == before - leg.amount_minor
+
+
 def test_obligation_removed_by_inaction():
     case = expect("obligation-removed-by-inaction")
     (payroll,) = lf1()["snapshot"]["obligations"]
@@ -308,9 +325,7 @@ def test_stale_balance_executed():
     world = World()
     stale_h = 7
     assert case["world"] == f"LF-1 with as_of {stale_h} h old"
-    for row in world.store.rows("account_observations"):
-        if row["observability"] == "known":
-            world.store.observe(row["account_id"], "known", NOW - timedelta(hours=stale_h))
+    refresh(world, NOW - timedelta(hours=stale_h))
     view = world.store.view(ACCOUNT)
     read = spendability(view, NOW, NOW)
     assert (read.state, read.authority) == ("stale", case["expect"]["authority"])
@@ -320,10 +335,7 @@ def test_stale_balance_executed():
     world.gateway.record(approval)
     assert_refused_untouched(world, approval, case["expect"]["rejected"])
     # Six hours is still fresh; one second more is not.
-    refresh_at = NOW - timedelta(hours=6)
-    for row in world.store.rows("account_observations"):
-        if row["observability"] == "known":
-            world.store.observe(row["account_id"], "known", refresh_at)
+    refresh(world, NOW - timedelta(hours=6))
     assert spendability(world.store.view(ACCOUNT), NOW, NOW).authority == "full"
     world.now = NOW + timedelta(seconds=1)
     assert_refused_untouched(world, approval, case["expect"]["rejected"])
@@ -333,13 +345,7 @@ def test_timeout_retried_blindly():
     """The payroll transfer is created, then the wire dies and the provider stays down."""
     case = expect("timeout-retried-blindly")
     world = World()
-
-    def accepted_then_lost():  # the create landed; every lookup until restart gets a 500
-        for _ in range(3):
-            world.fake.respond_next(500, {"code": "internal_error", "message": "down"})
-        raise TransportTimeout(after_send=True)
-
-    world.wire.after_create = accepted_then_lost
+    world.wire.after_create = lost(world)  # every lookup until the next run gets a 500
     approval = approve(world, "apr-hunt-timeout", [payout(1, 5_000_000,
                                                           APPROVAL["legs"][1]["funded_by"])])
     world.gateway.execute(approval, current_snapshot_id=OBSERVED)

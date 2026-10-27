@@ -392,7 +392,6 @@ class Gateway:
         Overdue arrivals add nothing (`observed_view`); one held reservation funds one leg, a
         facility disburses or repays through one leg at a time, and a pool's draws share K_p."""
         claims = _Claims()
-        spend, owed = claims.spend, claims.owed
         wallet: dict[tuple[str, bool], int] = defaultdict(int)
         for leg in approval.legs:
             if refusal := self._check_leg(approval.entity, leg, now, claims):
@@ -400,13 +399,14 @@ class Gateway:
             if (leg.kind, self.leg_mode) in DEBITS_WALLET:
                 on_behalf = self.leg_mode == "A" and leg.kind == "payout"
                 wallet[(leg.amount.currency, on_behalf)] += leg.amount.minor
-        for account_id in sorted(spend.keys() | owed.keys()):
+        for account_id in sorted(claims.spend.keys() | claims.owed.keys()):
             view = observed_view(self.store.view(account_id), now)
-            if spend[account_id]:
-                refusal = check_outflow(view, spend[account_id], now)
+            spend = claims.spend[account_id]
+            if spend:
+                refusal = check_outflow(view, spend, now)
                 if refusal is not None:
-                    return _from_ledger(refusal, f"{account_id} pays {spend[account_id]}")
-            total, s_now = spend[account_id] + owed[account_id], spendability(view, now, now).value
+                    return _from_ledger(refusal, f"{account_id} pays {spend}")
+            total, s_now = spend + claims.owed[account_id], spendability(view, now, now).value
             if total > s_now:
                 return binding.Refusal("insufficient_spendable",
                                        f"{account_id} pays {total} of {s_now} spendable")

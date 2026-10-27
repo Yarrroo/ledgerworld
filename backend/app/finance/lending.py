@@ -159,7 +159,8 @@ def _payable_from(store: LedgerStore, c: Connection, account_id: str, amount: in
     """A contractual payment (a line draw, a repayment) needs a known, fresh balance that covers
     it in S(now); the reserve floor does not apply, since the payment is owed, not chosen.
     S(now) counts arrivals due by `now`, so the caller lands them (`land_arrivals`) before it
-    posts."""
+    posts, unless it checked the payment against S less overdue arrivals itself (the gateway's
+    preflight, `land=False`)."""
     view = store.view(account_id, conn=c)
     state = state_of(view, now)
     if state == "unknown":
@@ -202,7 +203,8 @@ def disburse(store: LedgerStore, facility_id: str, *, now: datetime,
         if refusal is not None:
             raise refusal
         # Checked as cleared (K_p on settled cash, S counting arrivals due now); the source's due
-        # arrivals land before the posting, so it does not fall below settled.
+        # arrivals land before the posting, so it does not fall below settled. Without `land`
+        # the gateway's preflight already held the principal within S less overdue arrivals.
         if land:
             land_arrivals(store, source, now, round=round, conn=c)
         income, expense = f"{f.pool}/fee-income", f"{f.borrower}/fee-expense"
