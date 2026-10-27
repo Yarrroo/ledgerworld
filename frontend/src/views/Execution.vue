@@ -444,14 +444,15 @@ watch(() => state.body, (body) => {
 
 // The view is reused across query-only navigation: a new run or execution is a new screen.
 watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
-  if (flow.submitting) return
-  flow.open = false
-  Object.assign(flow, { approval: null, invalid: '', executed: false, message: '' })
-  followed = false
-  followedId.value = null
-  activeId.value = null
-  live.value = null
-  clearTimeout(timer)
+  if (!flow.submitting) { // an in-flight POST keeps its review until it is answered
+    flow.open = false
+    Object.assign(flow, { approval: null, invalid: '', executed: false, message: '' })
+    followed = false
+    followedId.value = null
+    activeId.value = null
+    live.value = null
+    clearTimeout(timer)
+  }
   refresh()
 })
 

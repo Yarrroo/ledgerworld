@@ -667,3 +667,21 @@ describe('vet round 2', () => {
     expect(text(w, 'not-found')).toContain('unavailable')
   })
 })
+
+describe('vet round 2, re-read', () => {
+  it('a navigation during an in-flight POST still reloads the screen for the new run', async () => {
+    let release
+    const { w, calls } = await reviewReady({
+      'POST /executions': () => new Promise((resolve) => { release = resolve }),
+      'GET /decisions/run-2': { ...decisionsBody(), run_id: 'run-2' }
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    expect(calls.some((x) => x.path === '/decisions/run-2')).toBe(true)
+    expect(text(w, 'context')).toContain('Run run-2')
+    release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    await flushPromises()
+  })
+})
