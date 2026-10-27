@@ -691,9 +691,10 @@ describe('unmount with a request pending', () => {
   const gets = (calls, path) => calls.filter((x) => x.method === 'GET' && x.path === path)
   const held = () => { let release; const promise = new Promise((resolve) => { release = resolve }); return { promise, release } }
 
-  /** Leave the screen: the token is forgotten first, as afterEach would, then the view goes. */
+  /** Leave the screen: any token is forgotten first, as afterEach would, then the view goes. */
   async function leave (w) {
-    await w.get('[data-test="forget-token"]').trigger('click')
+    const forget = w.find('[data-test="forget-token"]')
+    if (forget.exists()) await forget.trigger('click')
     mounted.splice(mounted.indexOf(w), 1)
     w.unmount()
   }
@@ -712,8 +713,7 @@ describe('unmount with a request pending', () => {
     vi.advanceTimersByTime(5000)
     await flushPromises()
     expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
-    mounted.splice(mounted.indexOf(w), 1)
-    w.unmount()
+    await leave(w)
     pending.release(executionBody({ legs: [sentPayout()] }))
     await flushPromises()
     vi.advanceTimersByTime(30000)
