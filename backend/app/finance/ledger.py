@@ -13,7 +13,19 @@ from datetime import datetime, timedelta
 from sqlalchemy import Connection, insert
 
 from . import contracts
-from .models import HORIZON, Journal, LedgerRefusal, Posting, lending_pools
+from .models import (
+    HORIZON,
+    Journal,
+    LedgerRefusal,
+    Posting,
+    accounts,
+    bounded_id,
+    expected_flows,
+    journals,
+    lending_pools,
+    pledges,
+    reservations,
+)
 from .schemas import Account, CommittedLine, Snapshot
 from .spendability import AccountView, headroom, spendability, state_of
 from .store import OPEN_OBLIGATION, LedgerStore, minor_amount
@@ -143,11 +155,12 @@ def settle_due(store: LedgerStore, now: datetime, *, round: int = 0,
                     store.set_obligation_state(ob.obligation_id, "missed", conn=c)
                     continue
                 store.attach_reservation(ob.obligation_id, reservation_id, conn=c)
-            flow_id = store.commit(reservation_id, due_at=now, flow_id=f"out:{ob.obligation_id}",
-                                   kind=ob.kind, conn=c)
-            done.append(store.settle_flow(flow_id, counterparty=payee(ob.currency), at=now,
-                                          journal_id=f"settle:{ob.obligation_id}", round=round,
-                                          conn=c))
+            flow_id = store.commit(
+                reservation_id, due_at=now, kind=ob.kind, conn=c,
+                flow_id=bounded_id(expected_flows.c.flow_id, f"out:{ob.obligation_id}"))
+            done.append(store.settle_flow(
+                flow_id, counterparty=payee(ob.currency), at=now, round=round, conn=c,
+                journal_id=bounded_id(journals.c.journal_id, f"settle:{ob.obligation_id}")))
     return done
 
 
@@ -197,9 +210,10 @@ def _load_account(store: LedgerStore, c: Connection, a: Account, as_of: datetime
                        floor_minor=a.floor.minor if a.floor else None,
                        observability=a.observability, as_of=a.as_of, conn=c)
     if b.settled is not None and b.settled.minor:
-        opening = f"{a.id}:opening"
+        opening = bounded_id(accounts.c.account_id, f"{a.id}:opening")
         store.open_account(opening, a.entity, a.currency, kind="external", as_of=a.as_of, conn=c)
-        store.apply(Journal(journal_id=f"open:{a.id}", kind="opening", sim_time=as_of,
+        store.apply(Journal(journal_id=bounded_id(journals.c.journal_id, f"open:{a.id}"),
+                            kind="opening", sim_time=as_of,
                             postings=(Posting(a.id, b.settled.minor),
                                       Posting(opening, -b.settled.minor))), conn=c)
     for flow in b.pending_out:
@@ -214,12 +228,14 @@ def _load_account(store: LedgerStore, c: Connection, a: Account, as_of: datetime
     rest = b.reserved.minor - sum(amount for _, amount, _ in named)
     if rest < 0:
         raise ValueError(f"account {a.id}: named holds exceed its reserved bucket")
-    holds = [*named, *([(f"{a.id}:reserved", rest, "snapshot")] if rest else [])]
+    rest_id = bounded_id(reservations.c.reservation_id, f"{a.id}:reserved")
+    holds = [*named, *([(rest_id, rest, "snapshot")] if rest else [])]
     for reservation_id, amount, purpose in holds:
         store.hold(a.id, amount, now=as_of, reservation_id=reservation_id, purpose=purpose,
                    observed=True, conn=c)
     if b.pledged.minor:
-        store.pledge(a.id, b.pledged.minor, f"{a.id}#snapshot", observed=True, conn=c)
+        ref = bounded_id(pledges.c.collateral_ref, f"{a.id}#snapshot")
+        store.pledge(a.id, b.pledged.minor, ref, observed=True, conn=c)
     for flow in b.pending_in:
         store.expect(a.id, "in", flow.amount.minor, flow.expected_at, kind=flow.kind,
                      flow_id=flow.flow_id, conn=c)

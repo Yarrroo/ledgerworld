@@ -7,6 +7,7 @@ journals. Money is integer minor units (BIGINT) with an ISO-4217 code everywhere
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, get_args
@@ -80,6 +81,19 @@ class Journal:
     source_leg_id: str | None = None
     mode: Literal["simulation", "fake", "sandbox", "sandbox_simulation"] = "simulation"
     seq: int | None = None  # assigned by the store at commit
+
+
+def bounded_id(column: Column, text: str, *, room: int = 0) -> str:
+    """A generated id that fits `column` with `room` characters to spare (SQLite ignores widths).
+
+    One that fits is kept as written; a longer one keeps its head and a hash of the whole, so
+    the same source always gives the same id and two sources never share one.
+    """
+    width = column.type.length - room
+    if len(text) <= width:
+        return text
+    digest = hashlib.sha256(text.encode()).hexdigest()[:16]
+    return f"{text[:width - len(digest) - 1]}~{digest}"
 
 
 metadata = MetaData()

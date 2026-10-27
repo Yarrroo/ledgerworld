@@ -44,6 +44,7 @@ from .models import (
     LedgerRefusal,
     Posting,
     accounts,
+    bounded_id,
     journals,
     lending_pools,
     reservations,
@@ -212,7 +213,8 @@ def disburse(store: LedgerStore, facility_id: str, *, now: datetime,
                  Posting(income, -fee), Posting(payee, f.limit_minor), Posting(expense, fee),
                  Posting(payable, -owed)]
         journal = store.apply(Journal(
-            journal_id=journal_id or f"disburse:{f.facility_id}", kind="advance_disbursal",
+            journal_id=journal_id or bounded_id(journals.c.journal_id, f"disburse:{f.facility_id}"),
+            kind="advance_disbursal",
             round=round, sim_time=now, source_intent_id=source_intent_id,
             source_leg_id=source_leg_id, mode=mode,
             postings=tuple(p for p in lines if p.amount_minor)), conn=c)
@@ -248,7 +250,7 @@ def draw_line(store: LedgerStore, facility_id: str, amount_minor: int, *, now: d
             store.release(held.reservation_id, conn=c)
         _payable_from(store, c, source, amount, now)  # the released hold is free again
         land_arrivals(store, source, now, round=round, conn=c)
-        payable = f"{f.borrower}/line-payable:{f.facility_id}"
+        payable = bounded_id(accounts.c.account_id, f"{f.borrower}/line-payable:{f.facility_id}")
         ensure_account(store, payable, f.borrower, f.currency, "payable", c)
         journal = store.apply(Journal(
             journal_id=journal_id or LedgerStore._next_id(c, journals, f"draw:{f.facility_id}"),
@@ -261,9 +263,10 @@ def draw_line(store: LedgerStore, facility_id: str, amount_minor: int, *, now: d
             rest = held.amount_minor - amount
             new_id = None
             if rest > 0:
+                undrawn = f"{f.facility_id}:undrawn@{journal.seq}"
                 new_id = store.hold(source, rest, now=now, purpose="committed_line",
-                                    reservation_id=f"{f.facility_id}:undrawn@{journal.seq}",
-                                    conn=c)
+                                    reservation_id=bounded_id(reservations.c.reservation_id,
+                                                              undrawn), conn=c)
             set_facility(store, f.facility_id, reservation_id=new_id, conn=c)
         elif f.reservation_id:  # it named a hold no longer held: say so
             set_facility(store, f.facility_id, reservation_id=None, conn=c)

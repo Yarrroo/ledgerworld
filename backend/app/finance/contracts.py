@@ -22,11 +22,11 @@ from .models import (
     Journal,
     Posting,
     accounts,
+    bounded_id,
     facilities,
     journals,
     lending_pools,
     postings,
-    reservations,
 )
 from .schemas import (
     CollateralFacility,
@@ -100,37 +100,17 @@ def repayment_minor(observed_revenue_minor: int | None, repay_share_bps: int,
 
 
 def receivable_account(pool: str, facility_id: str) -> str:
-    return f"{pool}/loan:{facility_id}"
+    return bounded_id(accounts.c.account_id, f"{pool}/loan:{facility_id}")
 
 
 def advance_payable(f: Facility) -> str:
-    return f"{f.borrower}/advance-payable:{f.facility_id}"
+    return bounded_id(accounts.c.account_id, f"{f.borrower}/advance-payable:{f.facility_id}")
 
 
 def repay_journal_id(facility_id: str, period_end: datetime) -> str:
     """One id per facility and period, the same instant in any zone: what makes it repaid once."""
-    return f"repay:{facility_id}:{_naive(period_end):%Y%m%dT%H%M%S%f}Z"
-
-
-def _ids_fit(contract: SnapshotContract) -> None:
-    """Every id this contract will generate fits its column (SQLite ignores widths; PG does not)."""
-    cid, loan = contract.contract_id, receivable_account(contract.lender, contract.contract_id)
-    width = {journals.c.journal_id: [f"open:{loan}"], reservations.c.reservation_id: [],
-             accounts.c.account_id: [f"{loan}:opening"]}
-    if isinstance(contract, CommittedLine):
-        width[journals.c.journal_id].append(f"draw:{cid}-{10**9}")
-        width[reservations.c.reservation_id].append(f"{cid}:undrawn@{10**9}")
-        width[accounts.c.account_id].append(f"{contract.borrower}/line-payable:{cid}")
-    if isinstance(contract, RevenueAdvance):
-        width[journals.c.journal_id] += [f"disburse:{cid}", repay_journal_id(cid, EPOCH)]
-        width[accounts.c.account_id].append(f"{contract.borrower}/advance-payable:{cid}")
-    for column, ids in width.items():
-        if not ids:
-            continue
-        longest = max(ids, key=len)
-        if len(longest) > column.type.length:
-            raise ValueError(f"contract {cid}: id {longest!r} is longer than {column} allows "
-                             f"({column.type.length})")
+    period = f"{_naive(period_end):%Y%m%dT%H%M%S%f}Z"
+    return bounded_id(journals.c.journal_id, f"repay:{facility_id}:{period}")
 
 
 def ensure_account(store: LedgerStore, account_id: str, entity_id: str, currency: str,
@@ -163,7 +143,6 @@ def register(store: LedgerStore, contract: SnapshotContract, *, as_of: datetime,
         # C5 carries no outstanding for an advance; reading it as zero would hide the exposure.
         raise ValueError(f"contract {contract.contract_id}: a {contract.state} advance needs "
                          "its outstanding, which a snapshot does not carry")
-    _ids_fit(contract)
     with store.transaction(conn) as c:
         pool = c.execute(select(lending_pools.c.currency).where(
             lending_pools.c.pool_entity_id == contract.lender)).first()
@@ -183,9 +162,10 @@ def register(store: LedgerStore, contract: SnapshotContract, *, as_of: datetime,
             receivable_account=loan))
         drawn = contract.drawn.minor if isinstance(contract, CommittedLine) else 0
         if drawn:
-            opening = f"{loan}:opening"
+            opening = bounded_id(accounts.c.account_id, f"{loan}:opening")
             ensure_account(store, opening, contract.lender, limit.currency, "external", c)
-            store.apply(Journal(journal_id=f"open:{loan}", kind="opening", sim_time=as_of,
+            store.apply(Journal(journal_id=bounded_id(journals.c.journal_id, f"open:{loan}"),
+                                kind="opening", sim_time=as_of,
                                 postings=(Posting(loan, drawn), Posting(opening, -drawn))),
                         conn=c)
         return facility(store, contract.contract_id, conn=c)

@@ -414,11 +414,14 @@ def test_an_active_advance_in_a_snapshot_is_refused_not_read_as_repaid():
         from_snapshot(LedgerStore("sqlite://"), snap)
 
 
-def test_a_contract_id_too_long_for_its_generated_ids_is_refused_at_load():
+def test_a_contract_id_as_wide_as_its_column_loads_and_disburses():
+    """Its generated ids are bounded to their columns (`models.bounded_id`), not refused."""
     snap = lf2()["snapshot"]
-    next(c for c in snap["contracts"] if c["contract_id"] == "adv-a")["contract_id"] = "a" * 50
-    with pytest.raises(ValueError, match="longer than"):
-        from_snapshot(LedgerStore("sqlite://"), snap)
+    wide = "a" * 64
+    next(c for c in snap["contracts"] if c["contract_id"] == "adv-a")["contract_id"] = wide
+    store = world(snap)
+    journal = disburse(store, wide, now=T0)
+    assert len(journal.journal_id) <= 64 and contracts.facility(store, wide).state == "active"
 
 
 def unheld_line(operating_minor: int = 4500000) -> dict:
