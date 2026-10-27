@@ -492,29 +492,40 @@ class AirwallexClient:
         raw = self._request("POST", "/api/v1/simulation/deposit/create", body)
         return ProviderObject.parse("deposit", raw)
 
-    def list_deposits(self) -> list[ProviderObject]:
-        """Read the deposit list with both required page parameters; never truncate silently."""
-        found = []
+    def _deposit_pages(self):
+        """Fresh list pages with both required parameters; no money fields parsed yet."""
         for page in range(20):
             answer = self._request(
                 "GET", f"/api/v1/deposits?page_num={page}&page_size=100")
-            found.extend(ProviderObject.parse("deposit", item) for item in self._items(answer))
+            items = self._items(answer)
             if not isinstance(answer, dict) or not isinstance(answer.get("has_more"), bool):
                 raise OutcomeUnknown(None, "deposit list has no pagination state")
+            yield items
             if not answer["has_more"]:
-                return found
+                return
         raise OutcomeUnknown(None, "deposit list exceeded 20 pages")
 
+    def list_deposits(self) -> list[ProviderObject]:
+        """Read the full bounded deposit inventory; never truncate silently."""
+        return [ProviderObject.parse("deposit", item)
+                for items in self._deposit_pages() for item in items]
+
     def find_deposit(self, reference: str) -> list[ProviderObject]:
-        """Deposits have no request_id; the gateway's exact reference binds them to a leg."""
-        return [obj for obj in self.list_deposits() if obj.raw.get("reference") == reference]
+        """Exact reference lookup; read every page to preserve ambiguity detection."""
+        return [ProviderObject.parse("deposit", item)
+                for items in self._deposit_pages() for item in items
+                if isinstance(item, dict) and item.get("reference") == reference]
 
     def get_deposit(self, provider_id: str) -> ProviderObject:
-        found = [obj for obj in self.list_deposits() if obj.provider_id == provider_id]
-        if len(found) != 1:
-            raise OutcomeUnknown(None, f"deposit lookup found {len(found)} objects",
-                                 provider_id=provider_id)
-        return found[0]
+        """Provider ids are unique; do not require unrelated history to be readable."""
+        for items in self._deposit_pages():
+            found = [item for item in items if isinstance(item, dict)
+                     and (item.get("id") or item.get("deposit_id")) == provider_id]
+            if len(found) == 1:
+                return ProviderObject.parse("deposit", found[0])
+            if found:
+                raise OutcomeUnknown(None, "deposit lookup is ambiguous", provider_id=provider_id)
+        raise OutcomeUnknown(None, "deposit lookup found no object", provider_id=provider_id)
 
     def wait_for_deposit(self, provider_id: str) -> ProviderObject:
         """At most ten observations, one second apart. Only an observed terminal state wins.

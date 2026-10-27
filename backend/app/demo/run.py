@@ -327,7 +327,7 @@ def connect(mode: str, connected_account: str | None) -> tuple[Any, str]:
     return client, leg_mode
 
 
-def fund_wallet(client: Any, plan: dict) -> list[dict]:
+def fund_wallet(client: Any, plan: dict, *, setup: list[dict] | None = None) -> list[dict]:
     """Mode B, sandbox: top the platform wallet up to the payouts, one setup deposit for each
     currency it is short in, into that currency's Global Account."""
     need: dict[str, int] = defaultdict(int)
@@ -342,18 +342,21 @@ def fund_wallet(client: Any, plan: dict) -> list[dict]:
     from ..connectors.airwallex.client import global_accounts_by_currency
 
     accounts = global_accounts_by_currency(client.global_accounts())
-    setup = []
+    setup = [] if setup is None else setup
     for currency, minor in short.items():
         if currency not in accounts:
             raise DemoFailed(f"no {currency} Global Account to fund the sandbox wallet from")
         amount = Money(minor=minor, currency=currency)
         obj = client.simulate_deposit(amount=amount, global_account_id=accounts[currency],
                                       reference=SETUP_LABEL)
+        entry = {"kind": "wallet_funding", "label": SETUP_LABEL,
+                 "provider_id": obj.provider_id, "amount": to_provider_decimal(amount),
+                 "status": obj.status}
+        setup.append(entry)  # preserve every accepted create even when its observation fails
         obj = client.wait_for_deposit(obj.provider_id)
+        entry["status"] = obj.status
         if obj.status != "SETTLED":
             raise DemoFailed(f"sandbox wallet funding {obj.provider_id} is {obj.status}")
-        setup.append({"kind": "wallet_funding", "label": SETUP_LABEL,
-                      "provider_id": obj.provider_id, "amount": to_provider_decimal(amount)})
     return setup
 
 
@@ -393,7 +396,7 @@ def execute(selected: str, mode: str, *, client: Any, leg_mode: str, run_id: str
         raise DemoFailed(f"{selected} proposes nothing on {observed.snapshot_id}")
     into.update(connected=leg_mode == "A", setup=[], legs=[], incidents_open=0)
     if mode == "sandbox" and leg_mode == "B":
-        into["setup"] = fund_wallet(client, plan)
+        fund_wallet(client, plan, setup=into["setup"])
     store = LedgerStore("sqlite://")
     from_snapshot(store, observed)
     gateway = Gateway(store, client, mode=mode, leg_mode=leg_mode, beneficiaries=[beneficiary],

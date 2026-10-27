@@ -375,8 +375,8 @@ class ContractPass:
         deposit = self.client.simulate_deposit(
             amount=ADVANCE, global_account_id=self._need("global_account"),
             reference=f"advance inflow (sandbox simulation) canon-{self.run_id}")
+        self._observe()  # compare this create, not the final page of unrelated deposits
         deposit = self.client.wait_for_deposit(deposit.provider_id)
-        self._observe()
         delta = self._usd() - before
         ok = deposit.status == "SETTLED" and delta == ADVANCE.minor
         return ok, deposit.provider_id, (

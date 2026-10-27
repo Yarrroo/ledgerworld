@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from app.connectors.airwallex.client import AirwallexClient
+from app.connectors.airwallex.client import AirwallexClient, to_money
 from app.connectors.airwallex.errors import DuplicateRequest, OutcomeUnknown, ProviderError
 from app.connectors.airwallex.fake import PLATFORM, FakeClock, FakeTransport
 from app.finance.schemas import Money
@@ -31,10 +31,11 @@ class AsyncDeposits(FakeTransport):
         self.reads = 0
 
     def _deposit(self, body):
+        # Keep the regression reproducible against the pre-fix, instantly settled fake.
         result = super()._deposit(body)
         deposit = self.objects["deposits"][result["id"]]
         if deposit["status"] == "SETTLED":
-            self._credit(PLATFORM, deposit["currency"], -int(deposit["amount"] * 100))
+            self._credit(PLATFORM, deposit["currency"], -to_money(deposit["amount"], deposit["currency"]).minor)
         deposit["status"] = "PENDING"
         return self._public(deposit)
 
@@ -49,7 +50,7 @@ class AsyncDeposits(FakeTransport):
                 for deposit in self.objects["deposits"].values():
                     if deposit["status"] == "PENDING":
                         deposit["status"] = "SETTLED"
-                        self._credit(PLATFORM, deposit["currency"], int(deposit["amount"] * 100))
+                        self._credit(PLATFORM, deposit["currency"], to_money(deposit["amount"], deposit["currency"]).minor)
             return 200, {"items": [self._public(d) for d in self.objects["deposits"].values()],
                          "has_more": False}
         return super()._handle(method, path, route, body, headers)
@@ -57,6 +58,13 @@ class AsyncDeposits(FakeTransport):
 
 def client_for(fake):
     return AirwallexClient(fake, fake.clock, api_version="2024-09-27", sleep=lambda _: None)
+
+
+def world_for(fake):
+    world = World(leg_mode="B")
+    world.fake = world.wire.fake = fake
+    world.gateway = world.boot()
+    return world
 
 
 def test_contract_check_waits_for_the_observed_deposit():
@@ -72,11 +80,8 @@ def test_contract_check_waits_for_the_observed_deposit():
 
 @pytest.mark.parametrize("settles", [True, False])
 def test_gateway_reads_the_deposit_and_blocks_dependents_until_settled(settles):
-    world = World(leg_mode="B")
     fake = AsyncDeposits(settles=settles)
-    world.fake = fake
-    world.wire.fake = fake
-    world.gateway = world.boot()
+    world = world_for(fake)
     done = world.execute(bind_terms(BASE))
     advance, payout = done.legs
     if settles:
@@ -167,10 +172,8 @@ def test_missing_malformed_or_unbounded_lists_never_confirm_a_deposit(answer):
 
 
 def test_a_pending_deposit_is_read_again_after_a_gateway_restart():
-    world = World(leg_mode="B")
     fake = AsyncDeposits(settles=False)
-    world.fake = world.wire.fake = fake
-    world.gateway = world.boot()
+    world = world_for(fake)
     world.execute(bind_terms(BASE))
     advance, payout = world.legs()
     assert advance.state == "submitted" and payout.provider_id is None
@@ -190,10 +193,8 @@ def test_a_deposit_read_failure_never_replays_the_create():
                 return 503, {"code": "unavailable"}
             return super()._handle(method, path, route, body, headers)
 
-    world = World(leg_mode="B")
     fake = Unavailable()
-    world.fake = world.wire.fake = fake
-    world.gateway = world.boot()
+    world = world_for(fake)
     world.execute(bind_terms(BASE))
     advance, payout = world.legs()
     assert advance.state == "submitted" and not advance.reconciled
@@ -247,13 +248,89 @@ def test_a_settled_deposit_with_other_terms_does_not_book_an_advance(field, valu
                     deposit[field] = value
             return status, answer
 
-    world = World(leg_mode="B")
     fake = WrongTerms()
-    world.fake = world.wire.fake = fake
-    world.gateway = world.boot()
+    world = world_for(fake)
     world.execute(bind_terms(BASE))
     advance, payout = world.legs()
     assert advance.state != "settled" and not advance.reconciled
     assert not world.journals(advance.leg_id)
     assert payout.provider_id is None
     assert len(world.posts(advance.request_id)) == 1
+
+
+def test_a_reversed_deposit_unflags_an_already_reconciled_advance():
+    from app.execution.reconcile import reconcile_leg
+
+    world = World(leg_mode="B")
+    world.execute(bind_terms(BASE))
+    advance = world.legs()[0]
+    assert advance.reconciled
+    world.fake.objects["deposits"][advance.provider_id]["status"] = "REVERSED"
+    reconcile_leg(world.gateway, advance.leg_id)
+    assert not world.legs()[0].reconciled
+    assert world.gateway.incidents(open_only=True)[0]["kind"] == "paid_then_failed"
+    assert len(world.journals(advance.leg_id)) == 1
+
+
+@pytest.mark.parametrize("problem", ["long_history", "unreadable_neighbor"])
+def test_addressed_lookup_does_not_require_parsing_the_whole_history(problem):
+    class History(FakeTransport):
+        def _handle(self, method, path, route, body, headers):
+            status, answer = super()._handle(method, path, route, body, headers)
+            if method == "GET" and route == DEPOSITS:
+                if problem == "long_history":
+                    answer["has_more"] = True
+                else:
+                    answer["items"].append({"id": "unrelated", "amount": "not-a-number",
+                                            "currency": "USD", "status": "SETTLED"})
+            return status, answer
+
+    fake = History()
+    client = client_for(fake)
+    deposit = client.simulate_deposit(amount=AMOUNT, global_account_id="ga-usd-1",
+                                      reference="our-advance")
+    assert client.get_deposit(deposit.provider_id).status == "SETTLED"
+    if problem == "unreadable_neighbor":
+        assert len(client.find_deposit("our-advance")) == 1
+
+
+def test_contract_shape_is_the_create_not_unrelated_deposit_history():
+    fake = AsyncDeposits()
+    client = client_for(fake)
+    client.simulate_deposit(amount=AMOUNT, global_account_id="ga-usd-1", reference="old")
+    old = next(iter(fake.objects["deposits"].values()))
+    old["status"] = "FAILED"
+    contract = check.ContractPass(client, "shape", "ben-payroll-1")
+    contract.mode = "B"
+    contract.state["global_account"] = "ga-usd-1"
+    assert contract.advance()[0]
+    assert contract._shape.status == "PENDING"
+
+
+def test_a_funding_wait_failure_keeps_every_accepted_setup_deposit(monkeypatch):
+    from app.decisions import candidates
+    from app.demo import run
+
+    fake = FakeTransport()
+    fake.balances[PLATFORM] = {"USD": 0, "EUR": 0}
+    fake.global_accounts.append({"id": "ga-eur", "currency": "EUR"})
+    client = client_for(fake)
+    wait = client.wait_for_deposit
+    calls = []
+
+    def fail_second(provider_id):
+        calls.append(provider_id)
+        if len(calls) == 2:
+            raise OutcomeUnknown(None, "still pending", provider_id=provider_id)
+        return wait(provider_id)
+
+    monkeypatch.setattr(client, "wait_for_deposit", fail_second)
+    monkeypatch.setattr(candidates, "plan_for_now", lambda *a, **k: {"legs": [
+        {"kind": "payout", "amount": {"minor": 100, "currency": c}}
+        for c in ("USD", "EUR")]})
+    into = {}
+    with pytest.raises(OutcomeUnknown):
+        run.execute("integrated", "sandbox", client=client, leg_mode="B", run_id="funding",
+                    beneficiary="ben-payroll-1", connected_account=None, into=into)
+    assert [entry["provider_id"] for entry in into["setup"]] == calls
+    assert len(calls) == 2

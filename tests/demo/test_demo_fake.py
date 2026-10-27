@@ -311,7 +311,7 @@ class _Client:
 
     def simulate_deposit(self, *, amount, global_account_id, reference):
         self.deposits.append((amount.currency, amount.minor, global_account_id, reference))
-        return SimpleNamespace(provider_id=f"dep-{amount.currency}")
+        return SimpleNamespace(provider_id=f"dep-{amount.currency}", status="PENDING")
 
     def wait_for_deposit(self, provider_id):
         self.moves.append(provider_id)
