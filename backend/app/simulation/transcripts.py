@@ -54,8 +54,23 @@ class ModelCall:
     def from_json(cls, raw: Mapping[str, Any]) -> ModelCall:
         return cls(
             raw["round"], raw["actor_id"], raw["obs_hash"],
-            tuple(ToolCall(c["name"], c["args"]) for c in raw["tool_calls"]), raw.get("content"),
+            tuple(_tool_call(c) for c in raw["tool_calls"]), raw.get("content"),
         )
+
+    def check(self) -> ModelCall:
+        """This call, or ``ValueError`` naming the first thing a replay could not serve."""
+
+        if not isinstance(self.round, int) or isinstance(self.round, bool) or self.round < 0:
+            raise ValueError(f"round must be a non-negative integer, got {self.round!r}")
+        if not isinstance(self.actor_id, str) or not self.actor_id:
+            raise ValueError(f"a model call names its actor, got {self.actor_id!r}")
+        if not isinstance(self.obs_hash, str) or not self.obs_hash:
+            raise ValueError("a model call is recorded with the hash of what the actor saw")
+        if not self.tool_calls and self.content is None:
+            raise ValueError("a model call answers with tool calls or content")
+        if self.content is not None and not isinstance(self.content, str):
+            raise ValueError(f"model content is text, got {type(self.content).__name__}")
+        return self
 
 
 def _tool_call(call: ToolCall | Mapping[str, Any]) -> ToolCall:
@@ -70,7 +85,11 @@ def _tool_call(call: ToolCall | Mapping[str, Any]) -> ToolCall:
 
 
 class Transcript:
-    """The append-only record of every model call one branch made."""
+    """The append-only record of every model call one branch made.
+
+    With a ``path``, the transcript owns that file: it is created with the initial ``calls`` and
+    must not exist yet, so a transcript never writes over or after another one's lines.
+    """
 
     def __init__(
         self, world_id: str, branch_id: str, *, path: str | Path | None = None,
@@ -85,15 +104,23 @@ class Transcript:
         self._lock = threading.Lock()
         for call in calls:
             self._append(call, persist=False)
+        if self.path is not None:
+            with self.path.open("x", encoding="utf-8") as fh:
+                fh.write(self.to_jsonl().decode())
 
     @classmethod
     def load(cls, path: str | Path, world_id: str, branch_id: str) -> Transcript:
-        """A transcript read back from its JSONL file; later appends go to the same file."""
+        """A transcript read back from its JSONL file; later appends go to the same file.
+
+        Every line is checked as ``record`` checks a new call, so a corrupt file fails here.
+        """
 
         path = Path(path)
         lines = path.read_text(encoding="utf-8").splitlines()
-        calls = [ModelCall.from_json(json.loads(line)) for line in lines if line]
-        return cls(world_id, branch_id, path=path, calls=calls)
+        transcript = cls(world_id, branch_id,
+                         calls=[ModelCall.from_json(json.loads(line)) for line in lines if line])
+        transcript.path = path
+        return transcript
 
     def record(
         self, round_: int, actor_id: str, obs_hash: str,
@@ -101,16 +128,11 @@ class Transcript:
     ) -> ModelCall:
         """Append the model's answer to ``actor_id`` in ``round_`` (one per actor per round)."""
 
-        if not isinstance(round_, int) or isinstance(round_, bool) or round_ < 0:
-            raise ValueError(f"round must be a non-negative integer, got {round_!r}")
-        if not isinstance(obs_hash, str) or not obs_hash:
-            raise ValueError("a model call is recorded with the hash of what the actor saw")
         calls = tuple(_tool_call(c) for c in tool_calls)
-        if not calls and content is None:
-            raise ValueError("a model call answers with tool calls or content")
         return self._append(ModelCall(round_, actor_id, obs_hash, calls, content), persist=True)
 
     def _append(self, call: ModelCall, *, persist: bool) -> ModelCall:
+        call.check()
         with self._lock:
             turn = (call.actor_id, call.round)
             if turn in self._turns:
@@ -145,11 +167,7 @@ class Transcript:
 
         if not 0 <= cursor <= self.cursor:
             raise ValueError(f"cursor {cursor} outside 0..{self.cursor}")
-        child = Transcript(self.world_id, branch_id, path=path,
-                           calls=self.calls()[:cursor])
-        if child.path is not None:
-            child.path.write_bytes(child.to_jsonl())
-        return child
+        return Transcript(self.world_id, branch_id, path=path, calls=self.calls()[:cursor])
 
     def replay_plan(self, start: int = 0) -> ScriptedPlan:
         """A strict plan (no default) answering every call from ``start`` on, once each."""
@@ -167,33 +185,39 @@ class Transcript:
 
     def replay_model(
         self, actor_id: str, round_source: Callable[[], int], obs_hash_source: Callable[[], str],
-        *, start: int = 0, plan: ScriptedPlan | None = None,
+        *, start: int = 0,
     ) -> ReplayModel:
-        """One actor's replay model; pass one ``plan`` to every actor of a replayed branch."""
+        """One actor's replay model, answering the calls recorded from ``start`` on."""
 
-        return ReplayModel(
-            self, plan or self.replay_plan(start), actor_id, round_source, obs_hash_source,
-            start=start,
-        )
+        return ReplayModel(self, actor_id, round_source, obs_hash_source, start=start)
 
 
 class ReplayModel(ScriptedModel):
-    """Serves one actor's recorded answers back and raises on anything the transcript lacks."""
+    """Serves one actor's recorded answers back and raises on anything the transcript lacks.
+
+    The plan and the obs-hash table come from the same calls (``start`` on), and the round is
+    read once per call and pinned, so the answer served is the one whose observation was checked.
+    """
 
     def __init__(
-        self, transcript: Transcript, plan: ScriptedPlan, actor_id: str,
-        round_source: Callable[[], int], obs_hash_source: Callable[[], str], *, start: int = 0,
+        self, transcript: Transcript, actor_id: str, round_source: Callable[[], int],
+        obs_hash_source: Callable[[], str], *, start: int = 0,
     ) -> None:
-        super().__init__(plan, actor_id, round_source)
+        self._pinned = threading.local()
+        super().__init__(transcript.replay_plan(start), actor_id, self._pinned_round)
+        self.live_round_source = round_source
         self.obs_hash_source = obs_hash_source
         self.recorded = {
             c.round: c for c in transcript.calls(start) if c.actor_id == actor_id
         }
 
+    def _pinned_round(self) -> int:
+        return self._pinned.round
+
     def _answer(self, messages, tools):
+        rnd = self._pinned.round = int(self.live_round_source())
         follow_up = bool(messages) and messages[-1].get("role") == "tool"
         if not follow_up:
-            rnd = int(self.round_source())
             call = self.recorded.get(rnd)
             if call is None:
                 raise ReplayMiss(f"{self.actor_id} round {rnd}: no call in the transcript")

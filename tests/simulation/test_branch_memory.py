@@ -255,3 +255,45 @@ def test_fork_starts_from_the_parent_prefix(tmp_path):
     assert (tmp_path / "no-action.jsonl").read_bytes() == child.to_jsonl()
     with pytest.raises(ValueError):
         parent.fork("bad", 9)
+
+
+def test_fork_never_overwrites_an_existing_transcript_file(tmp_path):
+    path = tmp_path / "main.jsonl"
+    parent = recorded().fork("main", 3, path=path)
+    before = path.read_bytes()
+    with pytest.raises(FileExistsError):
+        parent.fork("child", 1, path=path)
+    assert path.read_bytes() == before
+
+
+def test_a_new_transcript_never_appends_to_an_existing_file(tmp_path):
+    path = tmp_path / "b.jsonl"
+    path.write_bytes(recorded().to_jsonl())
+    with pytest.raises(FileExistsError):
+        Transcript("w1", "integrated", path=path)
+
+
+@pytest.mark.parametrize("line", [
+    {"round": 4, "actor_id": "a", "obs_hash": "h", "tool_calls": [], "content": None},
+    {"round": 4, "actor_id": "a", "obs_hash": "", "tool_calls": [], "content": "x"},
+    {"round": "4", "actor_id": "a", "obs_hash": "h", "tool_calls": [], "content": "x"},
+])
+def test_load_checks_every_line_as_record_does(tmp_path, line):
+    path = tmp_path / "bad.jsonl"
+    path.write_text(json.dumps(line) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        Transcript.load(path, "w1", "integrated")
+
+
+def test_replay_model_builds_its_own_plan_from_its_start():
+    t = recorded()
+    with pytest.raises(TypeError):  # no caller plan that could cover other calls than start
+        t.replay_model("borrower-c", lambda: 4, lambda: "obs-c4", start=2,
+                       plan=t.replay_plan(0))
+
+
+def test_replay_reads_the_round_once_per_call():
+    rounds = iter([4, 5])  # the round moves on between two reads of one call
+    model = recorded().replay_model("borrower-c", lambda: next(rounds), lambda: "obs-c4")
+    reply = ask(model).choices[0].message
+    assert reply.tool_calls[0].function.name == "request_advance"
