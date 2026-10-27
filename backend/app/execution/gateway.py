@@ -96,7 +96,7 @@ def collection(kind: str, leg_mode: str) -> tuple[str, str]:
     if kind == "repayment":
         return "charge", "/api/v1/charges"
     if kind == "fx":
-        return "conversion", "/api/v1/conversions"
+        return "conversion", "/api/v1/fx/conversions"
     return "transfer", "/api/v1/transfers"
 
 

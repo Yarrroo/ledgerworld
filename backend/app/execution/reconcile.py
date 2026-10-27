@@ -151,7 +151,7 @@ def on_hint(gateway: Gateway, hint: ReconciliationHint) -> None:
             gateway.provider.get(leg)
         reconcile_leg(gateway, leg.leg_id)
         return
-    path = "/api/v1/transfers" if hint.kind == "transfer" else "/api/v1/conversions"
+    path = "/api/v1/transfers" if hint.kind == "transfer" else "/api/v1/fx/conversions"
     try:
         obj = gateway.provider.get_object(hint.kind, path, hint.provider_id)
     except ProviderRefusal as refused:

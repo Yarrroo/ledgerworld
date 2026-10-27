@@ -17,7 +17,7 @@
   {"base_url": "https://api.sandbox.airwallex.com.evil.example", "expect": {"refused": "HostRefused", "note": "suffix trick: compare the parsed host exactly"}}
  ],
  "headers": {
-  "every_call": ["Authorization: Bearer <token>", "x-api-version: <AIRWALLEX_API_VERSION, default 2024-06-30>", "Content-Type: application/json"],
+  "every_call": ["Authorization: Bearer <token>", "x-api-version: <AIRWALLEX_API_VERSION, default 2024-09-27>", "Content-Type: application/json"],
   "login_only": ["x-client-id", "x-api-key"]
  },
  "token": {

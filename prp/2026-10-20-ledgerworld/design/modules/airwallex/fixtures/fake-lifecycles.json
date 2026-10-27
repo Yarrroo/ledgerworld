@@ -1,6 +1,6 @@
 {
  "fixture": "fake-lifecycles",
- "about": "Status lifecycles the fake reproduces, for API version 2024-06-30 (provider docs, research note 23 Oct). Each path is a sequence of fake 'advance' or simulation calls from a fresh fake; the test asserts the status after each step and the balance effect. Amounts: integer minor units in, provider decimal strings on the wire. Approval statuses (IN_APPROVAL...) are out of scope: approval rules are off on our account.",
+ "about": "Status lifecycles the fake reproduces, for API version 2024-09-27 (provider docs, research note 23 Oct). Each path is a sequence of fake 'advance' or simulation calls from a fresh fake; the test asserts the status after each step and the balance effect. Amounts: integer minor units in, provider decimal strings on the wire. Approval statuses (IN_APPROVAL...) are out of scope: approval rules are off on our account.",
  "start": {
   "balances": [{"currency": "USD", "available_minor": 10000000}, {"currency": "EUR", "available_minor": 0}],
   "global_accounts": [{"id": "ga-usd-1", "currency": "USD"}],
