@@ -136,6 +136,57 @@ def test_a_committed_payment_under_a_journal_of_its_own_naming_falls_back_to_the
     assert (ob.id, ob.met) == ("ob-1", True)
 
 
+@pytest.mark.parametrize(("paid_round", "carried", "short"), [
+    (None, True, 500_000),  # never paid: 1,500,000 overdue against 1,000,000 free at t=12
+    (3, True, 0),  # paid in the branch, after its deadline: unmet with nothing short
+    (1, False, None),  # paid by the checkpoint: history, not the branch's outcome
+])
+def test_an_obligation_outstanding_at_the_checkpoint_is_carried_with_its_deadline(
+        paid_round, carried, short):
+    """Due at t=4 (round 1), assessed after the checkpoint at round 2: an obligation still owed
+    there is unmet and overdue since its own deadline; one already settled is left out."""
+    from app.finance.ledger import settle_due
+
+    w = world()
+    amount = 1_500_000 if paid_round is None else 300_000
+    w.store.add_obligation("ob-0", ACCOUNT, amount, T0 + timedelta(hours=4), kind="payroll")
+    if paid_round is not None:
+        settle_due(w.store, T0 + timedelta(hours=4 * paid_round), round=paid_round)
+    f = assess(w, ACCOUNT, from_round=2, to_round=5, observability=seen(set(), range(3, 6)))
+    if not carried:
+        assert f.obligations == () and f.feasible
+        return
+    (ob,) = f.obligations
+    assert (ob.id, ob.due_h, ob.met, ob.short_minor, ob.overdue_h) == ("ob-0", 4, False, short, 12)
+    assert not f.feasible
+    assert ob.as_dict()["overdue_h"] == 12
+
+
+@pytest.mark.parametrize(("unknown", "paid", "binding"), [
+    (set(), False, ("free cash 10,000.00 at t=12 < ob-0 15,000.00 overdue since t=4; "
+                    "no reservation is touched")),
+    ({3}, False, ("free cash 0.00 at t=12 (balance unknown) < ob-0 15,000.00 overdue since "
+                  "t=4; no reservation is touched")),
+    (set(), True, "ob-0 15,000.00 overdue since t=4, paid after the checkpoint"),
+])
+def test_the_escalation_names_an_obligation_overdue_at_the_checkpoint(unknown, paid, binding):
+    """It binds before anything due in the branch, by its original deadline."""
+    from app.decisions.objective import Evaluation, rank
+    from app.finance.ledger import settle_due
+
+    w = world(obligation_minor=1_500_000)  # ob-1, due at t=12 inside the branch
+    w.store.add_obligation("ob-0", ACCOUNT, 1_500_000, T0 + timedelta(hours=4), kind="payroll")
+    if paid:
+        w.store.apply(Journal("top-up", (Posting(ACCOUNT, 1_000_000),
+                                         Posting("a/opening", -1_000_000)),
+                              round=2, sim_time=T0 + timedelta(hours=8)))
+        settle_due(w.store, T0 + timedelta(hours=12), round=3)
+    f = assess(w, ACCOUNT, from_round=2, to_round=5,
+               observability=seen(unknown, range(3, 6)))
+    result = rank([Evaluation("s1", "integrated", "b", f)], escalate_to="treasury operator")
+    assert result.escalation["binding"] == binding
+
+
 def test_a_round_with_no_recorded_observability_is_refused():
     with pytest.raises(ValueError, match=r"rounds \[4, 5\]"):
         assess(world(), ACCOUNT, from_round=0, to_round=5,

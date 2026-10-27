@@ -487,9 +487,10 @@ def replay_world(selected: Any, b: Baseline, events: Sequence[Mapping[str, Any]]
         breach = (first, next((h for h, v in series if h > first and v >= floor),
                               end * HOURS_PER_ROUND))
     unmet = 0
-    for o in obligations:  # as assess counts them: due in a round this run reached
+    for o in obligations:  # as assess counts them: due by a round this run reached; every one
+        # is outstanding at the start, so one already overdue there is unmet however it ends
         due_round = -(-o["due_h"] // HOURS_PER_ROUND)
-        if start < due_round <= end and (o["paid_round"] is None or o["paid_round"] > due_round):
+        if due_round <= end and (o["paid_round"] is None or o["paid_round"] > due_round):
             unmet += 1
     return ReplayPath(by_h, FloorResult(low, next(h for h, v in series if v == low),
                                         max(0, floor - low), breach),

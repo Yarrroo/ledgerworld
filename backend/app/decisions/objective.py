@@ -116,9 +116,14 @@ def _binding(earliest: dict, evals: list[Evaluation], tried: list[Evaluation],
     e = next(e for e in evals if e.scenario == earliest["scenario"])
     if earliest["kind"] == "obligation":
         o = next(o for o in e.feasibility.obligations if o.id == earliest["id"])
+        owed = f"{o.id} {grouped(o.amount_minor, currency)}"
+        if o.overdue_h is not None:  # outstanding past its deadline at the checkpoint
+            owed += f" overdue since t={o.due_h}"
+            if not o.short_minor:
+                return f"{owed}, paid after the checkpoint"
+        at_h = o.due_h if o.overdue_h is None else o.overdue_h
         return (f"free cash {grouped(o.amount_minor - o.short_minor, currency)} at "
-                f"t={o.due_h}{_unknown(e.feasibility, o.due_h)} < {o.id} "
-                f"{grouped(o.amount_minor, currency)}; no reservation is touched")
+                f"t={at_h}{_unknown(e.feasibility, at_h)} < {owed}; no reservation is touched")
     f = e.feasibility.floor
     return (f"min cash {grouped(f.min_cash, currency)} at t={f.at_h}"
             f"{_unknown(e.feasibility, f.at_h)} < floor "

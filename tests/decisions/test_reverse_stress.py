@@ -403,6 +403,22 @@ def test_a_flow_already_overdue_at_the_snapshot_is_still_shocked():
     assert path.settled[16] == 7_000_000  # rcv-1 never landed
 
 
+def test_an_obligation_already_overdue_at_the_snapshot_is_unmet_as_assess_counts_it():
+    """Owed since t = 4 at a t = 12 snapshot, it is paid the next round, after its deadline:
+    unmet, as ``assess`` carries an obligation outstanding at its checkpoint."""
+    snap = SNAPSHOT.model_dump(mode="json")
+    snap["as_of"] = snap["accounts"][0]["as_of"] = iso_utc(12)
+    b = Baseline("late", Snapshot.model_validate(snap), SNAPSHOT.as_of, "lender", terms=TERMS)
+    snap["obligations"].append({"obligation_id": "fee-0", "entity": "treasury",
+                                "account": "treasury/operating", "amount": usd(100_000),
+                                "due_at": iso_utc(4), "kind": "fee"})
+    owed = Baseline("owed", Snapshot.model_validate(snap), SNAPSHOT.as_of, "lender", terms=TERMS)
+    before, path = replay_world(Integrated(), b), replay_world(Integrated(), owed)
+    assert any(e["text"] == "r4 (t=16): fee-0 100,000 paid" for e in path.events)
+    assert path.obligations_unmet == before.obligations_unmet + 1
+    assert path.breaks
+
+
 def test_a_horizon_between_round_boundaries_is_refused():
     """No round reaches t = 73 on a 74 h horizon: an obligation due then could be neither paid
     nor fairly counted unmet, so the horizon itself is refused."""
