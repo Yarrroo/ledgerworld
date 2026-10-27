@@ -1,0 +1,23 @@
+{
+ "fixture": "malformed-output",
+ "about": "Guardrail for model output (T07): one structured repair attempt, then no_action plus an alert. Mandatory settlements still run. Each case is a ScriptedModel plan for borrower-c in round 4.",
+ "cases": [
+  {"id": "repaired",
+   "first": {"name": "request_advance", "args": {"amount": "12k", "currency": "USD"}},
+   "repair": {"name": "request_advance", "args": {"amount_minor": 1200000, "currency": "USD", "from": "lender"}},
+   "expect": {"intent_type": "request_advance", "repair_attempts": 1, "alert": false}},
+  {"id": "still-malformed",
+   "first": {"name": "request_advance", "args": {"amount": 12000.0}},
+   "repair": {"name": "request_advance", "args": {"amount": "twelve thousand"}},
+   "expect": {"intent_type": "no_action", "repair_attempts": 1, "alert": true, "alert_reason": "malformed_tool_args"}},
+  {"id": "unknown-tool",
+   "first": {"name": "wire_money", "args": {"amount_minor": 1200000}},
+   "repair": {"name": "wire_money", "args": {"amount_minor": 1200000}},
+   "expect": {"intent_type": "no_action", "repair_attempts": 1, "alert": true, "alert_reason": "tool_not_in_mandate"}},
+  {"id": "float-never-reaches-ledger",
+   "first": {"name": "request_advance", "args": {"amount_minor": 1200000.4, "currency": "USD", "from": "lender"}},
+   "repair": {"name": "request_advance", "args": {"amount_minor": 1200000, "currency": "USD", "from": "lender"}},
+   "expect": {"intent_type": "request_advance", "repair_attempts": 1, "alert": false, "posted_amount_minor": 1200000}}
+ ],
+ "expect_all": {"max_repair_attempts": 1, "mandatory_settlements_run": true, "repair_prompt_names_the_schema_error": true}
+}

@@ -1,0 +1,30 @@
+{
+ "fixture": "candidate-rules",
+ "about": "One decision node at a time (T11, candidates.py): what each policy does given a PolicyView at time t. Projection inside a policy: settled + pending_in expected and not overdue - pending_out - obligations, all due within the horizon; overdue, unknown and stale add nothing. Actions use the treasury's tools (request_advance, convert, pay, defer, no_action). The integrated policy closes a projected shortfall with the cheapest remedy first: a free deferral, then a deferral with a fee, then an eligible advance; it converts a foreign-currency obligation just in time. An empty action list is no_action. USD minor units; t in hours.",
+ "eligible_advance": "a facility in state offered (not withdrawn, not already drawn, not rejected for this branch), arrival = t + 4 h, arrival <= the facility's arrive_by_h and <= the first breach time; principal is all or nothing; the policy never reads the lender's K_p (a draw beyond it comes back as a C2 rejection the next round)",
+ "deferrable": "only an outflow whose contract carries defer_to_h (and fee_minor, 0 if free); obligations without it, and every reserved obligation, are never deferred",
+ "base_view": {"t_h": 12, "settled": 7000000, "reserved": [{"id": "res-payroll-1", "amount": 5000000, "obligation": "payroll-1"}], "pending_in": [{"flow_id": "rcv-1", "amount": 2000000, "expected_h": 12, "status": "overdue"}, {"flow_id": "wd-1", "amount": 1500000, "expected_h": 48, "status": "expected"}], "obligations": [{"id": "payroll-1", "amount": 5000000, "due_h": 40, "reserved": true}], "floor_minor": 3000000, "facilities": [{"id": "adv-a", "state": "offered", "principal": 1000000, "fee_minor": 80000, "arrive_by_h": 18}]},
+ "cases": [
+  {"id": "integrated-draws", "policy": "integrated", "view": "base_view",
+   "expect": {"projected_short": {"at_h": 40, "short_minor": 1000000}, "actions": [{"type": "request_advance", "facility": "adv-a", "amount_minor": 1000000}], "projected_after": {"min": 3000000, "at_h": 40}}},
+  {"id": "integrated-offer-withdrawn", "policy": "integrated", "view": "base_view", "change": {"facilities[adv-a].state": "withdrawn"},
+   "expect": {"actions": [], "reason": "no_eligible_advance", "projected_short": {"at_h": 40, "short_minor": 1000000}}},
+  {"id": "integrated-too-late", "policy": "integrated", "view": "base_view", "change": {"t_h": 16},
+   "expect": {"actions": [], "reason": "arrives_after_deadline", "detail": "arrival t=20 > arrive_by_h 18"}},
+  {"id": "integrated-rejected-not-retried", "policy": "integrated", "view": "base_view", "change": {"t_h": 16, "c2_seen": [{"intent": "i-r3-treasury-1", "status": "rejected", "reason": "beyond_capacity", "binding": "K_p = 7,000.00"}]},
+   "expect": {"actions": [], "reason": "facility_rejected", "note": "a rejected draw is never resubmitted in the same branch"}},
+  {"id": "integrated-defers-then-draws", "policy": "integrated", "view": "base_view", "change": {"outflows[+]": {"id": "vendor-1", "amount": 800000, "due_h": 24, "defer_to_h": 60, "fee_minor": 0, "discretionary": true}},
+   "expect": {"projected_short": {"at_h": 40, "short_minor": 1800000}, "actions": [{"type": "defer", "flow": "vendor-1", "to_h": 60}, {"type": "request_advance", "facility": "adv-a", "amount_minor": 1000000}], "projected_after": {"min": 3000000, "at_h": 40}, "funding_cost_minor": 80000}},
+  {"id": "integrated-paid-deferral-beats-advance", "policy": "integrated", "view": "base_view", "change": {"pending_in[rcv-1].status": "expected", "pending_in[rcv-1].expected_h": 12, "t_h": 8, "outflows[+]": {"id": "inv-2", "amount": 1800000, "due_h": 36, "defer_to_h": 60, "fee_minor": 5000}},
+   "expect": {"projected_short": {"at_h": 40, "short_minor": 800000}, "actions": [{"type": "defer", "flow": "inv-2", "to_h": 60}], "funding_cost_minor": 5000, "note": "50.00 to defer is cheaper than the 800.00 advance fee and closes the gap"}},
+  {"id": "fixed-reserve-defers-only", "policy": "fixed-reserve", "view": "base_view", "change": {"outflows[+]": {"id": "vendor-1", "amount": 800000, "due_h": 24, "defer_to_h": 60, "fee_minor": 0, "discretionary": true}},
+   "expect": {"actions": [{"type": "defer", "flow": "vendor-1", "to_h": 60}], "projected_after": {"min": 2000000, "at_h": 40, "short_minor": 1000000}, "note": "never borrows"}},
+  {"id": "fixed-reserve-never-defers-an-obligation", "policy": "fixed-reserve", "view": "base_view",
+   "expect": {"actions": [], "note": "payroll-1 is reserved and carries no defer_to_h"}},
+  {"id": "integrated-converts-just-in-time-early", "policy": "integrated", "view": "base_view", "change": {"t_h": 28, "pending_in[rcv-1].status": "arrived", "obligations[+]": {"id": "eur-inv-1", "amount": 500000, "currency": "EUR", "due_h": 36}},
+   "expect": {"actions": [], "note": "convert lead = 1 round: the conversion is due at t=32; the projection values EUR at the observed public price (about 5,400.00), so no USD shortfall and no draw"}},
+  {"id": "integrated-converts-just-in-time", "policy": "integrated", "view": "base_view", "change": {"t_h": 32, "pending_in[rcv-1].status": "arrived", "obligations[+]": {"id": "eur-inv-1", "amount": 500000, "currency": "EUR", "due_h": 36}},
+   "expect": {"actions": [{"type": "convert", "buy": {"minor": 500000, "currency": "EUR"}, "sell_currency": "USD", "for_obligation": "eur-inv-1"}]}},
+  {"id": "no-action-is-empty", "policy": "no-action", "view": "base_view", "expect": {"actions": [], "note": "mandatory settlements still run; inaction never removes an obligation (ledger lf1 inaction-keeps-obligation)"}}
+ ]
+}

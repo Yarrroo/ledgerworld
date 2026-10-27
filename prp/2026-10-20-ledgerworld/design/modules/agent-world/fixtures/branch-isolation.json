@@ -1,0 +1,25 @@
+{
+ "fixture": "branch-isolation",
+ "about": "Checkpoint, fork, sibling isolation and replay identity (T09). Memory namespace: world/<world_id>/branch/<branch_id>. Hashes are computed by the build; the fixture states which ones must be equal or different.",
+ "world_id": "w1",
+ "parent": "main",
+ "checkpoint": {"after_round": 3, "contains": ["ledger state", "world state (OASIS SQLite file copy)", "immutable actor memory records and namespace id", "world and OASIS clocks", "RNG state", "scheduled-event cursor", "pending C2 deliveries", "empty committed-boundary intent queue", "transcript cursor"]},
+ "forks": [
+  {"branch_id": "no-action", "plan": "coupled-chain.json with every actor on default no_action from round 4"},
+  {"branch_id": "integrated", "plan": "coupled-chain.json as written"}
+ ],
+ "memory_writes": [
+  {"branch_id": "no-action", "round": 4, "actor_id": "borrower-c", "key": "note", "value": "waited"},
+  {"branch_id": "integrated", "round": 4, "actor_id": "borrower-c", "key": "note", "value": "asked for 12,000.00"}
+ ],
+ "expect": {
+  "sibling_read": {"from": "integrated", "namespace": "world/w1/branch/no-action", "result": "raises NamespaceViolation"},
+  "own_read": {"branch_id": "integrated", "key": "note", "value": "asked for 12,000.00"},
+  "checkpoint_memory_immutable": "after the parent writes a new memory record beyond the checkpoint, a new fork from that checkpoint cannot read that later record",
+  "checkpoint_continuation": "fork and clean continuation from the same committed capture deliver each scheduled event and pending C2 once, with matching observation hashes before branch-specific actions",
+  "parent_unchanged": "after both forks run to round 6, the parent's ledger hash, SQLite file hash and memory namespace are byte-identical to the checkpoint",
+  "branch_ledgers_differ": "K_p at round 5: no-action 4,200,000 · integrated 3,000,000",
+  "replay_identity": "replaying 'integrated' from its transcript with the model disabled (a ScriptedModel built from the recorded tool calls) yields byte-identical journals and the same final ledger hash",
+  "replay_label": "a replayed branch carries replay=true in every API response and screen"
+ }
+}

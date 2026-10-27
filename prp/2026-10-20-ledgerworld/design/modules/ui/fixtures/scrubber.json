@@ -1,0 +1,21 @@
+{
+  "fixture": "scrubber",
+  "about": "T18: graph, action feed, cash and actor inspection share one committed round cursor. Data comes from agent-world coupled-chain.json. There is no mixing the latest graph with an earlier ledger.",
+  "context": {"run_id": "run-demo", "branch_id": "shock", "mode": "fake", "replay": false, "round_hours": 4, "last_committed_round": 5},
+  "rounds": [
+    {"round": 3, "t_h": 12, "feed_ids": ["p-r3-1"], "highlight_actor": "feed", "K_p_minor": 4200000},
+    {"round": 4, "t_h": 16, "feed_ids": ["i-r4-borrower-c-1"], "highlight_actor": "borrower-c", "K_p_minor": 4200000},
+    {"round": 5, "t_h": 20, "feed_ids": ["i-r5-lender-1", "i-r5-lender-2"], "highlight_actor": "lender", "K_p_minor": 3000000, "trace": ["journal of i-r5-lender-2", "i-r5-lender-2", "req:borrower-c:r4", "i-r4-borrower-c-1", "p-r3-1"]}
+  ],
+  "cases": [
+    {"id": "cursor-r4", "select_round": 4, "expect": {"all_panels_round": 4, "feed_contains": "i-r4-borrower-c-1", "feed_excludes": "i-r5-lender-2", "capacity": "USD 42,000.00"}},
+    {"id": "pause", "action": "Pause playback", "expect": {"cursor_stops": true, "server_job_not_cancelled": true, "label": "Playback paused; simulation may continue"}},
+    {"id": "running-r6", "server_running_round": 6, "expect": {"display_round": 5, "label": "Round 6 running; showing committed round 5", "partial_journal_visible": false}},
+    {"id": "invalid", "failed_round": 6, "expect": {"display_round": 5, "label": "Branch invalid at round 6", "fork_enabled": false, "compare_enabled": false}},
+    {"id": "replay", "change": {"replay": true}, "expect": {"label_in_header_and_export": "Replay", "counts_as_fresh_branch": false}},
+    {"id": "fork", "select_round": 4, "action": "Fork this checkpoint", "expect": {"payload_round": 4, "payload_parent_branch": "shock", "creates_approval": false}},
+    {"id": "interview", "select_actor": "borrower-c", "select_round": 4, "expect": {"payload_round": 4, "read_only": true, "no_financial_write": true}},
+    {"id": "old-round-not-returned", "select_round": 2, "expect": {"label": "Round not loaded", "substitute_latest": false}},
+    {"id": "phone", "width": 390, "expect": {"order": ["mode and branch labels", "scrubber and controls", "cash path", "action feed", "graph and actor inspector"], "graph_can_expand": true, "scrubber_keyboard": ["ArrowLeft", "ArrowRight", "Home", "End"]}}
+  ]
+}

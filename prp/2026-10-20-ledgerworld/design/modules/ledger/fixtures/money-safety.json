@@ -1,0 +1,14 @@
+{
+ "fixture": "money-safety",
+ "about": "The eight hunts of T29. Each case fails on a naive implementation and names the module that must reject it. Worlds are LF-1 / LF-2 unless stated.",
+ "cases": [
+  {"id": "spend-beyond-cash", "module": "ledger", "world": "LF-1 t=0", "action": {"type": "pay", "amount": 8000000}, "expect": {"rejected": "insufficient_spendable"}, "naive": "checks settled 70,000 only, or lets the balance go negative"},
+  {"id": "double-pledge", "module": "ledger", "world": "LF-1", "action": [{"type": "pledge", "amount": 500000, "collateral_ref": "lot-1"}, {"type": "pledge", "amount": 500000, "collateral_ref": "lot-1"}], "expect": {"second_rejected": "already_pledged"}, "naive": "sums pledges without identifying the units"},
+  {"id": "obligation-removed-by-inaction", "module": "ledger", "world": "LF-1, all rounds no_action", "expect": {"payroll-1": "settled at t=40 from its reservation", "obligations_open_after_40": 0, "obligations_dropped": 0}, "naive": "an obligation lives only while some actor acts on it"},
+  {"id": "withdrawal-after-deadline-counted", "module": "ledger", "world": "LF-1 no shock", "read": "P(40)", "expect": {"value": 4000000, "not": 5500000}, "naive": "counts every pending_in in the horizon instead of those expected <= t"},
+  {"id": "delayed-receivable-credited-early", "module": "ledger", "world": "LF-1 shock receipt delayed 240 h", "read": "P(40)", "expect": {"value": 2000000, "not": 4000000}, "naive": "keeps the original expected time after the delay event"},
+  {"id": "stale-balance-executed", "module": "execution", "world": "LF-1 with as_of 7 h old", "action": {"type": "execute", "plan": "integrated"}, "expect": {"rejected": "stale_balance", "authority": "reduced"}, "naive": "uses the last balance read"},
+  {"id": "floor-relaxed-when-infeasible", "module": "decisions", "world": "LF-1 shock, no advance available (K_p = 0)", "expect": {"result": "infeasible", "earliest_unmet": "reserve floor at t=40, short 10,000.00", "binding": "K_p = 0", "escalation": "named contact", "floor_minor": 3000000}, "naive": "returns the least-bad plan with the floor quietly lowered"},
+  {"id": "timeout-retried-blindly", "module": "execution", "world": "fake transport: create transfer times out after the provider accepted it", "expect": {"leg_state": "unknown", "incident": "opened", "next_call": "query by stored request_id", "transfers_created": 1}, "naive": "retries the create and pays twice"}
+ ]
+}

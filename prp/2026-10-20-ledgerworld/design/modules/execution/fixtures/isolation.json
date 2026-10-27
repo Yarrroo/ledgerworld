@@ -1,0 +1,17 @@
+{
+ "fixture": "isolation",
+ "about": "The boundary between the simulation and money (T14, g1 'credential isolation'). A simulated agent cannot reach a provider credential, host or client, by construction. Variable values are placeholders; tests set them in a scoped environment.",
+ "parent_env": {"AIRWALLEX_API_KEY": "<sentinel>", "AIRWALLEX_CLIENT_ID": "<sentinel>", "AIRWALLEX_WEBHOOK_SECRET": "<sentinel>", "AIRWALLEX_MODE": "sandbox", "LEDGERWORLD_DEMO_TOKEN": "<sentinel>", "LLM_API_KEY": "<set>", "LEDGER_DATABASE_URL": "<set>"},
+ "cases": [
+  {"id": "sim-env-scrubbed", "do": "start a simulation worker through boundary.spawn_sim(parent_env)",
+   "expect": {"absent": ["AIRWALLEX_API_KEY", "AIRWALLEX_CLIENT_ID", "AIRWALLEX_WEBHOOK_SECRET", "AIRWALLEX_MODE", "LEDGERWORLD_DEMO_TOKEN", "any name starting AIRWALLEX_"], "present": ["LLM_API_KEY", "LEDGER_DATABASE_URL"], "LEDGERWORLD_ROLE": "sim"}},
+  {"id": "live-import-refused", "do": "import app.connectors.airwallex.live with LEDGERWORLD_ROLE=sim", "expect": {"raises": "BoundaryViolation"}},
+  {"id": "client-import-refused", "do": "import app.execution.gateway with LEDGERWORLD_ROLE=sim", "expect": {"raises": "BoundaryViolation"}},
+  {"id": "fake-allowed", "do": "import app.connectors.airwallex.fake with LEDGERWORLD_ROLE=sim", "expect": {"raises": null, "note": "tests of the world may use the fake; it holds no credential"}},
+  {"id": "no-execution-tool", "do": "list every tool on every actor of LF-1's world (agent-world actors.json)", "expect": {"none_named_like": ["execute", "transfer", "payout", "approve", "airwallex"], "only_intents": true, "note": "a tool queues a C1 intent and nothing else"}},
+  {"id": "intent-cannot-reach-gateway", "do": "an actor's intent of type request_advance clears in the branch", "expect": {"outbox_rows": 0, "provider_calls": 0, "note": "a branch's journals live in the branch store; the gateway reads only the observed store"}},
+  {"id": "plan-only-as-c3", "do": "call the gateway with a decisions result (policy output) instead of a BoundApproval", "expect": {"refused": "not_an_approval"}},
+  {"id": "sim-cannot-read-outbox", "do": "a sim worker opens the observed store's execution tables", "expect": {"note": "the sim role's database URL points at the branch store; T24 deploys the observed store under a credential the sim role does not hold"}},
+  {"id": "secret-sentinel", "do": "run a whole fake demo; capture logs, traces, the report and every API response", "expect": {"sentinel_occurrences": 0}}
+ ]
+}

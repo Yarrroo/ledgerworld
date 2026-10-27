@@ -1,0 +1,28 @@
+{
+ "fixture": "webhooks",
+ "about": "Webhook verification and what a verified event may do (T13). Scheme per the provider docs: x-signature = hex HMAC-SHA256, keyed by the notification URL's secret, over x-timestamp (Unix ms, as received) concatenated with the raw body, no separator. The secret below is a fixture value, not a credential. A verified event only triggers a GET of the object; it never changes a leg's state by itself.",
+ "secret": "fixture-webhook-secret-not-real",
+ "now_ms": 1793872860000,
+ "max_age_ms": 300000,
+ "raw_body": "{\"id\":\"evt-1\",\"name\":\"payout.transfer.paid\",\"data\":{\"object\":{\"id\":\"t-0001\",\"request_id\":\"a1b2c3d4e5f6-1-payout\",\"status\":\"PAID\"}},\"created_at\":\"2026-11-05T10:00:00+0000\"}",
+ "cases": [
+  {"id": "valid", "headers": {"x-timestamp": "1793872800000", "x-signature": "1d1c040ed1288bc331966a8c96bcd845f0012dd015c1ba2c9ec7354a61db0225"}, "body": "raw_body",
+   "expect": {"http": 200, "verified": true, "action": "GET transfer t-0001", "leg_state_changed_by_event": false}},
+  {"id": "wrong-secret", "headers": {"x-timestamp": "1793872800000", "x-signature": "80ced5ead5d76ac321b84ed466d165806e69e8f61053f257df6b28436bd268da"}, "body": "raw_body",
+   "expect": {"http": 401, "verified": false, "action": "none"}},
+  {"id": "body-altered", "headers": {"x-timestamp": "1793872800000", "x-signature": "1d1c040ed1288bc331966a8c96bcd845f0012dd015c1ba2c9ec7354a61db0225"}, "body": "raw_body with PAID → FAILED",
+   "expect": {"http": 401, "verified": false}},
+  {"id": "altered-body-own-signature", "headers": {"x-timestamp": "1793872800000", "x-signature": "f845cf6d5607ea338119a8b4d11c6564f40473df40a1fb89a16c80858c3e3ad3"}, "body": "raw_body with PAID → FAILED",
+   "expect": {"http": 200, "verified": true, "action": "GET transfer t-0001", "note": "a correctly signed FAILED is still only a hint; the GET decides"}},
+  {"id": "reserialised-body", "headers": {"x-timestamp": "1793872800000", "x-signature": "1d1c040ed1288bc331966a8c96bcd845f0012dd015c1ba2c9ec7354a61db0225"}, "body": "raw_body parsed and re-dumped with spaces",
+   "expect": {"http": 401, "note": "verify the raw bytes, never a re-serialised object"}},
+  {"id": "stale", "headers": {"x-timestamp": "1793872500000", "x-signature": "<valid for that timestamp>"}, "now_ms": 1793872860000,
+   "expect": {"http": 401, "reason": "stale", "note": "older than 5 minutes"}},
+  {"id": "missing-headers", "headers": {}, "expect": {"http": 401}},
+  {"id": "replayed-event", "repeat": "valid", "expect": {"second": {"http": 200, "action": "none", "note": "deduped by event id in webhook_events"}}},
+  {"id": "unknown-event-name", "event_name": "issuing.card.created", "expect": {"http": 200, "action": "stored, ignored"}},
+  {"id": "unknown-object", "object_request_id": "not-ours-1", "expect": {"http": 200, "action": "GET, then incident unknown_provider_object if it moved money"}}
+ ],
+ "events_used": ["payout.transfer.paid", "payout.transfer.failed", "conversion.settled"],
+ "never": ["the secret in a log line or an error", "a leg settled from an event without a GET"]
+}

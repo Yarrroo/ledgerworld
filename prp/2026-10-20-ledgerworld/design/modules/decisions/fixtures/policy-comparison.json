@@ -1,0 +1,57 @@
+{
+ "fixture": "policy-comparison",
+ "about": "Paired evaluation of the three policies (T11). LF-1 + LF-2 world, checkpoint at round 3 (t=12 h, rcv-1 overdue in the shocked scenarios). Every policy runs in a fresh branch per scenario, forked from the same checkpoint with the same seed and the same exogenous schedule. In a policy branch the policy drives the treasury (its C1 intents carry params.source = policy:<id>) and the treasury model is not called; every other actor re-reacts on its own. Feasibility is read from each branch's realised ledger (settled at each round end; unknown adds nothing), never from the policy's own projection. USD minor units; t in hours; 4 h rounds.",
+ "world": {"snapshots": ["lf1", "lf2"], "checkpoint": {"branch": "base", "round": 3, "t_h": 12}, "seed": 101, "horizon_h": 72, "floor_minor": 3000000, "account": "borrower-a/operating"},
+ "policies_in_order": ["no-action", "fixed-reserve", "integrated"],
+ "scenarios": [
+  {"id": "s1", "label": "receipt delayed 240 h", "events": [{"round": 3, "kind": "receipt_delayed", "flow_id": "rcv-1", "arrives_h": 252}]},
+  {"id": "s2", "label": "receipt delayed 4 h", "events": [{"round": 3, "kind": "receipt_delayed", "flow_id": "rcv-1", "arrives_h": 16}]},
+  {"id": "s3", "label": "receipt delayed 240 h + venue rumour + venue freeze", "events": [
+   {"round": 3, "kind": "receipt_delayed", "flow_id": "rcv-1", "arrives_h": 252},
+   {"round": 3, "kind": "public_post", "post_id": "p-r3-1", "author": "feed", "text": "Unconfirmed: the exchange venue may pause withdrawals this week."},
+   {"round": 4, "kind": "venue_freeze", "venue": "exchange-venue", "effect": "wd-1 and lender/venue become unknown"}]}
+ ],
+ "scripted_plan": "agent-world fixtures/coupled-chain.json plan (borrower-c requests 12,000.00 at r4 after seeing p-r3-1; the lender accepts and disburses at r5); default no_action",
+ "branch_ids": "<run_id>-<scenario>-<policy>, e.g. run-1-s3-integrated",
+ "expect": {
+  "same_schedule_hash_across_policies": true,
+  "treasury_model_calls_in_policy_branches": 0,
+  "branches": {
+   "s1": {
+    "no-action":     {"actions": [], "settled": {"12": 7000000, "16": 7000000, "40": 2000000, "48": 3500000}, "min_cash": 2000000, "at_h": 40, "short_minor": 1000000, "breach_h": [40, 48], "obligations_unmet": 0, "funding_cost_minor": 0, "feasible": false},
+    "fixed-reserve": {"actions": [], "note": "nothing discretionary to defer", "settled": {"40": 2000000, "48": 3500000}, "min_cash": 2000000, "at_h": 40, "short_minor": 1000000, "breach_h": [40, 48], "obligations_unmet": 0, "funding_cost_minor": 0, "feasible": false},
+    "integrated":    {"actions": [{"round": 3, "type": "request_advance", "facility": "adv-a", "amount_minor": 1000000, "arrives_h": 16}], "settled": {"12": 7000000, "16": 8000000, "40": 3000000, "48": 4500000}, "min_cash": 3000000, "at_h": 40, "short_minor": 0, "obligations_unmet": 0, "funding_cost_minor": 80000, "feasible": true}
+   },
+   "s2": {
+    "no-action":     {"actions": [], "settled": {"16": 9000000, "40": 4000000, "48": 5500000}, "min_cash": 4000000, "at_h": 40, "short_minor": 0, "obligations_unmet": 0, "funding_cost_minor": 0, "feasible": true},
+    "fixed-reserve": {"actions": [], "settled": {"16": 9000000, "40": 4000000, "48": 5500000}, "min_cash": 4000000, "at_h": 40, "short_minor": 0, "obligations_unmet": 0, "funding_cost_minor": 0, "feasible": true},
+    "integrated":    {"actions": [{"round": 3, "type": "request_advance", "facility": "adv-a", "amount_minor": 1000000, "arrives_h": 16}], "note": "at t=12 s2 looks exactly like s1; the 800.00 fee is the honest price of not knowing", "settled": {"16": 10000000, "40": 5000000, "48": 6500000}, "min_cash": 5000000, "at_h": 40, "short_minor": 0, "obligations_unmet": 0, "funding_cost_minor": 80000, "feasible": true}
+   },
+   "s3": {
+    "no-action":     {"actions": [], "settled": {"40": 2000000, "48": 2000000, "72": 2000000}, "min_cash": 2000000, "at_h": 40, "short_minor": 1000000, "breach_h": [40, 72], "obligations_unmet": 0, "funding_cost_minor": 0, "feasible": false, "lender_K_p_by_round": {"3": 4200000, "4": 2700000, "5": 1500000}},
+    "fixed-reserve": {"actions": [], "settled": {"40": 2000000, "48": 2000000}, "min_cash": 2000000, "at_h": 40, "short_minor": 1000000, "breach_h": [40, 72], "obligations_unmet": 0, "funding_cost_minor": 0, "feasible": false, "lender_K_p_by_round": {"3": 4200000, "4": 2700000, "5": 1500000}},
+    "integrated":    {"actions": [{"round": 3, "type": "request_advance", "facility": "adv-a", "amount_minor": 1000000, "arrives_h": 16}], "settled": {"16": 8000000, "40": 3000000, "48": 3000000, "72": 3000000}, "min_cash": 3000000, "at_h": 40, "short_minor": 0, "obligations_unmet": 0, "funding_cost_minor": 80000, "feasible": true, "lender_K_p_by_round": {"3": 3200000, "4": 1700000, "5": 500000}, "note": "the shared venue exposure and borrower-c's draw squeeze the lender to 5,000.00 of capacity in this branch; the advance cleared at r3, before both"}
+   }
+  },
+  "keys": {
+   "form": "(obligations_unmet, branches_breached, max_short_minor, funding_cost_minor), compared lexicographically, smaller is better, all integers; summed over scenarios, never averaged",
+   "no-action": [0, 2, 1000000, 0],
+   "fixed-reserve": [0, 2, 1000000, 0],
+   "integrated": [0, 0, 0, 240000]
+  },
+  "ranking": ["integrated", "no-action", "fixed-reserve"],
+  "ties": [["no-action", "fixed-reserve"]],
+  "tie_rule": "equal keys keep policies_in_order",
+  "selected": "integrated",
+  "status": "selected",
+  "plan_for_now": {
+   "observed_snapshot_id": "obs-lf1-r3",
+   "note": "the selected policy re-decides on the current observed snapshot (not on a branch); the decisions result is never an approval",
+   "legs": [
+    {"index": 1, "kind": "advance", "amount": 1000000, "currency": "USD", "source": "lender/operating", "counterparty": "borrower-a/operating", "facility_id": "adv-a"},
+    {"index": 2, "kind": "payout", "amount": 5000000, "currency": "USD", "source": "borrower-a/operating", "counterparty": "ben-payroll-1", "funded_by": "reservation:res-payroll-1", "after": [1]}
+   ],
+   "matches": "execution fixtures/approval-binding.json base.legs"
+  }
+ }
+}

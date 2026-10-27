@@ -1,0 +1,38 @@
+{
+ "fixture": "clearing-order",
+ "about": "Deterministic clearing (system brief 7.2 step 7). env.step runs agents concurrently, so intents reach the queue in any order. Sort key: (priority_class asc, sim_minute asc, actor_id asc, intent_id asc). Any arrival permutation must produce the same C2 results and the same journal order.",
+ "world": "LF-1 at round 0 (t=0h); USD minor units",
+ "ledger_before": {
+  "treasury/operating": {"settled": 7000000, "reserved": 5000000, "pending_in": [{"amount": 2000000, "expected_h": 12}, {"amount": 1500000, "expected_h": 48}]},
+  "borrower-b/operating": {"settled": 900000},
+  "borrower-c/operating": {"settled": 400000}
+ },
+ "spendable_now": {"treasury/operating": 2000000},
+ "intents": [
+  {"intent_id": "i-r0-treasury-2", "actor_id": "treasury", "priority_class": 1, "sim_minute": 120, "type": "pay", "params": {"amount": {"minor": 1500000, "currency": "USD"}, "to": "supplier-1"}},
+  {"intent_id": "i-r0-treasury-1", "actor_id": "treasury", "priority_class": 1, "sim_minute": 60, "type": "pay", "params": {"amount": {"minor": 1000000, "currency": "USD"}, "to": "supplier-1"}},
+  {"intent_id": "i-r0-borrower-c-1", "actor_id": "borrower-c", "priority_class": 2, "sim_minute": 0, "type": "pay", "params": {"amount": {"minor": 100000, "currency": "USD"}, "to": "supplier-2"}},
+  {"intent_id": "i-r0-borrower-b-1", "actor_id": "borrower-b", "priority_class": 2, "sim_minute": 0, "type": "pay", "params": {"amount": {"minor": 100000, "currency": "USD"}, "to": "supplier-2"}}
+ ],
+ "arrival_orders": [
+  ["i-r0-treasury-2", "i-r0-treasury-1", "i-r0-borrower-c-1", "i-r0-borrower-b-1"],
+  ["i-r0-borrower-b-1", "i-r0-borrower-c-1", "i-r0-treasury-1", "i-r0-treasury-2"],
+  ["i-r0-borrower-c-1", "i-r0-treasury-2", "i-r0-borrower-b-1", "i-r0-treasury-1"]
+ ],
+ "expect": {
+  "cleared_order": ["i-r0-treasury-1", "i-r0-treasury-2", "i-r0-borrower-b-1", "i-r0-borrower-c-1"],
+  "results": {
+   "i-r0-treasury-1": {"status": "accepted", "journal_seq": 1},
+   "i-r0-treasury-2": {"status": "rejected", "reason": "insufficient_spendable", "spendable_minor": 1000000},
+   "i-r0-borrower-b-1": {"status": "accepted", "journal_seq": 2},
+   "i-r0-borrower-c-1": {"status": "accepted", "journal_seq": 3}
+  },
+  "ledger_after": {
+   "treasury/operating": {"settled": 6000000, "reserved": 5000000},
+   "borrower-b/operating": {"settled": 800000},
+   "borrower-c/operating": {"settled": 300000}
+  },
+  "same_for_every_arrival_order": true,
+  "note": "Without the sort, arrival order 1 would accept the 15,000.00 payment and reject the 10,000.00 one: an order-dependent coordinator fails this fixture."
+ }
+}

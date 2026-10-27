@@ -1,0 +1,38 @@
+{
+ "fixture": "approval-binding",
+ "about": "C3 BoundApproval and every way it is refused (T13). The base approval is LF-1's integrated plan as the demo executes it: one advance into borrower-a and the payroll payout from its reservation. plan_hash = sha256 of the canonical JSON (sorted keys, no spaces) of {entity, account, legs, snapshot_id, mode}; the test computes it, the fixture does not hard-code it. A refused approval moves nothing and writes no outbox row. USD minor units; times UTC.",
+ "now": "2026-11-05T10:00:00Z",
+ "current_observed_snapshot_id": "obs-2026-11-05T09:58Z",
+ "beneficiary_allowlist": ["ben-payroll-1"],
+ "ownership": {"borrower-a": ["borrower-a/operating"], "lender": ["lender/operating", "lender/venue"]},
+ "base": {
+  "approval_id": "apr-1",
+  "entity": "borrower-a",
+  "account": "borrower-a/operating",
+  "snapshot_id": "obs-2026-11-05T09:58Z",
+  "mode": "fake",
+  "approver": "operator",
+  "expires_at": "2026-11-05T10:15:00Z",
+  "legs": [
+   {"index": 1, "kind": "advance", "amount": 1000000, "currency": "USD", "source": "lender/operating", "counterparty": "borrower-a/operating", "facility_id": "adv-a"},
+   {"index": 2, "kind": "payout", "amount": 5000000, "currency": "USD", "source": "borrower-a/operating", "counterparty": "ben-payroll-1", "funded_by": "reservation:res-payroll-1", "after": [1]}
+  ]
+ },
+ "cases": [
+  {"id": "ok", "change": null, "expect": {"accepted": true, "legs_queued": 2, "request_ids": ["<plan_hash[:12]>-1-advance", "<plan_hash[:12]>-2-payout"]}},
+  {"id": "amount-altered", "change": {"legs[1].amount": 5000001}, "expect": {"refused": "approval_altered", "note": "the stored hash no longer matches the legs presented"}},
+  {"id": "counterparty-altered", "change": {"legs[1].counterparty": "ben-other"}, "expect": {"refused": "approval_altered"}},
+  {"id": "leg-added", "change": {"legs[+]": {"index": 3, "kind": "payout", "amount": 100, "currency": "USD", "source": "borrower-a/operating", "counterparty": "ben-payroll-1"}}, "expect": {"refused": "approval_altered"}},
+  {"id": "expired", "change": {"now": "2026-11-05T10:15:00Z"}, "expect": {"refused": "approval_expired", "note": "expired at expires_at exactly; default lifetime 15 minutes"}},
+  {"id": "mode-mismatch", "change": {"gateway_mode": "sandbox"}, "expect": {"refused": "mode_mismatch", "note": "a fake-mode approval never executes in sandbox, and the reverse"}},
+  {"id": "branch-snapshot", "change": {"snapshot_id": "branch-integrated-r4"}, "expect": {"refused": "not_observed_snapshot", "note": "execution reads the observed state, never a branch"}},
+  {"id": "snapshot-moved", "change": {"current_observed_snapshot_id": "obs-2026-11-05T10:02Z"}, "expect": {"refused": "snapshot_moved", "note": "the operator re-approves against the new observation"}},
+  {"id": "unowned-source", "change": {"legs[1].source": "lender/operating"}, "expect": {"refused": "unowned_funds", "note": "a payout's source must belong to the approval's entity"}},
+  {"id": "beneficiary-not-allowlisted", "change": {"legs[1].counterparty": "ben-unknown", "rehash": true}, "expect": {"refused": "beneficiary_not_allowed"}},
+  {"id": "stale-balance", "change": {"observation_age_h": 7}, "expect": {"refused": "stale_balance", "note": "ledger check_outflow needs authority full; money-safety hunt stale-balance-executed"}},
+  {"id": "breaks-floor", "change": {"legs[+]": {"index": 3, "kind": "payout", "amount": 2000000, "currency": "USD", "source": "borrower-a/operating", "counterparty": "ben-payroll-1", "funded_by": "spendable"}, "rehash": true}, "expect": {"refused": "breaks_floor", "note": "a discretionary leg passes ledger check_outflow at preflight; LF-1 pay-20k"}},
+  {"id": "reservation-mismatch", "change": {"legs[1].amount": 4000000, "rehash": true}, "expect": {"refused": "reservation_mismatch", "note": "a leg funded by a reservation spends exactly its held amount"}},
+  {"id": "no-token", "change": {"authorization": null}, "expect": {"http": 401, "note": "POST /api/v1/approvals and /executions need the demo token"}},
+  {"id": "replayed-approval", "change": {"execute_twice": true}, "expect": {"second": {"refused": "approval_used", "note": "one approval executes once; its legs keep their request ids"}}}
+ ]
+}

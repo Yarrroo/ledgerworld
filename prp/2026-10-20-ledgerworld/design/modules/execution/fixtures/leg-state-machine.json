@@ -1,0 +1,33 @@
+{
+ "fixture": "leg-state-machine",
+ "about": "C4 leg states and the only transitions the outbox accepts (T13). 'submitted' is written BEFORE the provider call, with provider_id null; a leg found in 'submitted' with no provider_id after a restart is treated as unknown and looked up. Every transition is one row in leg_events, in the same transaction as the leg update.",
+ "states": ["pending", "submitted", "settled", "failed", "unknown"],
+ "allowed": [
+  {"from": "pending", "to": "submitted", "on": "about to call the provider (provider_id null)"},
+  {"from": "submitted", "to": "submitted", "on": "provider accepted (provider_id set, provider status SCHEDULED/PROCESSING/SENT)"},
+  {"from": "submitted", "to": "settled", "on": "GET shows PAID (transfer), SETTLED (conversion, deposit, connected transfer); journal posted in the same transaction"},
+  {"from": "submitted", "to": "failed", "on": "provider rejected (ProviderError outcome=rejected) or GET shows FAILED/CANCELLED before any settlement"},
+  {"from": "submitted", "to": "unknown", "on": "OutcomeUnknown, or restart with provider_id null"},
+  {"from": "unknown", "to": "submitted", "on": "lookup by request_id finds exactly one object"},
+  {"from": "unknown", "to": "pending", "on": "lookup finds none AND the leg's last attempt was a timeout_before_send class or a restart before send; resubmitted under the SAME request_id"},
+  {"from": "settled", "to": "settled", "on": "a later FAILED on a settled payout opens incident paid_then_failed; the leg stays settled and reconciled becomes false until the operator acts"},
+  {"from": "pending", "to": "failed", "on": "dependency failed (a leg in 'after' failed) — nothing sent"}
+ ],
+ "forbidden": [
+  {"from": "settled", "to": "pending"},
+  {"from": "failed", "to": "submitted", "note": "a failed leg is never retried; a new approval makes new legs"},
+  {"from": "unknown", "to": "pending", "when": "lookup errored or found more than one", "note": "stays unknown, incident open"},
+  {"from": "pending", "to": "settled", "note": "nothing settles without a provider object, except ledger_only legs"},
+  {"from": "*", "to": "*", "when": "request_id would change", "note": "a leg's request_id is set at queue time and never changes"}
+ ],
+ "ledger_only": {
+  "applies_to": "Mode B repayment",
+  "path": ["pending", "settled"],
+  "receipt_label": "repayment (simulated)",
+  "provider_id": null
+ },
+ "dependencies": {
+  "rule": "a leg runs only when every leg in its 'after' list is settled",
+  "demo": "payout (2) waits for advance (1) settled; advance failed → payout failed without a call"
+ }
+}

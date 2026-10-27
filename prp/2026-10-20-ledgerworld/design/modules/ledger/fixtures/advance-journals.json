@@ -1,0 +1,34 @@
+{
+ "fixture": "advance-journals",
+ "about": "The double-entry journals of the LF-2 advance (T05). Signed postings: positive = debit, negative = credit. Each journal sums to 0 per currency. USD minor units.",
+ "accounts": {
+  "lender/operating": "cash (asset)",
+  "lender/loan:adv-a": "advance receivable (asset)",
+  "lender/fee-income": "income",
+  "borrower-a/operating": "cash (asset)",
+  "borrower-a/advance-payable:adv-a": "liability",
+  "borrower-a/fee-expense": "expense"
+ },
+ "journals": [
+  {"journal_id": "j-adv-a-disburse", "kind": "advance_disbursal", "postings": [
+   {"account": "lender/loan:adv-a", "amount": 1080000},
+   {"account": "lender/operating", "amount": -1000000},
+   {"account": "lender/fee-income", "amount": -80000},
+   {"account": "borrower-a/operating", "amount": 1000000},
+   {"account": "borrower-a/fee-expense", "amount": 80000},
+   {"account": "borrower-a/advance-payable:adv-a", "amount": -1080000}
+  ]},
+  {"journal_id": "j-adv-a-repay-w1", "kind": "advance_repayment", "source": "observed revenue 2,400,000 x 15%", "postings": [
+   {"account": "borrower-a/advance-payable:adv-a", "amount": 360000},
+   {"account": "borrower-a/operating", "amount": -360000},
+   {"account": "lender/operating", "amount": 360000},
+   {"account": "lender/loan:adv-a", "amount": -360000}
+  ]}
+ ],
+ "expect": {
+  "every_journal_sums_to_zero": true,
+  "balances_after": {"lender/loan:adv-a": 720000, "borrower-a/advance-payable:adv-a": -720000, "lender/operating_change": -640000, "borrower-a/operating_change": 640000},
+  "outstanding": 720000,
+  "mode_b_note": "in Mode B the disbursal reaches the sandbox as a simulated deposit into borrower-a's account; the journal is the same and carries mode=sandbox_simulation"
+ }
+}

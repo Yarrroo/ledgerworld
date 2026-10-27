@@ -1,0 +1,61 @@
+{
+ "fixture": "all-infeasible",
+ "about": "When no policy is feasible on every scenario (T11): status all_infeasible, no plan is offered for approval, the floor and the reservations are never relaxed, and the result names the earliest unmet constraint, the binding constraint and who to escalate to (C5 entities[].escalation, a role). The ranking is still shown, labelled not executable. Same world, seed and checkpoint rules as policy-comparison.json. USD minor units.",
+ "cases": [
+  {
+   "id": "lender-cannot-fund",
+   "world": "LF-1 + LF-2, scenario s1 (rcv-1 delayed 240 h); at round 2 (t=8) the pool gets a new redemption obligation of 3,500,000 due t=24",
+   "steps": [
+    "r2: K_p = 6,000,000 - 1,000,000 committed undrawn - 0 pledged - 3,500,000 pool obligations due in the horizon - 800,000 floor = 700,000",
+    "r3: integrated requests adv-a 1,000,000; C2 rejected beyond_capacity, binding 'K_p = 7,000.00'",
+    "r4: integrated sees the rejection; no other eligible facility; no_action from here"
+   ],
+   "expect": {
+    "branches": {
+     "no-action":     {"min_cash": 2000000, "at_h": 40, "short_minor": 1000000, "obligations_unmet": 0, "funding_cost_minor": 0},
+     "fixed-reserve": {"min_cash": 2000000, "at_h": 40, "short_minor": 1000000, "obligations_unmet": 0, "funding_cost_minor": 0},
+     "integrated":    {"min_cash": 2000000, "at_h": 40, "short_minor": 1000000, "obligations_unmet": 0, "funding_cost_minor": 0, "c2": [{"round": 3, "status": "rejected", "reason": "beyond_capacity", "binding": "K_p = 7,000.00"}]}
+    },
+    "keys": {"no-action": [0, 1, 1000000, 0], "fixed-reserve": [0, 1, 1000000, 0], "integrated": [0, 1, 1000000, 0]},
+    "ranking": ["no-action", "fixed-reserve", "integrated"],
+    "status": "all_infeasible",
+    "selected": null,
+    "plan_for_now": null,
+    "escalation": {
+     "earliest_unmet": {"kind": "reserve_floor", "account": "borrower-a/operating", "at_h": 40, "short_minor": 1000000},
+     "binding": "K_p = 7,000.00 < adv-a principal 10,000.00 (lender pool, after the 35,000.00 redemption at round 2)",
+     "escalate_to": "treasury operator"
+    },
+    "floor_relaxed": false,
+    "label": "no feasible plan on 1 scenario; nothing can be approved from this run"
+   }
+  },
+  {
+   "id": "obligation-unmet",
+   "world": "LF-1 + an unreserved, non-deferrable invoice inv-9 of 4,000,000 due t=20, known from t=0; scenario s1",
+   "rules": ["a mandatory settlement uses settled minus reserved minus pledged; it never draws on another obligation's reservation", "an obligation is paid whole at its due time or recorded unmet and stays open; it is never paid in part and never removed"],
+   "steps": [
+    "no-action: free cash at t=20 = 7,000,000 - 5,000,000 reserved = 2,000,000 < 4,000,000: inv-9 unmet; payroll paid from its reservation at t=40; settled 2,000,000 from t=40",
+    "integrated: draws adv-a at r3 (it narrows the shortfall even though it cannot close it); free cash at t=20 = 3,000,000 < 4,000,000: inv-9 unmet; settled 3,000,000 from t=40, floor kept"
+   ],
+   "expect": {
+    "branches": {
+     "no-action":     {"obligations_unmet": 1, "unmet": [{"id": "inv-9", "due_h": 20, "short_minor": 2000000}], "min_cash": 2000000, "short_minor": 1000000, "funding_cost_minor": 0},
+     "fixed-reserve": {"obligations_unmet": 1, "unmet": [{"id": "inv-9", "due_h": 20, "short_minor": 2000000}], "min_cash": 2000000, "short_minor": 1000000, "funding_cost_minor": 0},
+     "integrated":    {"obligations_unmet": 1, "unmet": [{"id": "inv-9", "due_h": 20, "short_minor": 1000000}], "min_cash": 3000000, "short_minor": 0, "funding_cost_minor": 80000}
+    },
+    "keys": {"no-action": [1, 1, 1000000, 0], "fixed-reserve": [1, 1, 1000000, 0], "integrated": [1, 0, 0, 80000]},
+    "ranking": ["integrated", "no-action", "fixed-reserve"],
+    "status": "all_infeasible",
+    "selected": null,
+    "plan_for_now": null,
+    "escalation": {
+     "earliest_unmet": {"kind": "obligation", "id": "inv-9", "due_h": 20, "short_minor": 1000000, "under": "integrated (best ranked)"},
+     "binding": "free cash 30,000.00 at t=20 < inv-9 40,000.00; the payroll reservation of 50,000.00 is not touched; the only facility, adv-a, is drawn",
+     "escalate_to": "treasury operator"
+    },
+    "reservation_raided": false
+   }
+  }
+ ]
+}

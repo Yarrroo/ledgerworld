@@ -1,0 +1,18 @@
+{
+  "fixture": "data-states",
+  "about": "T17/T19 display semantics. Each metric has value_minor (integer or null), currency, status and as_of; whole-response mode is fake|sandbox. Missing or mixed context never inherits an authoritative badge from the previous render.",
+  "cases": [
+    {"id": "zero", "value_minor": 0, "status": "known", "expect": {"text": "USD 0.00", "unknown": false}},
+    {"id": "unknown", "value_minor": null, "status": "unknown", "expect": {"text": "Unknown", "render_zero": false, "approval_enabled": false}},
+    {"id": "stale", "value_minor": 7000000, "status": "stale", "as_of": "2026-01-04T12:00:00Z", "expect": {"text": "USD 70,000.00 · stale", "as_of_visible": true, "approval_enabled": false}},
+    {"id": "partial", "status": "partial", "expect": {"show_known_metrics": true, "missing_fields_named": true, "approval_enabled": false}},
+    {"id": "unassessed", "status": "unassessed", "expect": {"text": "Not assessed", "show_green_feasible": false, "approval_enabled": false}},
+    {"id": "loading", "status": "loading", "expect": {"aria_busy": true, "skeleton_is_not_zero": true, "approval_enabled": false}},
+    {"id": "refresh-failed", "previous_status": "known", "status": "error", "expect": {"previous_values_label": "Last loaded, not current", "error_visible": true, "approval_enabled": false}},
+    {"id": "late-response", "requests": [{"run_id": "run-old", "arrival_order": 2}, {"run_id": "run-new", "arrival_order": 1}], "selected_run_id": "run-new", "expect": {"discard_response_for": "run-old", "rendered_run_id": "run-new"}},
+    {"id": "same-context-out-of-order-polls", "context": {"execution_id": "apr-1", "mode": "sandbox"}, "responses": [{"request_generation": 1, "arrival_order": 2, "provider_status": "PAID", "incident": null}, {"request_generation": 2, "arrival_order": 1, "provider_status": "FAILED", "incident": "paid_then_failed"}], "expect": {"discard_request_generation": 1, "rendered_provider_status": "FAILED", "incident_still_visible": true}},
+    {"id": "mode-changed", "from": "fake", "to": "sandbox", "expect": {"clear_selection_and_approval": true, "reload_context": true, "banner": "Airwallex sandbox", "approval_enabled_until_reload": false}}
+  ],
+  "labels": {"fake": "Simulated provider", "sandbox": "Airwallex sandbox", "synthetic": "Synthetic snapshot", "branch": "Hypothetical branch", "replay": "Replay", "search": "Search result, not a forecast"},
+  "invariant": "Never combine values from different snapshot_id, run_id, branch_id or mode into one apparent current state; a context mismatch is an explicit error, not a best-effort merge"
+}

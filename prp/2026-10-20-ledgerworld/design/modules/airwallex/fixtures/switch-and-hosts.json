@@ -1,0 +1,38 @@
+{
+ "fixture": "switch-and-hosts",
+ "about": "The key switch, the host allowlist and token renewal (T12). Each row is an environment and what select_transport must do. Variable values are placeholders; a test sets them in a scoped environment and never reads a real secret.",
+ "switch": [
+  {"id": "default-fake", "env": {}, "expect": {"transport": "fake", "banner": "Simulated provider"}},
+  {"id": "fake-explicit-with-key", "env": {"AIRWALLEX_MODE": "fake", "AIRWALLEX_API_KEY": "<set>", "AIRWALLEX_CLIENT_ID": "<set>"}, "expect": {"transport": "fake", "note": "an explicit fake wins over a present key"}},
+  {"id": "key-without-mode", "env": {"AIRWALLEX_API_KEY": "<set>", "AIRWALLEX_CLIENT_ID": "<set>"}, "expect": {"transport": "fake", "note": "the mode flips only by AIRWALLEX_MODE=sandbox, never by a key appearing"}},
+  {"id": "sandbox-with-key", "env": {"AIRWALLEX_MODE": "sandbox", "AIRWALLEX_API_KEY": "<set>", "AIRWALLEX_CLIENT_ID": "<set>"}, "expect": {"transport": "live", "base_url": "https://api.sandbox.airwallex.com", "banner": "Airwallex sandbox"}},
+  {"id": "sandbox-without-key", "env": {"AIRWALLEX_MODE": "sandbox"}, "expect": {"refused": "ConfigError", "message_names": ["AIRWALLEX_API_KEY", "AIRWALLEX_CLIENT_ID"], "fallback": "none"}},
+  {"id": "unknown-mode", "env": {"AIRWALLEX_MODE": "live"}, "expect": {"refused": "ConfigError"}}
+ ],
+ "hosts": [
+  {"base_url": "https://api.sandbox.airwallex.com", "expect": "allowed"},
+  {"base_url": "https://api.airwallex.com", "expect": {"refused": "HostRefused", "note": "production"}},
+  {"base_url": "https://api-demo.airwallex.com", "expect": {"refused": "HostRefused", "note": "anything not on the allowlist"}},
+  {"base_url": "http://api.sandbox.airwallex.com", "expect": {"refused": "HostRefused", "note": "plain http"}},
+  {"base_url": "https://api.sandbox.airwallex.com.evil.example", "expect": {"refused": "HostRefused", "note": "suffix trick: compare the parsed host exactly"}}
+ ],
+ "headers": {
+  "every_call": ["Authorization: Bearer <token>", "x-api-version: <AIRWALLEX_API_VERSION, default 2024-06-30>", "Content-Type: application/json"],
+  "login_only": ["x-client-id", "x-api-key"]
+ },
+ "token": {
+  "lifetime_s": 1800,
+  "renew_before_s": 60,
+  "cases": [
+   {"now_s": 0, "expect": "login"},
+   {"now_s": 1000, "expect": "cached"},
+   {"now_s": 1739, "expect": "cached"},
+   {"now_s": 1740, "expect": "login", "note": "expiry minus 60 s"},
+   {"after": "401 credentials_expired on any call", "expect": "one re-login, then the same request once with the same request_id; a second 401 raises ProviderError(auth_fail)"}
+  ]
+ },
+ "secret_hygiene": {
+  "probe": "set AIRWALLEX_API_KEY to a sentinel, run every fake scenario incl. auth_fail, capture logs, exception strings and traces",
+  "expect": "the sentinel occurs in none of them; ConfigError names variables, never values"
+ }
+}

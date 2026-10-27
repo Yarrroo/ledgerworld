@@ -1,0 +1,20 @@
+{
+ "fixture": "scenario-families",
+ "about": "The six scenario families of system brief 7.3 with default parameters and seeds (T10). Each runs 3 rounds on ScriptedModel from the round it starts in and must produce at least one cleared financial action; the same seed gives the same journals. Money in USD minor units; times in hours.",
+ "round_hours": 4,
+ "families": [
+  {"id": "delayed-receipt", "seed": 101, "params": {"receivable": "treasury receivable 2,000,000 due t=12", "delay_h": 240}, "starts_round": 3,
+   "expect_cleared": "treasury request_advance or defer", "lf1_check": "P(t=40) after payroll = 2,000,000 < floor 3,000,000: breach 1,000,000"},
+  {"id": "confidence-rumour", "seed": 102, "params": {"post": "venue may pause withdrawals", "post_round": 3, "audience": "public"}, "starts_round": 3,
+   "expect_cleared": "borrower-c request_advance (see coupled-chain.json)"},
+  {"id": "stablecoin-depeg", "seed": 103, "params": {"asset": "USDC", "pending_in_minor": 1500000, "price_path": [1.0, 0.97, 0.95, 0.98], "settle_delay_h": 24}, "starts_round": 4,
+   "expect_cleared": "treasury convert or defer", "note": "the price is a public observation; the loss is booked only when the pending_in settles, in integer minor units at the settled rate"},
+  {"id": "borrower-silence", "seed": 104, "params": {"borrower": "borrower-b", "from_round": 6, "stops": ["repay", "messages"]}, "starts_round": 6,
+   "expect_cleared": "lender release or no new offer to borrower-b; a missed repayment is recorded as unpaid, never as zero"},
+  {"id": "redemption-spike", "seed": 105, "params": {"obligation": "lender redemption", "grows_from_minor": 500000, "grows_to_minor": 2000000, "at_round": 5}, "starts_round": 5,
+   "expect_cleared": "lender reduces offers; K_p falls by the increase"},
+  {"id": "fx-gap", "seed": 106, "params": {"obligation": "EUR supplier invoice 1,000,000 EUR minor due t=36", "eurusd_path": [1.08, 1.11, 1.14]}, "starts_round": 4,
+   "expect_cleared": "treasury convert (quote then conversion) or defer"}
+ ],
+ "expect_all": {"families": 6, "rounds_each": 3, "min_cleared_financial_actions_each": 1, "same_seed_same_journals": true, "world_validates_against": "C5"}
+}

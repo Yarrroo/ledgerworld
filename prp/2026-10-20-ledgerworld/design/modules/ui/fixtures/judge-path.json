@@ -1,0 +1,17 @@
+{
+  "fixture": "judge-path",
+  "about": "T26 read-only g4 traversal. Begin with a cold unauthenticated browser at Overview. A prepared run and reconciled receipt are loaded by the backend; if absent, the path fails honestly. No seeded success invented in the browser. This measures navigation, not fresh-branch g3 execution.",
+  "viewports": [{"width": 390, "height": 900}, {"width": 1280, "height": 900}, {"width": 1440, "height": 900}],
+  "themes": ["light", "dark"],
+  "entry": {"route": "/overview", "assert": ["cash", "absolute payroll deadline with time zones", "minimum projected cash and reserve floor", "mode banner", "selected demonstration run"]},
+  "clicks": [
+    {"n": 1, "name": "Open simulation", "route": "/simulation", "assert": ["selected run_id preserved", "committed mid-shock round", "scrubber", "feed and graph round match", "replay label if applicable"]},
+    {"n": 2, "name": "Compare policies", "route": "/decisions", "assert": ["same run_id", "three policies", "integrated beside no-action", "cohort and unweighted scenario label", "no invented probability"]},
+    {"n": 3, "name": "View execution", "route": "/execution", "assert": ["same demonstration context", "existing execution_id", "provider state and reconciliation per leg", "simulated or sandbox label"]},
+    {"n": 4, "name": "Open receipt", "route": "/execution", "assert": ["expanded receipt", "provider_id", "journal_id", "as_of", "setup funding separate", "read-only; no approval, no execution POST"]}
+  ],
+  "timing": {"from": "immediately before the initial browser navigation", "until": "fourth click's receipt assertions all pass", "limit_seconds": 60, "includes": ["initial page and data load", "route loads", "receipt assertions"], "excludes": ["dependency installation", "browser download", "browser launch"], "reported_seconds": "maximum elapsed of all viewport/theme runs; 999 on any assertion failure", "no_observed_duration_yet": true},
+  "outside_timed_path": {"read_only_visits": ["Treasury", "Lending"], "assert": ["keyboard navigation and drill-down", "source/currency/status labels", "overflow and contrast"], "purpose": "All-six-screen accessibility coverage; no auth or writes; do not include these visits in the four-click elapsed metric"},
+  "failure_cases": ["no prepared run", "no reconciled receipt", "context silently changed between pages", "404", "any write request", "receipt pending or unknown", "page horizontal overflow", "missing source label", "elapsed >60 s"],
+  "precomputed": "A replay is allowed for this navigation test only with its label visible; it never counts as a fresh branch for g3. The sandbox receipt is not fabricated and keeps its original as_of."
+}

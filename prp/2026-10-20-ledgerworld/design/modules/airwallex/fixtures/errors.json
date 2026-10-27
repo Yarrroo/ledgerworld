@@ -1,0 +1,25 @@
+{
+ "fixture": "errors",
+ "about": "The provider error envelope and how the client classifies each failure (T12). Envelope per the provider docs: {code, source?, message, details?, trace_id?}. Classification drives the gateway: rejected = nothing moved, safe to treat as failed; unknown = may have moved, query before anything else; retried = handled inside the client.",
+ "envelope_example": {"code": "balance_insufficient", "source": "transfer_amount", "message": "Insufficient wallet balance", "trace_id": "fake-trace-1"},
+ "cases": [
+  {"scenario": "happy", "http": 201, "class": "ok"},
+  {"scenario": "insufficient_funds", "http": 400, "code": "balance_insufficient", "class": "rejected", "raises": "ProviderError(code=balance_insufficient, retryable=false, outcome=rejected)"},
+  {"scenario": "duplicate", "http": 400, "code": "duplicate_request_id", "class": "rejected_duplicate", "raises": "DuplicateRequest(in_flight=false)"},
+  {"scenario": "duplicate_old_spelling", "http": 400, "code": "request_id_duplicate", "class": "rejected_duplicate", "raises": "DuplicateRequest(in_flight=false)"},
+  {"scenario": "in_flight", "http": 409, "class": "rejected_duplicate", "raises": "DuplicateRequest(in_flight=true)"},
+  {"scenario": "rate_limited", "http": 429, "code": "too_many_requests", "class": "retried", "after_3": "ProviderError(code=too_many_requests, retryable=true, outcome=rejected)"},
+  {"scenario": "auth_fail", "http": 401, "code": "credentials_invalid", "class": "retried_once", "after_relogin_fails": "ProviderError(code=auth_fail, retryable=false, outcome=rejected)"},
+  {"scenario": "token_expired", "http": 401, "code": "credentials_expired", "class": "retried_once", "expect": "re-login, then success"},
+  {"scenario": "server_error", "http": 500, "class": "unknown", "raises": "OutcomeUnknown", "note": "a 5xx on a POST may have moved money"},
+  {"scenario": "server_error_on_get", "http": 500, "class": "retried", "note": "a GET is safe to repeat; at most 3 attempts"},
+  {"scenario": "timeout_after_accept", "http": null, "class": "unknown", "raises": "OutcomeUnknown"},
+  {"scenario": "malformed_body", "http": 200, "body": "<html>gateway error</html>", "class": "unknown", "raises": "OutcomeUnknown", "note": "an unparseable success is not a success"},
+  {"scenario": "unknown_code", "http": 400, "code": "something_new", "class": "rejected", "note": "unknown 4xx codes are rejected, kept verbatim in the receipt, never mapped to a known one"}
+ ],
+ "never": [
+  "an exception message, log line or trace that contains the API key, the bearer token or the webhook secret",
+  "a float amount in any request body built by the client",
+  "a POST repeated by the client after a timeout or a 5xx"
+ ]
+}

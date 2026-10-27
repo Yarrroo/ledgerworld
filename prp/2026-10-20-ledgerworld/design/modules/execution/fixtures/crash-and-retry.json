@@ -1,0 +1,19 @@
+{
+ "fixture": "crash-and-retry",
+ "about": "No duplicate movement under retries and crashes between steps (T13, g1 'no duplicate movement', money-safety hunt timeout-retried-blindly). Each case runs the base approval of approval-binding.json on the fake, injects one fault at the named point for leg 1 (the advance), restarts the gateway from the database (a new process object, same store), and runs it to completion. Then: provider objects per request_id, ledger journals per leg, final states.",
+ "points": ["after_outbox_write_before_submitted", "after_submitted_before_send", "after_send_before_response", "after_response_before_state_write", "after_settled_seen_before_journal", "after_journal_before_reconciled_flag"],
+ "cases": [
+  {"id": "crash-before-submitted", "fault": "crash at after_outbox_write_before_submitted", "restart_sees": "pending", "action": "submit", "expect": {"provider_objects": 1, "journals": 1, "state": "settled"}},
+  {"id": "crash-before-send", "fault": "crash at after_submitted_before_send", "restart_sees": "submitted, provider_id null", "action": "unknown → lookup finds 0 → pending → submit with the same request_id", "expect": {"provider_objects": 1, "journals": 1, "state": "settled"}},
+  {"id": "crash-after-send", "fault": "crash at after_send_before_response (fake stored the object)", "restart_sees": "submitted, provider_id null", "action": "unknown → lookup finds 1 → adopt", "expect": {"provider_objects": 1, "journals": 1, "state": "settled", "posts_to_provider": 1}},
+  {"id": "crash-after-response", "fault": "crash at after_response_before_state_write", "restart_sees": "submitted, provider_id null", "action": "lookup finds 1 → adopt", "expect": {"provider_objects": 1, "journals": 1}},
+  {"id": "crash-before-journal", "fault": "crash at after_settled_seen_before_journal", "restart_sees": "submitted with provider_id (settle and journal are one transaction, so neither happened)", "action": "GET → SETTLED → settle + journal", "expect": {"journals": 1}},
+  {"id": "crash-before-flag", "fault": "crash at after_journal_before_reconciled_flag", "restart_sees": "settled, reconciled false", "action": "reconcile pass compares and sets the flag; it never posts a second journal", "expect": {"journals": 1, "reconciled": true}},
+  {"id": "timeout-after-accept", "fault": "fake scenario timeout_after_accept on the advance", "action": "OutcomeUnknown → unknown → lookup by request_id → adopt", "expect": {"provider_objects": 1, "incident": {"kind": "outcome_unknown", "closed_by": "lookup"}}},
+  {"id": "timeout-before-send", "fault": "fake scenario timeout_before_send", "action": "unknown → lookup finds 0 → resubmit same request_id", "expect": {"provider_objects": 1, "request_ids_used": 1}},
+  {"id": "duplicate-on-resubmit", "fault": "the lookup races: finds 0, the resubmit returns duplicate_request_id", "action": "lookup again → adopt", "expect": {"provider_objects": 1, "state": "settled"}},
+  {"id": "lookup-errors", "fault": "lookup returns 500 three times", "action": "stays unknown; incident open; payout (leg 2) does not start", "expect": {"state": "unknown", "leg2": "pending", "incident": {"kind": "outcome_unknown", "open": true}}},
+  {"id": "two-workers", "fault": "two gateway workers pick the same pending leg", "action": "the claim is a conditional update (state = pending → submitted) and only one wins", "expect": {"posts_to_provider": 1}}
+ ],
+ "property_test": "for any crash point on any leg and any number of restarts, each request_id has at most one provider object and each leg at most one journal"
+}

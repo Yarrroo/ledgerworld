@@ -1,0 +1,71 @@
+{
+ "fixture": "idempotency",
+ "about": "What a repeated request_id does, as the provider does it (docs, research note 22 Oct), and what the client returns to its caller. The client never retries a POST after a timeout and never invents a new request_id; the gateway (execution module) decides what happens next from the client's typed result.",
+ "cases": [
+  {"id": "replay-after-settle",
+   "calls": [
+    {"op": "create_transfer", "request_id": "leg-1", "amount_minor": 100000, "result": {"http": 201, "status": "SCHEDULED", "provider_id": "<t1>"}},
+    {"op": "create_transfer", "request_id": "leg-1", "amount_minor": 100000, "result": {"http": 400, "code": "duplicate_request_id"}}
+   ],
+   "client_raises": {"DuplicateRequest": {"request_id": "leg-1", "in_flight": false}},
+   "then": {"op": "find_transfer(request_id=leg-1)", "returns": {"provider_id": "<t1>", "count": 1}},
+   "movements": 1},
+  {"id": "replay-in-flight",
+   "calls": [
+    {"op": "create_transfer", "request_id": "leg-2", "amount_minor": 100000, "result": "held open by the fake"},
+    {"op": "create_transfer", "request_id": "leg-2", "amount_minor": 100000, "result": {"http": 409}}
+   ],
+   "client_raises": {"DuplicateRequest": {"request_id": "leg-2", "in_flight": true}},
+   "movements": 1},
+  {"id": "replay-with-other-amount",
+   "calls": [
+    {"op": "create_transfer", "request_id": "leg-3", "amount_minor": 100000, "result": {"http": 201}},
+    {"op": "create_transfer", "request_id": "leg-3", "amount_minor": 999999, "result": {"http": 400, "code": "duplicate_request_id"}}
+   ],
+   "movements": 1,
+   "note": "the id alone dedupes; a second amount under the same id never moves money"},
+  {"id": "conversion-replay",
+   "calls": [
+    {"op": "create_conversion", "request_id": "leg-fx-1", "result": {"http": 201, "status": "SCHEDULED"}},
+    {"op": "create_conversion", "request_id": "leg-fx-1", "result": {"http": 400, "code": "duplicate_request_id", "note": "docs say 'rejected' without a code; the fake uses this one and T15 records the real one"}}
+   ],
+   "then": {"op": "find_conversion(request_id=leg-fx-1)", "returns": {"count": 1}},
+   "movements": 1},
+  {"id": "connected-transfer-replay",
+   "mode": "A",
+   "calls": [
+    {"op": "connected_account_transfer", "request_id": "leg-adv-1", "result": {"http": 201}},
+    {"op": "connected_account_transfer", "request_id": "leg-adv-1", "result": {"http": 400, "code": "request_id_duplicate"}}
+   ],
+   "client_raises": {"DuplicateRequest": {"request_id": "leg-adv-1", "in_flight": false}},
+   "note": "this endpoint documents the old spelling; the client maps both spellings to one error"},
+  {"id": "timeout-after-accept",
+   "scenario": "timeout_after_accept",
+   "calls": [
+    {"op": "create_transfer", "request_id": "leg-4", "amount_minor": 100000, "result": "the fake stores the transfer, then the transport raises TransportTimeout(after_send=true)"}
+   ],
+   "client_raises": {"OutcomeUnknown": {"request_id": "leg-4"}},
+   "then": {"op": "find_transfer(request_id=leg-4)", "returns": {"count": 1, "status": "SCHEDULED"}},
+   "movements": 1,
+   "note": "no automatic retry of the POST; state unknown until the lookup"},
+  {"id": "timeout-before-send",
+   "scenario": "timeout_before_send",
+   "calls": [
+    {"op": "create_transfer", "request_id": "leg-5", "amount_minor": 100000, "result": "TransportTimeout(after_send=false); nothing stored"}
+   ],
+   "client_raises": {"OutcomeUnknown": {"request_id": "leg-5"}},
+   "then": {"op": "find_transfer(request_id=leg-5)", "returns": {"count": 0}},
+   "safe_retry": "the SAME request_id; a provider that never saw it moves money once",
+   "movements_after_retry": 1,
+   "note": "the client still reports unknown: it cannot tell 'before send' from 'after' on a real network"},
+  {"id": "rate-limited-then-ok",
+   "scenario": "rate_limited",
+   "calls": [
+    {"op": "create_transfer", "request_id": "leg-6", "result": {"http": 429, "code": "too_many_requests"}},
+    {"op": "create_transfer", "request_id": "leg-6", "result": {"http": 201}}
+   ],
+   "client": "retries a 429 itself with the same request_id, exponential backoff with jitter, at most 3 attempts; no Retry-After header is assumed",
+   "movements": 1}
+ ],
+ "property_test": "for any interleaving of create, 409, duplicate, timeout_before_send and timeout_after_accept on one request_id, the fake holds at most one transfer for that id"
+}

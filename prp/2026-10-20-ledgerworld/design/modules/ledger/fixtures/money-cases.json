@@ -1,0 +1,24 @@
+{
+ "fixture": "money-cases",
+ "about": "The Money shape {minor: int, currency: ISO-4217} (T02) and the one converter from minor units to the provider's decimal string (system brief 5). Exponents: USD 2, EUR 2, JPY 0.",
+ "valid": [
+  {"money": {"minor": 1080000, "currency": "USD"}, "decimal": "10800.00"},
+  {"money": {"minor": 5, "currency": "USD"}, "decimal": "0.05"},
+  {"money": {"minor": 0, "currency": "USD"}, "decimal": "0.00"},
+  {"money": {"minor": 1000, "currency": "JPY"}, "decimal": "1000"},
+  {"money": {"minor": -250, "currency": "EUR"}, "decimal": "-2.50", "note": "signed amounts are valid inside the ledger; provider requests take positive amounts only"}
+ ],
+ "invalid": [
+  {"money": {"minor": 100.5, "currency": "USD"}, "reason": "minor is not an integer"},
+  {"money": {"minor": "100", "currency": "USD"}, "reason": "minor is a string"},
+  {"money": {"minor": 100, "currency": "usd"}, "reason": "currency must be three upper-case letters"},
+  {"money": {"minor": 100, "currency": "XYZ"}, "reason": "currency not in the supported set"},
+  {"money": {"minor": 100}, "reason": "currency missing"},
+  {"money": {"amount": 1.0, "currency": "USD"}, "reason": "decimal amount field is not accepted"}
+ ],
+ "provider_requests": [
+  {"leg_amount": {"minor": 1000000, "currency": "USD"}, "request_amount": "10000.00"},
+  {"leg_amount": {"minor": -1000000, "currency": "USD"}, "refused": "negative amount at the provider boundary"}
+ ],
+ "never": "a float produced by a model reaches neither a posting nor a provider request"
+}

@@ -1,0 +1,26 @@
+{
+ "fixture": "reservation-lifecycle",
+ "about": "hold -> commit (reserved -> pending_out -> settled out) | release | expire (system brief 5). Account a/operating starts settled 7,000,000 USD minor. Each step lists the buckets after it.",
+ "paths": [
+  {"id": "commit-and-settle", "steps": [
+   {"do": {"hold": {"reservation_id": "r1", "amount": 5000000, "expires_h": 48}}, "after": {"settled": 7000000, "reserved": 5000000, "pending_out": 0, "S_now": 2000000}},
+   {"do": {"commit": "r1", "due_h": 40}, "after": {"settled": 7000000, "reserved": 0, "pending_out": 5000000, "S_now": 2000000}},
+   {"do": {"settle": "r1", "at_h": 40}, "after": {"settled": 2000000, "reserved": 0, "pending_out": 0, "S_now": 2000000}, "journal": [{"account": "a/operating", "amount": -5000000}, {"account": "payroll/external", "amount": 5000000}]}
+  ]},
+  {"id": "release", "steps": [
+   {"do": {"hold": {"reservation_id": "r2", "amount": 1000000}}, "after": {"reserved": 1000000, "S_now": 6000000}},
+   {"do": {"release": "r2"}, "after": {"reserved": 0, "S_now": 7000000}}
+  ]},
+  {"id": "expire", "steps": [
+   {"do": {"hold": {"reservation_id": "r3", "amount": 1000000, "expires_h": 8}}, "after": {"reserved": 1000000}},
+   {"do": {"advance_clock_h": 8}, "after": {"reserved": 0, "r3_state": "expired"}},
+   {"do": {"commit": "r3"}, "expect": {"refused": "reservation_not_held", "state": "expired"}}
+  ]},
+  {"id": "no-double-commit", "steps": [
+   {"do": {"hold": {"reservation_id": "r4", "amount": 100000}}},
+   {"do": {"commit": "r4"}},
+   {"do": {"commit": "r4"}, "expect": {"refused": "reservation_not_held", "state": "committed"}}
+  ]}
+ ],
+ "rule": "S counts a committed reservation once, as pending_out; it never subtracts the same units as both reserved and pending_out"
+}

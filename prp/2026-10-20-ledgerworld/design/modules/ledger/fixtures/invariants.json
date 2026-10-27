@@ -1,0 +1,288 @@
+{
+ "fixture": "invariants",
+ "about": "One case per ledger invariant (T04). Each case is a write the ledger must refuse, or a read whose answer is pinned. A refused write leaves the store byte-identical (one transaction per journal). USD minor units unless stated.",
+ "start": {
+  "accounts": {
+   "a/operating": {
+    "currency": "USD",
+    "settled": 1000000
+   },
+   "a/eur": {
+    "currency": "EUR",
+    "settled": 500000
+   },
+   "x/external": {
+    "currency": "USD",
+    "kind": "external"
+   }
+  }
+ },
+ "cases": [
+  {
+   "id": "balances-per-currency",
+   "write": {
+    "journal": [
+     {
+      "account": "a/operating",
+      "amount": -100000
+     },
+     {
+      "account": "x/external",
+      "amount": 100000
+     }
+    ]
+   },
+   "expect": "committed"
+  },
+  {
+   "id": "unbalanced",
+   "write": {
+    "journal": [
+     {
+      "account": "a/operating",
+      "amount": -100000
+     },
+     {
+      "account": "x/external",
+      "amount": 90000
+     }
+    ]
+   },
+   "expect": {
+    "refused": "journal_unbalanced",
+    "currency": "USD",
+    "diff": -10000
+   }
+  },
+  {
+   "id": "balanced-total-unbalanced-per-currency",
+   "write": {
+    "journal": [
+     {
+      "account": "a/operating",
+      "amount": -100000
+     },
+     {
+      "account": "a/eur",
+      "amount": 100000
+     }
+    ]
+   },
+   "expect": {
+    "refused": "journal_unbalanced",
+    "note": "100,000 USD minor and 100,000 EUR minor do not cancel"
+   }
+  },
+  {
+   "id": "orphan-posting",
+   "write": {
+    "posting_without_journal": {
+     "account": "a/operating",
+     "amount": 100
+    }
+   },
+   "expect": {
+    "refused": "no_journal"
+   }
+  },
+  {
+   "id": "zero-posting",
+   "write": {
+    "journal": [
+     {
+      "account": "a/operating",
+      "amount": 0
+     },
+     {
+      "account": "x/external",
+      "amount": 0
+     }
+    ]
+   },
+   "expect": {
+    "refused": "zero_amount"
+   }
+  },
+  {
+   "id": "float-amount",
+   "write": {
+    "journal": [
+     {
+      "account": "a/operating",
+      "amount": -100.5
+     },
+     {
+      "account": "x/external",
+      "amount": 100.5
+     }
+    ]
+   },
+   "expect": {
+    "refused": "amount_not_integer_minor"
+   }
+  },
+  {
+   "id": "reserved-over-settled",
+   "write": {
+    "hold": {
+     "account": "a/operating",
+     "amount": 1000001
+    }
+   },
+   "expect": {
+    "refused": "reserved_exceeds_settled"
+   }
+  },
+  {
+   "id": "reserved-equal-settled",
+   "write": {
+    "hold": {
+     "account": "a/operating",
+     "amount": 1000000
+    }
+   },
+   "expect": "committed"
+  },
+  {
+   "id": "double-pledge",
+   "writes": [
+    {
+     "pledge": {
+      "account": "a/operating",
+      "amount": 200000,
+      "collateral_ref": "a/operating#lot-1"
+     }
+    },
+    {
+     "pledge": {
+      "account": "a/operating",
+      "amount": 200000,
+      "collateral_ref": "a/operating#lot-1"
+     }
+    }
+   ],
+   "expect": [
+    "committed",
+    {
+     "refused": "already_pledged"
+    }
+   ]
+  },
+  {
+   "id": "pledge-over-free",
+   "writes": [
+    {
+     "hold": {
+      "account": "a/operating",
+      "amount": 900000
+     }
+    },
+    {
+     "pledge": {
+      "account": "a/operating",
+      "amount": 200000,
+      "collateral_ref": "a/operating#lot-2"
+     }
+    }
+   ],
+   "expect": [
+    "committed",
+    {
+     "refused": "pledge_exceeds_free",
+     "free": 100000
+    }
+   ]
+  },
+  {
+   "id": "committed-outflow-not-respendable",
+   "writes": [
+    {
+     "hold": {
+      "account": "a/operating",
+      "amount": 600000,
+      "reservation_id": "r9"
+     }
+    },
+    {
+     "commit": "r9",
+     "due_h": 40
+    },
+    {
+     "pay_now": {
+      "account": "a/operating",
+      "amount": 500000
+     }
+    }
+   ],
+   "expect": [
+    "committed",
+    "committed",
+    {
+     "refused": "insufficient_spendable",
+     "S_now": 400000
+    }
+   ],
+   "note": "after commit the 600,000 sit in pending_out due at 40; S(now) still subtracts them"
+  },
+  {
+   "id": "unknown-is-not-zero",
+   "set": {
+    "account": "a/operating",
+    "observability": "unknown"
+   },
+   "read": "S(now)",
+   "expect": {
+    "value": null,
+    "state": "unknown",
+    "authority": "reduced",
+    "note": "never 0 and never the last known value"
+   }
+  },
+  {
+   "id": "known-zero",
+   "set": {
+    "account": "a/operating",
+    "settled": 0
+   },
+   "read": "S(now)",
+   "expect": {
+    "value": 0,
+    "state": "known",
+    "authority": "full"
+   }
+  },
+  {
+   "id": "stale-after-6h",
+   "set": {
+    "account": "a/operating",
+    "as_of_age_h": 7
+   },
+   "read": "S(now)",
+   "expect": {
+    "value": 1000000,
+    "state": "stale",
+    "authority": "reduced",
+    "execution": {
+     "refused": "stale_balance"
+    }
+   }
+  },
+  {
+   "id": "fresh-at-6h",
+   "set": {
+    "account": "a/operating",
+    "as_of_age_h": 6
+   },
+   "read": "S(now)",
+   "expect": {
+    "state": "known",
+    "authority": "full",
+    "note": "stale means strictly older than STALE_AFTER"
+   }
+  }
+ ],
+ "property_tests": [
+  "any sequence of committed journals keeps sum(postings) = 0 per currency",
+  "no sequence of pledges puts one collateral_ref in two active pledges"
+ ]
+}

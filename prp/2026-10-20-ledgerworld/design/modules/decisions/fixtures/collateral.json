@@ -1,0 +1,37 @@
+{
+ "fixture": "collateral",
+ "about": "The collateral facility's borrowing base (T21, backend/app/finance/collateral.py). Simulation and tests only: never wired to execution, never a leg, never on the demo's approval. Borrowing base = sum over eligible lots of floor(value * (10000 - haircut_bps) / 10000), then one pass of concentration limits measured on that pre-limit total: the obligor limit is cut first, then the asset-type limit on what remains. Unknown, stale and already-pledged lots add nothing; unknown or stale sets authority = reduced. Synthetic lots of borrower-b. USD minor units.",
+ "stale_after_h": 6,
+ "now": "2026-01-05T12:00:00Z",
+ "limits": {"per_obligor_bps": 5000, "per_type_bps": {"stablecoin": 2500}},
+ "eligible_types": ["receivable", "stablecoin"],
+ "lots": [
+  {"lot_id": "L1", "type": "receivable", "obligor": "obligor-x", "value": 2000000, "haircut_bps": 2000, "as_of": "2026-01-05T10:00:00Z"},
+  {"lot_id": "L2", "type": "receivable", "obligor": "obligor-y", "value": 1000000, "haircut_bps": 2000, "as_of": "2026-01-05T10:00:00Z"},
+  {"lot_id": "L3", "type": "stablecoin", "obligor": "exchange-venue", "value": 1500000, "haircut_bps": 3000, "as_of": "2026-01-05T10:00:00Z"},
+  {"lot_id": "L4", "type": "inventory", "obligor": null, "value": 500000, "haircut_bps": 5000, "as_of": "2026-01-05T10:00:00Z"},
+  {"lot_id": "L5", "type": "receivable", "obligor": "obligor-x", "value": 1000000, "haircut_bps": 2000, "as_of": "2026-01-05T10:00:00Z"},
+  {"lot_id": "L6", "type": "receivable", "obligor": "obligor-z", "value": 500000, "haircut_bps": 2000, "as_of": "2026-01-05T10:00:00Z", "pledged_to": "another-facility"}
+ ],
+ "cases": [
+  {"id": "base",
+   "expect": {"after_haircut": {"L1": 1600000, "L2": 800000, "L3": 1050000, "L5": 800000}, "excluded": {"L4": "ineligible_type", "L6": "already_pledged"},
+              "pre_limit": 4250000, "obligor_cut": {"obligor-x": 275000}, "type_cut": {}, "borrowing_base": 3975000, "authority": "full",
+              "hand": "obligor-x holds 2,400,000 > 50% of 4,250,000 = 2,125,000: cut 275,000; stablecoin 1,050,000 <= 25% = 1,062,500"}},
+  {"id": "venue-freeze", "change": {"lots[L3].value": null},
+   "expect": {"excluded": {"L3": "unknown", "L4": "ineligible_type", "L6": "already_pledged"}, "pre_limit": 3200000, "obligor_cut": {"obligor-x": 800000}, "borrowing_base": 2400000, "authority": "reduced",
+              "hand": "2,400,000 > 50% of 3,200,000 = 1,600,000: cut 800,000; unknown is not zero, it is absent"}},
+  {"id": "stale-lot", "change": {"lots[L2].as_of": "2026-01-05T05:00:00Z"},
+   "expect": {"excluded": {"L2": "stale", "L4": "ineligible_type", "L6": "already_pledged"}, "pre_limit": 3450000, "obligor_cut": {"obligor-x": 675000}, "type_cut": {"stablecoin": 187500}, "borrowing_base": 2587500, "authority": "reduced",
+              "hand": "obligor-x 2,400,000 - 1,725,000 = 675,000; stablecoin 1,050,000 - 25% of 3,450,000 (862,500) = 187,500; 3,450,000 - 675,000 - 187,500"}},
+  {"id": "rounding-down", "lots_only": [{"lot_id": "L7", "type": "receivable", "obligor": "obligor-q", "value": 333333, "haircut_bps": 1500, "as_of": "2026-01-05T10:00:00Z"}], "limits": {"per_obligor_bps": 10000},
+   "expect": {"after_haircut": {"L7": 283333}, "borrowing_base": 283333, "hand": "333,333 x 85% = 283,333.05, rounded down"}},
+  {"id": "draw-beyond-base", "draw": {"amount": 4000000},
+   "expect": {"status": "rejected", "reason": "beyond_borrowing_base", "binding": "borrowing base = 39,750.00"}},
+  {"id": "draw-within-base", "draw": {"amount": 3975000}, "expect": {"status": "accepted", "headroom_after": 0}},
+  {"id": "pledge-twice", "pledge": [{"lot_id": "L1", "facility": "col-1"}, {"lot_id": "L1", "facility": "col-2"}],
+   "expect": {"status": ["accepted", "rejected"], "reason": "already_pledged", "note": "the ledger's partial unique index refuses the second pledge"}},
+  {"id": "not-wired-to-execution", "check": "no module under app.execution or app.connectors imports app.finance.collateral; no route and no leg kind refers to collateral",
+   "expect": {"imports": 0, "leg_kinds_with_collateral": 0}}
+ ]
+}

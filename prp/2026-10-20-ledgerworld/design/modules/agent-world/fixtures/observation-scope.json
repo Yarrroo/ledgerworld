@@ -1,0 +1,32 @@
+{
+ "fixture": "observation-scope",
+ "about": "What borrower-c may see at round 4 (t=16h) of the shock branch (system brief 7.1). The observation is built by the finance agent before the social feed; obs_hash = sha256 of its canonical JSON (sorted keys, no whitespace, money as integer minor units, times as ISO-8601 UTC).",
+ "actor_id": "borrower-c",
+ "round": 4,
+ "sim_time_h": 16,
+ "world_items": [
+  {"id": "acct:borrower-c/operating", "kind": "own_account", "owner": "borrower-c", "visible_from_h": 0},
+  {"id": "acct:treasury/operating", "kind": "account", "owner": "treasury", "visible_from_h": 0},
+  {"id": "acct:lender/operating", "kind": "account", "owner": "lender", "visible_from_h": 0},
+  {"id": "contract:lender-borrower-c", "kind": "own_contract", "owner": "borrower-c", "visible_from_h": 0},
+  {"id": "p-r3-1", "kind": "public_post", "owner": "feed", "visible_from_h": 12},
+  {"id": "price:USDC-USD@16h", "kind": "public_price", "owner": "market-maker", "visible_from_h": 16},
+  {"id": "msg:lender->borrower-b@8h", "kind": "message", "to": "borrower-b", "visible_from_h": 8},
+  {"id": "msg:lender->borrower-c@8h", "kind": "message", "to": "borrower-c", "visible_from_h": 8},
+  {"id": "sched:receipt-delay@40h", "kind": "scheduled_event", "visible_from_h": 40},
+  {"id": "p-r6-1", "kind": "public_post", "owner": "feed", "visible_from_h": 24},
+  {"id": "price:USDC-USD@20h", "kind": "public_price", "owner": "market-maker", "visible_from_h": 20}
+ ],
+ "expect": {
+  "included": ["acct:borrower-c/operating", "contract:lender-borrower-c", "p-r3-1", "price:USDC-USD@16h", "msg:lender->borrower-c@8h"],
+  "excluded": {
+   "acct:treasury/operating": "another actor's private cash",
+   "acct:lender/operating": "another actor's private cash",
+   "msg:lender->borrower-b@8h": "addressed to another actor",
+   "sched:receipt-delay@40h": "scheduled after the current time",
+   "p-r6-1": "posted after the current time",
+   "price:USDC-USD@20h": "priced after the current time"
+  },
+  "obs_hash_stable": "building the same observation twice gives the same obs_hash; adding any excluded item changes nothing"
+ }
+}

@@ -1,0 +1,37 @@
+{
+ "fixture": "nonanticipativity",
+ "about": "A decision at round r may read only what is observable at t = 4r h (T11, g1 'clairvoyant policy rejected'). Two guards. (1) The PolicyView: every leaf of the world a policy can reach carries available_at; reading a leaf whose available_at is later than t (or 'never': scenario parameters, the rng, other branches) raises AnticipationViolation naming the path. (2) The paired-history check: on a scenario tree, two scenarios whose observable histories are identical through round r must get identical decisions at r; it catches a policy that reaches the future through a side channel and never touches the view. LF-1, from round 0, rules world (no agents needed).",
+ "path_format": "dotted, ids in brackets: accounts[borrower-a/operating].pending_in[rcv-1].arrived_h",
+ "observability_rules": [
+  "a pending_in's expected_h is observable from the snapshot's as_of (t=0)",
+  "a pending_in expected at t whose arrival is not delivered in step 2 of the round at t is marked overdue before step 4 and is observable from that round; its true arrival time is observable only when it arrives",
+  "a public post is observable from the round it is published",
+  "a C2 result is observable the round after it is issued",
+  "scenario parameters, scheduled future events, the rng state and any other branch are never observable"
+ ],
+ "tree": {
+  "s-late":   {"rcv-1": {"expected_h": 12, "arrives_h": 252}},
+  "s-short":  {"rcv-1": {"expected_h": 12, "arrives_h": 16}},
+  "s-ontime": {"rcv-1": {"expected_h": 12, "arrives_h": 12}},
+  "identical_history_through_round": {"s-late|s-short": 3, "s-late|s-ontime": 2, "s-short|s-ontime": 2}
+ },
+ "policies": [
+  {"id": "integrated", "kind": "honest",
+   "decisions": {"s-late": {"0": [], "1": [], "2": [], "3": [{"type": "request_advance", "facility": "adv-a", "amount_minor": 1000000}]},
+                 "s-short": {"0": [], "1": [], "2": [], "3": [{"type": "request_advance", "facility": "adv-a", "amount_minor": 1000000}]},
+                 "s-ontime": {"0": [], "1": [], "2": [], "3": []}},
+   "expect": {"accepted": true}},
+  {"id": "reads-expectation", "kind": "honest", "reads": [{"round": 0, "path": "accounts[borrower-a/operating].pending_in[rcv-1].expected_h"}], "expect": {"accepted": true}},
+  {"id": "reads-overdue", "kind": "honest", "reads": [{"round": 3, "path": "accounts[borrower-a/operating].pending_in[rcv-1].status", "value_in": {"s-late": "overdue", "s-short": "overdue", "s-ontime": "arrived"}}], "expect": {"accepted": true}},
+  {"id": "peek-arrival", "kind": "clairvoyant", "reads": [{"round": 0, "path": "accounts[borrower-a/operating].pending_in[rcv-1].arrived_h"}],
+   "expect": {"rejected": "AnticipationViolation", "path": "accounts[borrower-a/operating].pending_in[rcv-1].arrived_h", "read_at_h": 0, "available_at_h": {"s-late": 252, "s-short": 16, "s-ontime": 12}}},
+  {"id": "peek-params", "kind": "clairvoyant", "reads": [{"round": 0, "path": "scenario.params.delay_h"}],
+   "expect": {"rejected": "AnticipationViolation", "path": "scenario.params.delay_h", "read_at_h": 0, "available_at_h": "never"}},
+  {"id": "peek-post", "kind": "clairvoyant", "reads": [{"round": 2, "path": "public.posts[p-r3-1]"}], "world_adds": {"post p-r3-1 published at round 3": true},
+   "expect": {"rejected": "AnticipationViolation", "path": "public.posts[p-r3-1]", "read_at_h": 8, "available_at_h": 12}},
+  {"id": "side-channel", "kind": "clairvoyant", "reads": [], "how": "closes over the scenario object outside the view; draws at round 0 only where the receipt will be late",
+   "decisions": {"s-late": {"0": [{"type": "request_advance", "facility": "adv-a", "amount_minor": 1000000}]}, "s-short": {"0": []}, "s-ontime": {"0": []}},
+   "expect": {"rejected": "AnticipationViolation", "path": null, "node": {"round": 0, "scenarios": ["s-late", "s-short"]}, "reason": "decisions differ on identical observable history"}}
+ ],
+ "expect_all": {"honest_accepted": 3, "clairvoyant_rejected": 4, "every_rejection_names": "the path, or for a side channel the first round and the scenario pair"}
+}

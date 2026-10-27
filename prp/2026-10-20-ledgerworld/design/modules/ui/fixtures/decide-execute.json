@@ -1,0 +1,29 @@
+{
+  "fixture": "decide-execute-ui",
+  "about": "T19: render decisions and execution module results unchanged. Tests can resolve the referenced JSON files relative to design/modules. No UI action is itself authorisation. The server rechecks every bound term.",
+  "comparison_source": "../../decisions/fixtures/policy-comparison.json",
+  "approval_source": "../../execution/fixtures/approval-binding.json",
+  "receipt_source": "../../execution/fixtures/demo-receipt.json",
+  "comparison": {"cohort": "s1,s2,s3", "weight_kind": "unweighted scenario set", "estimate_kind": "scenario comparison, not a probability", "expected_selected": "integrated", "cost_label": "USD 2,400.00 across 3 scenarios; not the current execution fee", "current_plan_fee_label": "USD 800.00 for adv-a", "all_infeasible": {"selected": null, "plan_for_now": null, "approval_enabled": false, "show": ["earliest_unmet", "binding", "escalate_to"]}},
+  "before_confirmation_required": ["entity", "account", "snapshot_id", "mode", "each leg's kind, amount, currency, source and counterparty", "facility and fee terms", "funded_by reservation", "after dependencies", "approval lifetime (default 15 minutes)"],
+  "after_approval_before_execution_required": ["server-returned C3 terms match the reviewed plan", "server-returned plan_hash", "server-returned expires_at in UTC and labelled local time"],
+  "no_approval_preview_endpoint": true,
+  "cases": [
+    {"id": "public-read", "token_present": false, "expect": {"read_screens_visible": true, "approve_enabled": false, "execute_enabled": false, "reason": "Operator authorisation required"}},
+    {"id": "review-only", "token_present": true, "action": "Review plan", "expect": {"provider_calls": 0, "approval_post": false, "explicit_confirm_required": true}},
+    {"id": "approve-then-execute", "token_present": true, "action": ["Confirm approval", "Execute approved plan"], "expect": {"approval_posts": 1, "execution_posts": 1, "confirmation_is_not_auto_execute": true, "execution_id": "approval_id", "double_click_submits_once": true}},
+    {"id": "snapshot-moved", "server_refusal": "snapshot_moved", "expect": {"invalidate_review": true, "execute_enabled": false, "message": "Observed state changed; reload and review a new plan"}},
+    {"id": "expired", "now_equals_expires_at": true, "expect": {"execute_enabled": false, "message": "Approval expired", "server_time_authoritative": true}},
+    {"id": "submitted", "state": "submitted", "provider_status": "SENT", "expect": {"label": "Submitted · SENT · not reconciled", "show_paid_success": false}},
+    {"id": "reconciled", "state": "settled", "provider_status": "PAID", "reconciled": true, "expect": {"label": "PAID · reconciled as of", "show": ["provider_id", "journal_id", "as_of"], "claim_irreversible_finality": false}},
+    {"id": "unknown", "state": "unknown", "expect": {"incident_visible": true, "submit_again_enabled": false, "message": "Outcome unknown; checking provider status. Do not send again."}},
+    {"id": "execution-post-timeout", "approval_id": "apr-1", "expect": {"repeat_post": false, "read_route": "GET /api/v1/executions/apr-1", "not_found_means_failed": false, "manual_new_execution_enabled": false}},
+    {"id": "approval-post-timeout", "approval_id_known": false, "expect": {"repeat_post": false, "message": "Approval outcome unknown; operator resolution required", "invent_lookup_endpoint": false}},
+    {"id": "paid-then-failed", "incident": "paid_then_failed", "expect": {"success_badge_removed": true, "incident_visible": true, "reverse_button": false}},
+    {"id": "mode-b", "mode": "sandbox", "connected": false, "expect": {"banner": "Airwallex sandbox", "advance_label": "advance inflow (sandbox simulation)", "setup_deposit_separate": true}},
+    {"id": "fake", "mode": "fake", "expect": {"banner_and_receipt": "Simulated provider", "live_checkpoint_claim": false}},
+    {"id": "replay-review", "source_replay": true, "expect": {"execute_branch_directly": false, "review_requires_current_observed_plan": true}},
+    {"id": "search", "cohort": "reverse_stress", "expect": {"label": "Search result, not a forecast", "probability_visible": false}}
+  ],
+  "token_handling": "Operator token supplied explicitly for this browser tab, held only in memory, sent in Authorization header for writes. Never URL, localStorage, sessionStorage, exports, screenshots or logs. Reload forgets it; public judge path never asks for it. The server remains the security boundary."
+}

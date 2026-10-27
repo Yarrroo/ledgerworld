@@ -1,0 +1,14 @@
+{
+  "fixture": "accessibility",
+  "about": "T17-T19 unit requirements and T26 browser assertions, not measurements made before the build. Requirements apply to all six screens; simulation instrumentation stays dark in both themes.",
+  "cases": [
+    {"id": "keyboard-review", "test_owner": "T19 decide-execute.spec.js with mocked transport only; never the anonymous judge path", "action": "Navigate review, confirm approval, execute, then close receipt using keyboard only", "expect": {"visible_focus": true, "logical_focus_order": true, "focus_returns_to_opener": true, "escape_dismisses_review_without_post": true, "enter_on_page_does_not_execute": true}},
+    {"id": "status-not-colour", "expect": {"each_state_has_text": true, "icon_has_accessible_name_or_is_decorative": true, "states": ["known", "unknown", "stale", "unassessed", "pending", "failed", "reconciled"]}},
+    {"id": "contrast", "expect": {"normal_text_min_ratio": 4.5, "large_text_and_controls_min_ratio": 3, "measure_rendered_foreground_background": true, "test_both_themes": true}},
+    {"id": "phone", "viewport_width": 390, "expect": {"horizontal_page_scroll": false, "primary_controls_min_css_px": 44, "tables_scroll_in_own_region": true, "money_and_currency_do_not_clip": true}},
+    {"id": "reduced-motion", "prefers_reduced_motion": true, "expect": {"animated_scrubber_ticks": false, "decorative_balance_animation": false}},
+    {"id": "chart-alternative", "expect": {"cash_path_has_name": true, "table_at_selected_round": true, "floor_is_labelled": true, "colour_is_not_only_series_key": true}},
+    {"id": "errors", "expect": {"loading_marks_busy": true, "refusal_is_announced": true, "polling_does_not_steal_focus": true, "field_error_names_field": true}}
+  ],
+  "visual_basis": "System brief §12 colour tokens are the starting point, not proof of contrast. If a token pair fails its rendered contrast check, adjust that pair while retaining the brief's reading-surface / dark-instrument split; record the result in T26 evidence. No measured contrast ratio is claimed here."
+}

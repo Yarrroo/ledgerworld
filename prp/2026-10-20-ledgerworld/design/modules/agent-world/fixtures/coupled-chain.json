@@ -1,0 +1,37 @@
+{
+ "fixture": "coupled-chain",
+ "about": "test_public_shock_traceable_response (T08). A public rumour in round 3 is read by borrower-c, which requests an advance in round 4; the lender disburses in round 5 and its usable capacity K_p falls. A control branch without the rumour leaves K_p unchanged. One ScriptedModel plan drives both branches: entries match on (actor_id, round) and on what the actor saw, never on call order.",
+ "round_hours": 4,
+ "lender_before": {
+  "accounts": {"lender/operating": {"settled": 4500000}, "lender/venue": {"settled": 1500000}},
+  "committed_undrawn": [{"to": "borrower-b", "amount": 1000000}],
+  "pool_floor": 800000,
+  "K_p": 4200000,
+  "K_p_formula": "settled (all lender accounts) - committed undrawn - pool floor = 6,000,000 - 1,000,000 - 800,000"
+ },
+ "scheduled_events": [
+  {"round": 3, "kind": "public_post", "post_id": "p-r3-1", "author": "feed",
+   "text": "Unconfirmed: the exchange venue may pause withdrawals this week.", "branch": "shock"}
+ ],
+ "plan": [
+  {"actor_id": "borrower-c", "round": 4, "when_seen": ["p-r3-1"],
+   "tool_calls": [{"name": "request_advance", "args": {"amount_minor": 1200000, "currency": "USD", "from": "lender", "reason": "precaution after the venue rumour"}}]},
+  {"actor_id": "lender", "round": 5, "when_seen": ["req:borrower-c:r4"],
+   "tool_calls": [{"name": "accept", "args": {"request": "req:borrower-c:r4"}},
+                  {"name": "disburse", "args": {"request": "req:borrower-c:r4", "amount_minor": 1200000, "currency": "USD", "from_account": "lender/operating"}}]},
+  {"default": true, "tool_calls": [{"name": "no_action", "args": {}}]}
+ ],
+ "branches": ["shock", "control"],
+ "expect": {
+  "shock": {
+   "round_4": {"intent": "i-r4-borrower-c-1", "type": "request_advance", "evidence_ids": ["p-r3-1"], "c2_status": "accepted", "journal": null},
+   "round_5": {"intents": ["i-r5-lender-1", "i-r5-lender-2"], "evidence_ids": ["req:borrower-c:r4"], "c2_status": "accepted", "journals": 1},
+   "lender_after": {"lender/operating": {"settled": 3300000}, "lender/venue": {"settled": 1500000}},
+   "borrower_c_after": {"borrower-c/operating": {"settled_increase": 1200000}},
+   "K_p_after": 3000000,
+   "trace": ["journal of i-r5-lender-2", "i-r5-lender-2", "req:borrower-c:r4", "i-r4-borrower-c-1", "p-r3-1"]
+  },
+  "control": {"round_4": {"borrower-c": "no_action"}, "round_5": {"lender": "no_action"}, "K_p_after": 4200000},
+  "trap": "A draw by borrower-b on its committed line leaves K_p at 4,200,000 (settled and committed undrawn fall together). The coupled test must use an uncommitted advance, as here, or it cannot see the capacity move."
+ }
+}

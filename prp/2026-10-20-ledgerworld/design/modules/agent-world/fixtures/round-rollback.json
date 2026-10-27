@@ -1,0 +1,39 @@
+{
+  "fixture": "round-rollback",
+  "about": "A round commits whole or not at all. Capture precedes step 1; an unhandled exception or cancellation in steps 1-10 before durable completion aborts the round. The build injects faults through test hooks, without network calls.",
+  "world": "LF-1, shock branch, round 10 (t=40h): payroll 50,000.00 is due and clears as a mandatory settlement",
+  "round_start_capture": ["ledger", "OASIS SQLite", "actor memory records", "world and OASIS clocks", "RNG state", "scheduled-event cursor", "pending C2 deliveries", "intent queue", "transcript cursor"],
+  "abort_order": ["close admission for the failing round", "cancel and join all round-owned actor tasks and their children", "establish that no failed-round writer remains", "restore every captured component", "allow a retry only after restoration completes"],
+  "failed_round_expect": {
+    "applies_to": ["fault-in-events", "fault-in-agent-step", "cancel-in-agent-step", "fault-in-settlement", "fault-in-commit"],
+    "all_captured_state": "equal to round-start capture; failure diagnostic is separate from committed actor history",
+    "retry": "retry the same round with ScriptedModel after removing the injected fault; compare to a fresh clean control from the same capture",
+    "retry_equals_control": ["observation hashes", "intent ids", "C2 deliveries", "journals", "final ledger hash", "committed transcript"],
+    "no_duplicates": ["scheduled event delivery", "mandatory settlement", "public post", "actor memory entry", "C2 delivery"],
+    "quiescence": "no round-owned task can write after restoration begins; an instance with unproved quiescence is unusable and cannot retry",
+    "boundary": "these cases inject exceptions or cancellation before durable round completion; process-crash recovery, identical fresh live-model responses and reversal of external model charges are not proved"
+  },
+  "actor_interleaving": {
+    "applies_to": ["fault-in-agent-step", "cancel-in-agent-step"],
+    "arrange": "an actor writes a provisional public post, memory entry and queued intent, then pauses on a test barrier before another write; another actor or the coordinator triggers the abort",
+    "sibling_cleanup": "the paused actor attempts one final provisional memory/queue write during cancellation cleanup, before it terminates; this write must be removed by the subsequent restoration",
+    "assert_order": "task and child completion precede restoration; release all test barriers after abort and prove no writer can alter restored state",
+    "synchronisation": "explicit test barriers and lifecycle records, not wall-clock sleeps"
+  },
+  "cases": [
+    {"id": "fault-in-events", "inject": {"step": 2, "after": "a synthetic due event changes state and advances the event cursor; fail before observations"}},
+    {"id": "fault-in-agent-step", "inject": {"step": 5, "after": "the sibling actor reaches the provisional-write barrier", "failure": "another actor raises an unhandled exception"}},
+    {"id": "cancel-in-agent-step", "inject": {"step": 5, "after": "the sibling actor reaches the provisional-write barrier", "failure": "the coordinator is cancelled"}},
+    {"id": "fault-in-settlement", "inject": {"step": 8, "after": "the first mandatory settlement journal is written"}},
+    {"id": "fault-in-commit", "inject": {"step": 10, "after": "journals written, before the transcript append"}},
+    {"id": "invalid-intent", "inject": {"step": 6, "intent": {"actor_id": "treasury", "type": "pay", "params": {"amount": {"minor": 1500.5, "currency": "USD"}}}}}
+  ],
+  "expect": {
+    "fault-in-events": {"ledger_hash": "equal to before the round", "transcript_rounds": "ends at round 9", "round_status": "failed", "c2_delivered": false, "all_captured_state_equals_round_start": true, "retry_equals_clean_control": true, "duplicate_deliveries_or_postings": 0},
+    "fault-in-agent-step": {"ledger_hash": "equal to before the round", "transcript_rounds": "ends at round 9", "round_status": "failed", "c2_delivered": false, "all_captured_state_equals_round_start": true, "retry_equals_clean_control": true, "duplicate_deliveries_or_postings": 0, "round_owned_tasks_at_restore": 0, "writes_after_restore": 0, "cleanup_writes_removed": true},
+    "cancel-in-agent-step": {"ledger_hash": "equal to before the round", "transcript_rounds": "ends at round 9", "round_status": "cancelled", "c2_delivered": false, "all_captured_state_equals_round_start": true, "retry_equals_clean_control": true, "duplicate_deliveries_or_postings": 0, "round_owned_tasks_at_restore": 0, "writes_after_restore": 0, "cleanup_writes_removed": true},
+    "fault-in-settlement": {"ledger_hash": "equal to before the round", "transcript_rounds": "ends at round 9", "round_status": "failed", "c2_delivered": false, "all_captured_state_equals_round_start": true, "retry_equals_clean_control": true, "duplicate_deliveries_or_postings": 0},
+    "fault-in-commit": {"ledger_hash": "equal to before the round", "transcript_rounds": "ends at round 9", "round_status": "failed", "c2_delivered": false, "all_captured_state_equals_round_start": true, "retry_equals_clean_control": true, "duplicate_deliveries_or_postings": 0},
+    "invalid-intent": {"round_status": "committed", "c2": {"status": "rejected", "reason": "amount_not_integer_minor"}, "payroll_settled": true, "note": "a rejected intent is not a failed round; the mandatory settlement still runs"}
+  }
+}

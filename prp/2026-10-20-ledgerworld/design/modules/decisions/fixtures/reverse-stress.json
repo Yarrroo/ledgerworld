@@ -1,0 +1,68 @@
+{
+ "fixture": "reverse-stress",
+ "about": "The smallest shock that breaches the reserve floor under the selected policy (T21). A search, not a forecast: no probability is attached, and the search cohort is stored apart and never mixed into the policy comparison. Each family is searched one at a time on top of a baseline: an exact integer binary search over its size (minor units, hours or basis points), on a rules-replay world where the other actors' reactions are replayed from the selected branch's transcript (an observation that no longer matches falls back to no_action and sets reactions_frozen). A coarse grid of 8 points checks monotonicity first. One fresh branch at the found point confirms it. LF-1 + LF-2, selected policy integrated, from round 0. USD minor units.",
+ "label": "search result, not a forecast",
+ "size_bps": "floor(breaking_size * 10000 / scale); the smallest shock of a baseline is the family with the lowest size_bps; ties keep the family order below",
+ "families": [
+  {"id": "delayed-receipt", "size": "late_minor: the part of rcv-1 that slips past the horizon", "range": [0, 2000000], "scale": 2000000},
+  {"id": "obligation-growth", "family": "redemption-spike", "size": "growth of payroll-1, announced at round 2 (t=8)", "range": [0, 5000000], "scale": 5000000},
+  {"id": "lender-redemption", "family": "redemption-spike", "size": "a new pool redemption obligation announced at round 2, due t=24", "range": [0, 6000000], "scale": 4200000},
+  {"id": "stablecoin-depeg", "size": "price drop in bps on wd-1 (held as USDC), settling 24 h late", "range": [0, 10000], "scale": 10000},
+  {"id": "borrower-silence", "size": "first silent round of borrower-b", "range": [1, 18], "scale": 18},
+  {"id": "fx-gap", "size": "EURUSD move in bps", "range": [0, 3000], "scale": 3000},
+  {"id": "confidence-rumour", "size": "none in money: it acts only through the agents"}
+ ],
+ "baselines": [
+  {
+   "id": "no-shock",
+   "expect": {
+    "results": {
+     "delayed-receipt":   {"breaks": false, "note": "late <= 10,000.00 needs no draw; above it the advance covers up to the full 20,000.00, where cash at t=40 is exactly 30,000.00", "min_margin_minor": 0},
+     "obligation-growth": {"breaks": true, "breaking_size": 2000001, "size_bps": 4000, "short_minor": 1, "at_h": 40},
+     "lender-redemption": {"breaks": false, "note": "no draw is needed without a treasury shock, so the lender's capacity never binds"},
+     "stablecoin-depeg":  {"breaks": false, "note": "wd-1 lands after payroll; cash stays >= 40,000.00"},
+     "borrower-silence":  {"breaks": false, "note": "no path to borrower-a's account"},
+     "fx-gap":            {"breaks": null, "status": "not_applicable", "note": "LF-1 holds no second currency"},
+     "confidence-rumour": {"breaks": null, "status": "live_only", "note": "not searchable on frozen reactions"}
+    },
+    "smallest": {"family": "obligation-growth", "breaking_size": 2000001, "size_bps": 4000},
+    "failure_path": {
+     "settled_by_h": {"0": 7000000, "8": 7000000, "12": 10000000, "40": 2999999, "48": 4499999},
+     "events": ["r2: payroll-1 grows by 2,000,001 (announced)", "r2: integrated requests adv-a 1,000,000 (projected short at t=40)", "r3: rcv-1 2,000,000 and adv-a 1,000,000 arrive", "r10 (t=40): payroll 7,000,001 paid; settled 2,999,999 < floor 3,000,000", "r12 (t=48): wd-1 arrives; breach ends"],
+     "breach_h": [40, 48],
+     "confirmed": true
+    }
+   }
+  },
+  {
+   "id": "demo-shock",
+   "shock": "rcv-1 delayed 240 h (policy-comparison s1)",
+   "expect": {
+    "results": {
+     "delayed-receipt":   {"breaks": null, "status": "at_maximum_in_baseline"},
+     "obligation-growth": {"breaks": true, "breaking_size": 1, "size_bps": 0, "short_minor": 1, "at_h": 40, "note": "the selected plan keeps the floor with zero margin at t=40"},
+     "lender-redemption": {"breaks": true, "breaking_size": 3200001, "size_bps": 7619, "short_minor": 1000000, "at_h": 40, "note": "K_p = 42,000.00 - 32,000.01 = 9,999.99 < the 10,000.00 advance: the draw is rejected; a lender-side shock breaks the treasury's plan"},
+     "stablecoin-depeg":  {"breaks": false, "note": "wd-1 lands after payroll; with a full loss cash stays at 30,000.00"},
+     "borrower-silence":  {"breaks": false},
+     "fx-gap":            {"breaks": null, "status": "not_applicable"},
+     "confidence-rumour": {"breaks": null, "status": "live_only"}
+    },
+    "smallest": {"family": "obligation-growth", "breaking_size": 1, "size_bps": 0},
+    "sensitivity_table_rows": 7,
+    "failure_path": {
+     "settled_by_h": {"0": 7000000, "12": 7000000, "16": 8000000, "40": 2999999, "48": 4499999},
+     "events": ["r2: payroll-1 grows by 1", "r3: rcv-1 overdue; integrated requests adv-a 1,000,000", "r4: adv-a arrives", "r10 (t=40): payroll 5,000,001 paid; settled 2,999,999 < floor 3,000,000", "r12 (t=48): wd-1 arrives; breach ends"],
+     "breach_h": [40, 48],
+     "confirmed": true
+    }
+   }
+  }
+ ],
+ "expect_all": {
+  "no_probability_field": true,
+  "cohort": "reverse_stress",
+  "mixed_into_policy_comparison": false,
+  "label_on_every_result": "search result, not a forecast",
+  "non_monotone_flag": "set when a grid point below the found size breaks; the result then reports the smallest breaking grid point"
+ }
+}

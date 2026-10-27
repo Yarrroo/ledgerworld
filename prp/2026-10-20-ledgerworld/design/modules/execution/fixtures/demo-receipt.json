@@ -1,0 +1,38 @@
+{
+ "fixture": "demo-receipt",
+ "about": "The receipt scripts/demo.sh writes and checks/demo_receipt.py validates (T23, T31; KPI g3 demo_checkpoints_live = 3). Three checkpoints: a genuinely new branch simulated in this run, the advance reconciled, the payout reconciled. --require-live demands mode sandbox and a provider id on each. Setup movements (funding the sandbox wallet) are listed apart, labelled, and never count as checkpoints.",
+ "shape": {
+  "run_id": "str", "started_at": "UTC", "finished_at": "UTC", "mode": "fake|sandbox", "connected": "bool (Mode A)", "model": "scripted|live", "seed": "int",
+  "beats": ["state", "world", "shock", "fork", "break", "execute", "reconcile"],
+  "setup": [{"kind": "wallet_funding", "label": "sandbox wallet funding (setup, not part of the plan)", "provider_id": "str|null", "amount": "provider string"}],
+  "checkpoints": {
+   "fresh_branch": {"branch_id": "str", "created_at": "UTC", "rounds": "int ≥ 1", "model_calls": "int", "parent_snapshot_id": "str", "cached": false},
+   "advance_reconciled": {"leg_id": "str", "request_id": "str", "provider_id": "str|null", "label": "str", "status": "SETTLED", "journal_id": "str", "reconciled": true, "mode": "fake|sandbox", "at": "UTC"},
+   "payout_reconciled": {"leg_id": "str", "request_id": "str", "provider_id": "str", "label": "str", "status": "PAID", "journal_id": "str", "reconciled": true, "mode": "fake|sandbox", "at": "UTC"}
+  },
+  "incidents_open": "int"
+ },
+ "valid_fake": {
+  "run_id": "demo-1", "mode": "fake", "connected": false, "model": "scripted", "seed": 101,
+  "beats": ["state", "world", "shock", "fork", "break", "execute", "reconcile"],
+  "setup": [],
+  "checkpoints": {
+   "fresh_branch": {"branch_id": "br-demo-1-integrated", "rounds": 18, "model_calls": 0, "parent_snapshot_id": "lf1", "cached": false},
+   "advance_reconciled": {"request_id": "<h>-1-advance", "provider_id": "fake-dep-1", "label": "advance inflow (sandbox simulation)", "status": "SETTLED", "journal_id": "j-adv-a-disburse", "reconciled": true, "mode": "fake"},
+   "payout_reconciled": {"request_id": "<h>-2-payout", "provider_id": "fake-t-1", "label": "payout from the operator account", "status": "PAID", "journal_id": "j-payroll-1", "reconciled": true, "mode": "fake"}
+  },
+  "incidents_open": 0,
+  "expect": {"demo_receipt": "ok", "require_live": {"refused": "mode fake on 3 checkpoints"}, "live_checkpoints": 0}
+ },
+ "invalid": [
+  {"id": "cached-branch", "patch": {"checkpoints.fresh_branch.cached": true}, "expect": {"refused": "branch not fresh"}},
+  {"id": "branch-before-run", "patch": {"checkpoints.fresh_branch.created_at": "before started_at"}, "expect": {"refused": "branch not fresh"}},
+  {"id": "advance-not-reconciled", "patch": {"checkpoints.advance_reconciled.reconciled": false}, "expect": {"refused": "advance not reconciled"}},
+  {"id": "payout-only-sent", "patch": {"checkpoints.payout_reconciled.status": "SENT"}, "expect": {"refused": "payout not settled"}},
+  {"id": "open-incident", "patch": {"incidents_open": 1}, "expect": {"refused": "open incident"}},
+  {"id": "mode-b-mislabelled", "patch": {"connected": false, "checkpoints.advance_reconciled.label": "advance (connected-account transfer)"}, "expect": {"refused": "Mode B advance must carry the simulation label"}},
+  {"id": "setup-counted", "patch": {"checkpoints.advance_reconciled.provider_id": "<the setup funding's provider id>"}, "expect": {"refused": "a setup movement is not a checkpoint"}},
+  {"id": "live-missing-provider-id", "require_live": true, "patch": {"mode": "sandbox", "checkpoints.*.mode": "sandbox", "checkpoints.payout_reconciled.provider_id": null}, "expect": {"refused": "payout without provider id", "live_checkpoints": 2}}
+ ],
+ "valid_live_counts": {"note": "a sandbox receipt with all three checkpoints mode sandbox and provider ids (the advance's is the deposit id in Mode B) gives demo_checkpoints_live = 3"}
+}

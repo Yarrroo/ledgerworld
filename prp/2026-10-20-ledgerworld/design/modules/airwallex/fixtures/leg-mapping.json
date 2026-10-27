@@ -1,0 +1,34 @@
+{
+ "fixture": "leg-mapping",
+ "about": "Mode A / Mode B per leg (system brief 10) and how the mode is chosen at start. The probe is one GET on the connected-accounts list; the exact path is confirmed by T15 and recorded in docs/airwallex-contract.md. The receipt label is what the UI, the demo and the video show; a Mode B receipt never reads as a lender disbursement through the provider.",
+ "probe": {
+  "call": "GET connected accounts list (path confirmed in T15)",
+  "cases": [
+   {"env": {"AIRWALLEX_CONNECTED": "auto"}, "probe": {"http": 200}, "mode": "A"},
+   {"env": {"AIRWALLEX_CONNECTED": "auto"}, "probe": {"http": 403}, "mode": "B"},
+   {"env": {"AIRWALLEX_CONNECTED": "auto"}, "probe": {"http": 404}, "mode": "B"},
+   {"env": {"AIRWALLEX_CONNECTED": "auto"}, "probe": {"http": 500}, "mode": "B", "note": "an unclear probe never selects A; the health endpoint shows connected=false"},
+   {"env": {"AIRWALLEX_CONNECTED": "off"}, "probe": "not called", "mode": "B"},
+   {"env": {"AIRWALLEX_CONNECTED": "on"}, "probe": {"http": 403}, "mode": "refused", "note": "forcing A on an account without it fails at start, with the provider's answer"},
+   {"env": {"AIRWALLEX_MODE": "fake", "AIRWALLEX_CONNECTED": "auto"}, "probe": "the fake answers per its setting connected=true|false", "mode": "from the fake"}
+  ]
+ },
+ "legs": [
+  {"kind": "advance", "mode_A": {"op": "POST /api/v1/connected_account_transfers/create", "fields": ["amount", "currency", "destination", "request_id"], "label": "advance (connected-account transfer)"},
+   "mode_B": {"op": "POST /api/v1/simulation/deposit/create", "fields": ["amount", "global_account_id", "reference"], "label": "advance inflow (sandbox simulation)", "needs": "a Global Account in the advance currency (GET /api/v1/global_accounts, or AIRWALLEX_GLOBAL_ACCOUNT_ID)"}},
+  {"kind": "repayment", "mode_A": {"op": "POST /api/v1/charges/create", "fields": ["amount", "currency", "source", "request_id"], "header": "x-on-behalf-of not used: the platform charges the connected account", "label": "repayment (charge)"},
+   "mode_B": {"op": "none (ledger only)", "label": "repayment (simulated)"}},
+  {"kind": "fx", "mode_A": {"op": "POST /api/v1/fx/quotes/create then POST /api/v1/conversions/create", "label": "FX conversion"},
+   "mode_B": {"op": "same as A", "label": "FX conversion"}},
+  {"kind": "payout", "mode_A": {"op": "POST /api/v1/transfers/create", "header": "x-on-behalf-of: <borrower-a connected account>", "label": "payout on behalf of borrower-a"},
+   "mode_B": {"op": "POST /api/v1/transfers/create", "label": "payout from the operator account"}}
+ ],
+ "lf2_advance": {
+  "ledger_principal_minor": 1000000,
+  "fee_minor": 80000,
+  "provider_amount": "10000.00",
+  "note": "the provider leg moves the principal only; the fee is a ledger journal (advance-journals.json in the ledger module), never a provider movement",
+  "mode_A_receipt": {"label": "advance (connected-account transfer)", "amount": "10000.00", "currency": "USD"},
+  "mode_B_receipt": {"label": "advance inflow (sandbox simulation)", "amount": "10000.00", "currency": "USD", "status": "SETTLED"}
+ }
+}
