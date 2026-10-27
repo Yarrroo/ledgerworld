@@ -1,7 +1,7 @@
 # Review record: unreadable successful POSTs on the Execution screen
 > Risk: the outcome of a payment-executing POST, `Execution.vue`. Range 96f5bfc..HEAD, plus the
-> merge with main. Instruments: a correctness review at high effort (four passes: two rounds,
-> then two after merging main twice), a quality pass and a security pass (clean). Nothing left open.
+> merge with main. Instruments: a correctness review at high effort (five passes: two rounds,
+> then three after merging main three times), a quality pass and a security pass (clean). Nothing left open.
 
 | Pass | Finding | Grade | Outcome |
 |---|---|---|---|
@@ -40,6 +40,13 @@
 | merge 2 | Safari does not parse the space form, so its expiry never fires | medium | applied, proven: only the `T` form is read |
 | merge 2 | The newest failure's generation could move back | low | applied, unproven: the race cannot be staged reliably |
 | merge 2 | A 201 with zero legs is called unknown though its id is known | low | recorded: outside C3 (minItems 1), so not read |
+| merge 3 | An unreadable 201 answered after leaving was not held (disposal checked first) | high | applied, proven |
+| merge 3 | "Reading again" disagreed with the schedule; 408/429 not read again | medium | applied, proven |
+| merge 3 | A run change kept the last execution's "not recorded yet" | low | applied, proven |
+| merge 3 | A read error ending in a period showed two | low | applied, proven |
+| merge 3 | The banner takes the overview's context while an execution read fails | medium | recorded: a notice, not money; follow-up |
+| merge 3 | An incomplete approval with an id is blocked without naming it | low | recorded: follow-up |
+| merge 3 | `request()` altitude; unbounded retry | — | duplicates of recorded rows |
 
 Coverage: read the whole of `Execution.vue`, `api/v1.js`, the C3/C6 schemas and the API routes the
 screen calls. Simulation was read for the outcome rule only.

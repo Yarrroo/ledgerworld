@@ -23,9 +23,9 @@
 
 ## Verification
 - Tests: `npx vitest run` (frontend). The item went from 104 to 129 passing, and each of its 25 new
-  cases failed against the code before the fix that it covers. Main was merged twice (an
-  unresolved block held against its run; one generation for every execution read), and 10 more
-  cases each failed before their fix; 180 pass.
+  cases failed against the code before the fix that it covers. Main was merged three times (an
+  unresolved block held against its run; one generation for every execution read; nothing
+  started after unmount), and 14 more cases each failed before their fix; 192 pass.
 - Build: `npm --prefix frontend run build` green. `checks/no_secrets.py` and `checks/attribution.py`
   exit 0. No Python changed.
 - Real server: answers from the API test fixture (201 approval, 202 accepted, 200 read) pass the
@@ -49,5 +49,8 @@
 - The response checks are written by hand against `contracts/`; nothing in the frontend validates
   against the schema.
 - A failed read is retried every 5 s with no backoff while it keeps failing with no answer.
+- While an execution read fails, the banner takes its as_of, mode and snapshot from the overview,
+  and can announce a context change for figures that were not reloaded.
+- An approval answered with its id but an incomplete body is blocked without naming that id.
 - The newest failure's generation never moving back has no test: the three-read out-of-order case
   it guards is not one the suite can stage reliably.
