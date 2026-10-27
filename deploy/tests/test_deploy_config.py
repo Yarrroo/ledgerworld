@@ -179,6 +179,24 @@ def test_no_code_copy_brings_a_nested_dotenv_file_or_host_bytecode():
             assert CODE_COPY_EXCLUDES <= flags, sources
 
 
+def test_the_image_prepares_every_directory_the_process_writes_for_its_user():
+    """The process runs as a non-root user from backend/, which root owns. The upstream social
+    platform makes ./log in the working directory at import time, so backend/log is created and
+    handed to that user beside the app's own logs, uploads and var, or the app crash-loops."""
+    final = stages()["app"]
+    user = next(r for w, r in final if w == "USER")
+    workdir = [r for w, r in final if w == "WORKDIR"][-1]
+    assert workdir == "/app/backend"
+    runs = [r for w, r in final if w == "RUN" and "useradd" in r]
+    assert len(runs) == 1
+    steps = [shlex.split(step) for step in runs[0].split("&&")]
+    made = {d for s in steps if s[:2] == ["mkdir", "-p"] for d in s[2:]}
+    owned = {d for s in steps if s[:1] == ["chown"] and user in s for d in s
+             if d.startswith("backend/")}
+    for directory in ("backend/log", "backend/logs", "backend/uploads", "backend/var"):
+        assert directory in made and directory in owned, directory
+
+
 def test_the_entrypoint_is_the_role_switch():
     final = stages()["app"]
     entry = [json.loads(r) for w, r in final if w == "ENTRYPOINT"]

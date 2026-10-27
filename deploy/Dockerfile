@@ -54,9 +54,10 @@ COPY prp/2026-10-20-ledgerworld/design/modules/execution ./prp/2026-10-20-ledger
 COPY --from=frontend /src/frontend/dist ./frontend/dist
 COPY deploy/entrypoint.sh ./deploy/entrypoint.sh
 
+# backend/log: the upstream social platform makes ./log in the working directory at import time
 RUN useradd --system --uid 10001 --home-dir /app ledgerworld \
-    && mkdir -p backend/uploads backend/var backend/logs \
-    && chown -R ledgerworld backend/uploads backend/var backend/logs
+    && mkdir -p backend/uploads backend/var backend/logs backend/log \
+    && chown -R ledgerworld backend/uploads backend/var backend/logs backend/log
 USER ledgerworld
 WORKDIR /app/backend
 
