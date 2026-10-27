@@ -163,3 +163,52 @@ def test_unreadable_document_is_missing_not_a_crash(pack):
 
 def test_unknown_option_is_a_usage_error(pack):
     assert cli(pack, "--unknown").returncode == 2
+
+
+@pytest.mark.parametrize("body", [
+    "**Shot:**\n\n**Voice:** Narration.",
+    "**Shot:** Frame description.\n\n**Voice:**",
+    "**Shot:**\n\n**Voice:**",
+])
+def test_shot_and_voice_each_need_content(pack, body):
+    path = pack / "docs/video-script.md"
+    text = path.read_text(encoding="utf-8")
+    original = submission.section(text, "00:00-00:15 State")
+    replace(pack, "video-script.md", original, body)
+    assert not submission.assess(pack)["timed seven-beat shot list"]
+
+
+@pytest.mark.parametrize("heading", submission.EVIDENCE)
+def test_evidence_drafts_are_not_complete(pack, heading):
+    replace(pack, "video-script.md", f"### {heading}",
+            f"### {heading}\n\nTODO: replace this draft.")
+    assert not submission.assess(pack)["evidence rules"]
+
+
+@pytest.mark.parametrize("name", ["submission.md", "video-script.md"])
+@pytest.mark.parametrize("fence", ["`````", "~~~", "````"])
+def test_example_markdown_is_not_the_document(pack, name, fence):
+    path = pack / "docs" / name
+    path.write_text(f"{fence}markdown\n{path.read_text(encoding='utf-8')}\n{fence}\n",
+                    encoding="utf-8")
+    items = submission.assess(pack)
+    expected = 2 if name == "submission.md" else 6
+    assert sum(items.values()) == expected
+
+
+@pytest.mark.parametrize("url", [
+    "https://video.org:not-a-port/watch", "https://video.org:99999/watch",
+    "https://video.example.com/watch", "https://videos.org/pending",
+])
+def test_malformed_and_draft_urls_do_not_complete_the_pack(pack, url):
+    replace(pack, "submission.md", VIDEO, url)
+    assert not submission.assess(pack)["links"]
+
+
+def test_recording_plan_handles_the_prepared_approvals_one_shot_contract():
+    text = (ROOT / "docs/video-script.md").read_text(encoding="utf-8")
+    prerequisites = submission.section(text, "Recording prerequisites")
+    execute = submission.section(text, "02:00-03:55 Execute")
+    assert "already_approved" in prerequisites
+    assert "earlier capture" in execute
+    assert "Do not approve or execute that same plan again" in execute

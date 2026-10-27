@@ -29,6 +29,23 @@ EVIDENCE = {
 }
 
 
+def outside_fences(text: str) -> str:
+    """Mask code fences without changing offsets into the original document."""
+    lines = []
+    fence = None
+    for line in text.splitlines(keepends=True):
+        opened = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        masked = fence is not None or opened is not None
+        if opened:
+            marker = opened[1]
+            if fence is None:
+                fence = marker
+            elif marker[0] == fence[0] and len(marker) >= len(fence) and not opened[2].strip():
+                fence = None
+        lines.append(re.sub(r"[^\r\n]", " ", line) if masked else line)
+    return "".join(lines)
+
+
 def read(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -39,10 +56,10 @@ def read(path: Path) -> str:
 def section(text: str, heading: str, level: int = 2) -> str:
     mark = "#" * level
     found = re.search(
-        rf"^{mark} {re.escape(heading)}\s*\n(.*?)(?=^#{{1,{level}}} |\Z)",
-        text, re.MULTILINE | re.DOTALL,
+        rf"^{mark} {re.escape(heading)}[ \t]*\n(.*?)(?=^#{{1,{level}}} |\Z)",
+        outside_fences(text), re.MULTILINE | re.DOTALL,
     )
-    return found[1].strip() if found else ""
+    return text[found.start(1):found.end(1)].strip() if found else ""
 
 
 def complete(text: str) -> bool:
@@ -55,10 +72,14 @@ def https_url(value: str) -> bool:
     try:
         url = urlsplit(value)
         host = url.hostname or ""
+        port = url.port  # urlsplit does not validate a port until it is read.
+        reserved = ("example.com", "example.org", "example.net")
         return (url.scheme == "https" and "." in host and not url.username and not url.password
-                and host not in ("example.com", "example.org", "example.net")
+                and (port is None or port > 0)
+                and not any(host == name or host.endswith("." + name) for name in reserved)
                 and not host.endswith((".invalid", ".example", ".test", ".localhost"))
-                and not UNFINISHED.search(value))
+                and not UNFINISHED.search(value)
+                and not re.search(r"\bpending\b", value, re.IGNORECASE))
     except ValueError:
         return False
 
@@ -80,7 +101,7 @@ def links_ok(root: Path, text: str) -> bool:
 
 
 def timed_beats(text: str) -> bool:
-    shots = list(TIMED.finditer(text))
+    shots = list(TIMED.finditer(outside_fences(text)))
     if tuple(shot[5] for shot in shots) != BEATS:
         return False
     previous = 0
@@ -90,15 +111,22 @@ def timed_beats(text: str) -> bool:
         if start != previous or end <= start:
             return False
         body = section(text, shot[0].removeprefix("## ").strip())
-        if not complete(body) or "**Shot:**" not in body or "**Voice:**" not in body:
+        if not complete(body):
             return False
+        for label in ("Shot", "Voice"):
+            field = re.search(
+                rf"^\*\*{label}:\*\*(.*?)(?=^\*\*(?:Shot|Voice):\*\*|\Z)",
+                body, re.MULTILINE | re.DOTALL,
+            )
+            if not field or not complete(field[1]):
+                return False
         previous = end
     return previous <= 280
 
 
 def evidence_ok(text: str) -> bool:
     rules = section(text, "Evidence rules")
-    return all(
+    return complete(rules) and all(
         all(term.casefold() in section(rules, heading, 3).casefold() for term in terms)
         for heading, terms in EVIDENCE.items()
     )
@@ -107,7 +135,7 @@ def evidence_ok(text: str) -> bool:
 def assess(root: Path) -> dict[str, bool]:
     submission = read(root / "docs/submission.md")
     video = read(root / "docs/video-script.md")
-    title = re.search(r"^# (.+)$", submission, re.MULTILINE)
+    title = re.search(r"^# (.+)$", outside_fences(submission), re.MULTILINE)
     airwallex = section(submission, "Airwallex usage")
     testing = section(submission, "Testing instructions")
     return {

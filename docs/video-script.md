@@ -5,9 +5,14 @@
 
 ## Recording prerequisites
 
-Prepare an associated run and execution in the public API store, then verify the read-only judge
-path. The command-line demo's private store is not that prepared run. If the prepared run is absent
-or every policy is infeasible, stop recording; do not force a selection just for the video.
+During preparation, capture the initial approval and execution before naming that execution as the
+prepared demo. Save its actual run, approval, snapshot and execution IDs with this footage. Then
+prepare the associated run/execution in the public API store and verify the read-only judge path.
+Approval is one-shot for that plan and observed snapshot: repeating it returns `409 already_approved`;
+repeating execution returns `409 approval_used`. A fresh simulation fork does not reset either.
+The Execute beat uses the labelled earlier capture, not a second approval of the prepared plan.
+The command-line demo's private store is not that prepared run. If the prepared run is absent or
+every policy is infeasible, stop recording; do not force a selection just for the video.
 
 Keep synthetic data and provider/model labels visible. Use an operator-only token outside the
 capture area for POSTs. Do not film environment files, headers containing credentials or a token
@@ -70,12 +75,16 @@ returns the earliest unmet obligation and escalation; it must not quietly lower 
 
 ## 02:00-03:55 Execute
 
-**Shot:** Review the plan decided again on observed state, its bound approval, amount, currency,
-expiry and plan hash. Approve, execute, and open the associated execution's own receipt. Show
-request IDs, provider IDs, queried final state, settled balances and loan reconciliation. Show
-setup wallet funding separately from the plan. Do not film the token.
+**Shot:** Insert the earlier capture labelled “Earlier: initial approval and execution” with its
+actual run, snapshot and execution IDs. Show the bound amount, currency, expiry and plan hash during
+the original approval. Do not approve or execute that same plan again. Return to the prepared
+execution's own receipt and show its queried final state, request IDs, provider IDs, settled
+balances and loan reconciliation. Keep the original capture's identity distinct from the fresh
+comparison branch. If no original footage exists, inspect the saved approval and receipt and
+narrate that as inspection, not a new approval. Show setup wallet funding separately from the plan.
+Do not film the token.
 
-**Voice:** “Only this approved plan crosses the gateway. The banner identifies fake or Airwallex
+**Voice:** “This previously approved plan crossed the gateway. The banner identifies fake or Airwallex
 sandbox, and the receipt identifies connected-account Mode A or fallback Mode B. In Mode B this
 advance is an advance inflow (sandbox simulation), not a lender disbursement through Airwallex;
 repayment is ledger-only and simulated. Pending or unknown is not settled.”
