@@ -15,9 +15,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
-from sqlalchemy import Connection, func, insert, select, update
+from sqlalchemy import Connection, insert, select, update
 
-from .models import EPOCH, Journal, Posting, accounts, facilities, lending_pools, postings
+from .models import (
+    EPOCH,
+    Journal,
+    Posting,
+    accounts,
+    facilities,
+    journals,
+    lending_pools,
+    postings,
+    reservations,
+)
 from .schemas import (
     CollateralFacility,
     CommittedLine,
@@ -25,7 +35,7 @@ from .schemas import (
     Snapshot,
     SnapshotContract,
 )
-from .store import LedgerStore, minor_amount
+from .store import LedgerStore, _naive, _sum, minor_amount
 
 BPS = 10000
 FacilityKind = Literal["committed_line", "revenue_advance", "collateral"]
@@ -93,6 +103,31 @@ def receivable_account(pool: str, facility_id: str) -> str:
     return f"{pool}/loan:{facility_id}"
 
 
+def advance_payable(f: Facility) -> str:
+    return f"{f.borrower}/advance-payable:{f.facility_id}"
+
+
+def repay_journal_id(facility_id: str, period_end: datetime) -> str:
+    """One id per facility and period, the same instant in any zone: what makes it repaid once."""
+    return f"repay:{facility_id}:{_naive(period_end):%Y%m%dT%H%M%S}Z"
+
+
+def _ids_fit(contract: SnapshotContract) -> None:
+    """Every id this contract will generate fits its column (SQLite ignores widths; PG does not)."""
+    cid, loan = contract.contract_id, receivable_account(contract.lender, contract.contract_id)
+    width = {journals.c.journal_id: [f"open:{loan}", f"disburse:{cid}",
+                                     repay_journal_id(cid, EPOCH), f"draw:{cid}-{10**9}"],
+             reservations.c.reservation_id: [f"{cid}:undrawn@{10**9}"],
+             accounts.c.account_id: [f"{loan}:opening",
+                                     f"{contract.borrower}/advance-payable:{cid}",
+                                     f"{contract.borrower}/line-payable:{cid}"]}
+    for column, ids in width.items():
+        longest = max(ids, key=len)
+        if len(longest) > column.type.length:
+            raise ValueError(f"contract {cid}: id {longest!r} is longer than {column} allows "
+                             f"({column.type.length})")
+
+
 def ensure_account(store: LedgerStore, account_id: str, entity_id: str, currency: str,
                    kind: str, conn: Connection) -> None:
     """Open a non-cash account (receivable, payable, income, expense) the first time it is used."""
@@ -119,6 +154,11 @@ def register(store: LedgerStore, contract: SnapshotContract, *, as_of: datetime,
         limit, fee, share = contract.limit, 0, None
     else:
         raise TypeError(f"not a contract: {contract!r}")
+    if isinstance(contract, RevenueAdvance) and contract.state != "offered":
+        # C5 carries no outstanding for an advance; reading it as zero would hide the exposure.
+        raise ValueError(f"contract {contract.contract_id}: a {contract.state} advance needs "
+                         "its outstanding, which a snapshot does not carry")
+    _ids_fit(contract)
     with store.transaction(conn) as c:
         pool = c.execute(select(lending_pools.c.currency).where(
             lending_pools.c.pool_entity_id == contract.lender)).first()
@@ -181,8 +221,7 @@ def pool_facilities(store: LedgerStore, pool: str,
 def outstanding_minor(store: LedgerStore, f: Facility, conn: Connection | None = None) -> int:
     """What the borrower owes now: the balance of the lender's receivable for the facility."""
     with store.reading(conn) as c:
-        return int(c.execute(select(func.coalesce(func.sum(postings.c.amount_minor), 0))
-                             .where(postings.c.account_id == f.receivable_account)).scalar())
+        return _sum(c, postings, f.receivable_account)
 
 
 def set_facility(store: LedgerStore, facility_id: str, conn: Connection | None = None,

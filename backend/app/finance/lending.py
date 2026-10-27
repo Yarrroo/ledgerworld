@@ -28,10 +28,12 @@ from sqlalchemy.exc import IntegrityError
 
 from .contracts import (
     Facility,
+    advance_payable,
     ensure_account,
     facility,
     outstanding_minor,
     pool_facilities,
+    repay_journal_id,
     repayment_minor,
     set_facility,
 )
@@ -44,6 +46,7 @@ from .models import (
     accounts,
     journals,
     lending_pools,
+    reservations,
     revenue_observations,
 )
 from .spendability import Authority, grouped, spendability, state_of
@@ -174,11 +177,12 @@ def disburse(store: LedgerStore, facility_id: str, *, now: datetime,
         if refusal is not None:
             raise refusal
         income, expense = f"{f.pool}/fee-income", f"{f.borrower}/fee-expense"
-        payable = f"{f.borrower}/advance-payable:{f.facility_id}"
-        ensure_account(store, income, f.pool, f.currency, "income", c)
-        ensure_account(store, expense, f.borrower, f.currency, "expense", c)
-        ensure_account(store, payable, f.borrower, f.currency, "payable", c)
+        payable = advance_payable(f)
         fee, owed = f.fee_minor, f.owed_minor
+        if fee:
+            ensure_account(store, income, f.pool, f.currency, "income", c)
+            ensure_account(store, expense, f.borrower, f.currency, "expense", c)
+        ensure_account(store, payable, f.borrower, f.currency, "payable", c)
         lines = [Posting(f.receivable_account, owed), Posting(source, -f.limit_minor),
                  Posting(income, -fee), Posting(payee, f.limit_minor), Posting(expense, fee),
                  Posting(payable, -owed)]
@@ -209,21 +213,23 @@ def draw_line(store: LedgerStore, facility_id: str, amount_minor: int, *, now: d
             raise LedgerRefusal("beyond_capacity", facility=f.facility_id, amount=amount,
                                 undrawn=undrawn,
                                 binding=f"undrawn line = {grouped(undrawn, f.currency)}")
-        held = store.reservation(f.reservation_id, conn=c) if f.reservation_id else None
-        if held is not None and held.state != "held":
-            held = None
+        held = c.execute(select(reservations).where(
+            reservations.c.reservation_id == f.reservation_id,
+            reservations.c.state == "held")).first() if f.reservation_id else None
         source = held.account_id if held is not None else f"{f.pool}/operating"
         payee = borrower_account or f"{f.borrower}/operating"
         _cash_of(c, source, f.pool, f.currency)
         _cash_of(c, payee, f.borrower, f.currency)
-        if state_of(store.view(source, conn=c), now) == "unknown":
-            raise LedgerRefusal("unknown_balance", account=source)
+        state = state_of(store.view(source, conn=c), now)
+        if state != "known":  # an execution needs a known, fresh balance
+            raise LedgerRefusal(f"{state}_balance", account=source)
         if held is not None:
             store.release(held.reservation_id, conn=c)
         payable = f"{f.borrower}/line-payable:{f.facility_id}"
         ensure_account(store, payable, f.borrower, f.currency, "payable", c)
         journal = store.apply(Journal(
-            journal_id=journal_id or f"draw:{f.facility_id}:{_seq(c) + 1}", kind="line_draw",
+            journal_id=journal_id or LedgerStore._next_id(c, journals, f"draw:{f.facility_id}"),
+            kind="line_draw",
             round=round, sim_time=now, source_intent_id=source_intent_id,
             source_leg_id=source_leg_id, mode=mode,
             postings=(Posting(f.receivable_account, amount), Posting(source, -amount),
@@ -237,11 +243,6 @@ def draw_line(store: LedgerStore, facility_id: str, amount_minor: int, *, now: d
                                     conn=c)
             set_facility(store, f.facility_id, reservation_id=new_id, conn=c)
         return journal
-
-
-def _seq(c: Connection) -> int:
-    return int(c.execute(select(journals.c.seq).order_by(journals.c.seq.desc())
-                         .limit(1)).scalar() or 0)
 
 
 # ----------------------------------------------------------------------------- repayment
@@ -284,15 +285,16 @@ def observed_revenue(store: LedgerStore, facility_id: str, period_end: datetime,
 
 def repay(store: LedgerStore, facility_id: str, period_end: datetime, *, now: datetime,
           from_account: str | None = None, to_account: str | None = None,
-          journal_id: str | None = None, round: int = 0, mode: Mode = "simulation",
+          round: int = 0, mode: Mode = "simulation",
           source_intent_id: str | None = None, source_leg_id: str | None = None,
           conn: Connection | None = None) -> Repayment:
     """One period's repayment of an advance: floor(observed revenue × share), capped at
-    outstanding. No observation, no repayment; a period is repaid at most once."""
+    outstanding. No observation, no repayment; a period is repaid at most once, which its
+    journal id (`repay_journal_id`, never the caller's) enforces."""
     with store.transaction(conn) as c:
         f = facility(store, facility_id, conn=c)
         _kind(f, "revenue_advance", "active", "repaid")
-        journal_id = journal_id or f"repay:{f.facility_id}:{period_end:%Y%m%dT%H%MZ}"
+        journal_id = repay_journal_id(f.facility_id, period_end)
         if c.execute(select(journals.c.journal_id)
                      .where(journals.c.journal_id == journal_id)).first():
             raise ValueError(f"period {period_end.isoformat()} of {facility_id} is already "
@@ -317,7 +319,7 @@ def repay(store: LedgerStore, facility_id: str, period_end: datetime, *, now: da
         journal = store.apply(Journal(
             journal_id=journal_id, kind="advance_repayment", round=round, sim_time=now,
             source_intent_id=source_intent_id, source_leg_id=source_leg_id, mode=mode,
-            postings=(Posting(f"{f.borrower}/advance-payable:{f.facility_id}", amount),
+            postings=(Posting(advance_payable(f), amount),
                       Posting(payer, -amount), Posting(payee, amount),
                       Posting(f.receivable_account, -amount))), conn=c)
         if owed - amount == 0:

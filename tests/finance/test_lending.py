@@ -9,7 +9,7 @@ posting against the design fixture `advance-journals.json`, unchanged.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from functools import cache
 from pathlib import Path
 
@@ -356,3 +356,65 @@ def test_a_contract_whose_lender_is_not_a_pool_is_refused():
     with pytest.raises(ValueError, match="not a lending pool"):
         from_snapshot(store, snap)
     assert store.rows("accounts") == []  # the snapshot loads whole or not at all
+
+
+def test_a_line_draw_from_a_stale_pool_balance_is_refused():
+    store = world()
+    before = store.dump()
+    with pytest.raises(LedgerRefusal) as refused:
+        draw_line(store, "line-b", 100000, now=h(7))
+    assert refused.value.code == "stale_balance"
+    assert store.dump() == before
+
+
+def test_a_period_written_in_another_zone_is_still_repaid_once():
+    store = world(borrower_cash=1000000)
+    disburse(store, "adv-a", now=T0)
+    end = T0 + WEEK
+    store.observe("borrower-a/operating", "known", end)
+    observe_revenue(store, "adv-a", end, 2400000, observed_at=end, source="sales ledger")
+    repay(store, "adv-a", end, now=end)
+    before = store.dump()
+    same = end.astimezone(timezone(timedelta(hours=2)))
+    with pytest.raises(ValueError, match="already repaid"):
+        repay(store, "adv-a", same, now=end)
+    assert store.dump() == before
+
+
+def test_a_caller_cannot_name_the_repayment_journal():
+    """The once-per-period guard is the journal id; a caller-chosen id would bypass it."""
+    store = world(borrower_cash=1000000)
+    disburse(store, "adv-a", now=T0)
+    end = T0 + WEEK
+    store.observe("borrower-a/operating", "known", end)
+    observe_revenue(store, "adv-a", end, 2400000, observed_at=end, source="sales ledger")
+    with pytest.raises(TypeError):
+        repay(store, "adv-a", end, now=end, journal_id="leg-1")
+    with pytest.raises(TypeError):
+        repay(store, "adv-a", end, now=end, journal_id="leg-2")
+    assert balance(store, "lender/loan:adv-a") == 1080000
+
+
+def test_a_line_named_with_a_reservation_but_no_hold_draws_from_free_cash():
+    snap = lf2()["snapshot"]
+    line = next(c for c in snap["contracts"] if c["contract_id"] == "line-b")
+    del line["reserved_on"]  # no hold is created for it
+    snap["accounts"][0]["buckets"]["reserved"]["minor"] = 0
+    store = world(snap)
+    draw_line(store, "line-b", 100000, now=T0)
+    assert balance(store, "borrower-b/operating") == 100000
+    assert capacity(store, POOL, T0).parts.committed_undrawn == 900000
+
+
+def test_an_active_advance_in_a_snapshot_is_refused_not_read_as_repaid():
+    snap = lf2()["snapshot"]
+    next(c for c in snap["contracts"] if c["contract_id"] == "adv-a")["state"] = "active"
+    with pytest.raises(ValueError, match="needs its outstanding"):
+        from_snapshot(LedgerStore("sqlite://"), snap)
+
+
+def test_a_contract_id_too_long_for_its_generated_ids_is_refused_at_load():
+    snap = lf2()["snapshot"]
+    next(c for c in snap["contracts"] if c["contract_id"] == "adv-a")["contract_id"] = "a" * 50
+    with pytest.raises(ValueError, match="longer than"):
+        from_snapshot(LedgerStore("sqlite://"), snap)
