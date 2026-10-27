@@ -1,0 +1,17 @@
+{
+  "board_item": 60,
+  "goal": "g5",
+  "goal_text": "The entry is complete and honest",
+  "line_id": "l_a69392eaf5",
+  "outcome": "Everything the event requires for a submission exists in the repository and is verified by a script, not asserted: a working demo, a video walkthrough under five minutes recorded from a shot list whose claims the receipts support (one fresh branch live, any precomputed cohort labelled replay), and a repository link with setup instructions, plus the submission form text (title, one-liner, description, how Airwallex is used, testing instructions with no login for reading, links) and the upstream attribution. Measured by running the checker, never counted from tasks closed.",
+  "name": "submission_items",
+  "unit": "count of the 8 goal-g5 submission items that checks/submission.py verifies as present and consistent at the commit under test; 0 to 8, 0 when the checker does not exist or cannot run",
+  "source": "python3 checks/kpi.py g5 --print (T22: runs checks/goals/g5.py, which runs python3 checks/submission.py --count and prints the verified count; prints the baseline 0 with the reason on stderr when it cannot run). checks/submission.py --count is written by T28 and prints n/8 over the eight items of goal g5. Defined in prp/2026-10-20-ledgerworld/00-system.md section 17, row g5 (KPI submission_items, target 8, items checks/submission.py verifies).",
+  "baseline": 0,
+  "baseline_observed_at": "2026-10-27T04:41:53Z",
+  "target": 8,
+  "target_comparison": ">=",
+  "direction": "up",
+  "observation": "At the commit under test, run python3 checks/kpi.py g5 --print and read the printed count (or python3 checks/submission.py --count and read n of n/8). Until checks/kpi.py exists, run checks/submission.py directly; until checks/submission.py exists, the value is 0, because no item is verified by a script. An item the checker does not verify counts as missing; a hand-checked item does not count. Observe after every landing train and before the build freeze (2026-11-12) and submission close (2026-11-13 18:29 UTC). Met when the value is 8.",
+  "evidence": "Definition: 00-system.md section 17 (g5: KPI submission_items, target 8, items checks/submission.py verifies) and the event line at the top of the brief ([REQ] submission is a working demo, a video walkthrough under five minutes and a repository link with setup instructions); section 13 (the video's seven beats and the honesty moment). briefs/T22.md line 27: g5 is python3 checks/submission.py --count, 0 until it exists. briefs/T28.md: checks/submission.py [--count] checks the eight items of goal g5 and prints n/8; docs/submission.md holds title, one-liner, description, how Airwallex is used, testing instructions and links; docs/video-script.md holds the seven beats in <= 4:40. briefs/T27.md: README setup, architecture and attribution. The brief does not list the eight items by name; T28 fixes them in the checker, and this record does not invent them. Baseline observed 2026-10-27T04:41:53Z in this checkout at 8a867e0: python3 checks/kpi.py g5 --print -> no such file, exit 2; python3 checks/submission.py --count -> no such file, exit 2; docs/submission.md and docs/video-script.md do not exist (README.md, ATTRIBUTION.md, LICENSE, NOTICE, UPSTREAM.md exist but no script verifies them). No item is verified, so the value is 0."
+}
