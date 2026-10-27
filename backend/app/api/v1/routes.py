@@ -8,6 +8,7 @@ one POST without it.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import uuid
@@ -16,6 +17,7 @@ from typing import Any
 from flask import Blueprint, current_app, request
 from pydantic import BaseModel, ValidationError
 
+from ...connectors.airwallex.webhooks import WebhookVerifier
 from ...decisions.candidates import plan_for_now
 from ...execution import reconcile
 from ...execution.approval import Refusal, bind
@@ -29,6 +31,8 @@ from ...jobs.runner import (
     family_of,
     fork_branch,
     load_transcript,
+    new_run,
+    pending_decisions,
 )
 from ...simulation.clock import HORIZON_ROUNDS
 from ...simulation.interview import Interview, ReadOnlyViolation
@@ -37,6 +41,7 @@ from . import reports, views
 from .services import API_VERSION, APPROVER, Services
 
 bp = Blueprint("api_v1", __name__)
+_demo_world = functools.cache(load_world)  # the world runs start from; read once
 log = logging.getLogger("ledgerworld.api")
 
 
@@ -140,7 +145,7 @@ def submit_run():
     _token()
     req: c6.RunRequest = _body(c6.RunRequest)
     s = services()
-    world = load_world().snapshot
+    world = _demo_world().snapshot
     world_snapshot = world.snapshot_id
     if req.snapshot_id != world_snapshot:
         raise Refused(422, "unknown_snapshot",
@@ -156,14 +161,19 @@ def submit_run():
     queue = _queue()
     run_id = f"run-{uuid.uuid4().hex[:12]}"
     s.jobs.put("run_spec", run_id, {"scenario": scenario, "rounds": req.rounds})
-    s.jobs.put("run", run_id, {"run_id": run_id, "snapshot_id": req.snapshot_id,
-                               "committed_round": None, "rounds": [], "feed": [],
-                               "cash_paths": [], "branches": [],
-                               "as_of": world.as_of.isoformat()})  # the run's own clock
+    s.jobs.put("run", run_id, new_run(run_id, req.snapshot_id, world.as_of))
     job = queue.submit(RUN, run_id, {"run_id": run_id, "scenario": scenario,
                                      "rounds": req.rounds})
     return _reply(c6.JobAccepted, {"job_id": job.job_id, "run_id": run_id,
                                    "branch_ids": [base_branch(run_id)]}, 202)
+
+
+def _finished_run(run_id: str, what: str) -> dict:
+    doc = _run(run_id)
+    state, _ = _job_state(run_id, RUN)
+    if state != "done":
+        raise Refused(409, "run_not_done", f"run {run_id} is {state}; {what} a finished run")
+    return doc
 
 
 @bp.get("/runs/<run_id>")
@@ -180,26 +190,28 @@ def fork_run(run_id: str):
     _token()
     req: c6.ForkRequest = _body(c6.ForkRequest)
     s = services()
-    doc = _run(run_id)
-    state, _ = _job_state(run_id, RUN)
-    if state != "done":
-        raise Refused(409, "run_not_done", f"run {run_id} is {state}; fork a finished run")
+    doc = _finished_run(run_id, "fork")
     if not 1 <= req.checkpoint_round <= min(doc["committed_round"] or 0, HORIZON_ROUNDS - 1):
         raise Refused(422, "checkpoint_out_of_range",
                       f"fork at a committed round in 1..{doc['committed_round']}, before the "
                       f"horizon round {HORIZON_ROUNDS}")
+    if _job_state(run_id, FORK)[0] in ("queued", "running"):
+        raise Refused(409, "fork_in_progress", f"run {run_id} is being forked; wait for its "
+                      "decisions")
     spec = s.jobs.get("run_spec", run_id)
     family = family_of(spec["scenario"])
+    if not family.scripted:
+        raise Refused(422, "not_replayable", f"run {run_id} ran on a live model: its rounds "
+                      "cannot be replayed to a checkpoint")
     policies = list(dict.fromkeys(req.policies))
     queue = _queue()
+    job_id = f"job-{uuid.uuid4().hex[:16]}"
+    # The pending record names its job before the job exists, so the worker never finishes first.
+    s.jobs.put("decisions", run_id, pending_decisions(run_id, doc["snapshot_id"],
+                                                      req.checkpoint_round, family, job_id))
     job = queue.submit(FORK, run_id, {"run_id": run_id, "checkpoint_round": req.checkpoint_round,
-                                      "policies": policies, "scenario": spec["scenario"]})
-    s.jobs.put("decisions", run_id, {
-        "run_id": run_id, "snapshot_id": doc["snapshot_id"],
-        "checkpoint_round": req.checkpoint_round,
-        "cohort": f"{family.id} seed {family.seed}: 1 scenario, each policy in a fresh branch",
-        "weight_kind": "unweighted", "status": "pending", "results": [], "selected": None,
-        "escalation": None, "job_id": job.job_id})
+                                      "policies": policies, "scenario": spec["scenario"]},
+                       job_id=job_id)
     return _reply(c6.JobAccepted, {
         "job_id": job.job_id, "run_id": run_id,
         "branch_ids": [fork_branch(run_id, family.id, p) for p in policies]}, 202)
@@ -216,9 +228,9 @@ def _decisions(run_id: str) -> dict:
     if doc is None:
         raise Refused(404, "no_decisions", f"run {run_id} has not been forked")
     if doc["status"] == "pending":
-        state, error = _job_state(run_id, FORK)
-        if state in ("failed", "cancelled"):
-            raise Refused(409, "fork_failed", f"the fork of {run_id} {state}: {error or ''}")
+        state, _ = _job_state(run_id, FORK)
+        if state in ("failed", "cancelled"):  # the worker's error stays in its log, not here
+            raise Refused(409, "fork_failed", f"the fork of {run_id} {state}; fork it again")
     return doc
 
 
@@ -307,6 +319,8 @@ def _leg(gateway: Any, leg: Any, mode: str) -> dict:
 @bp.get("/executions/<execution_id>")
 def execution(execution_id: str):
     s = services()
+    if not s.has_gateway:  # a public read never starts the gateway: nothing executed yet
+        raise Refused(404, "unknown_execution", f"no execution {execution_id}")
     with s.lock:
         gateway = s.gateway()
         approval = gateway.stored(execution_id)
@@ -325,15 +339,27 @@ def execution(execution_id: str):
     return _reply(c6.ExecutionResponse, body)
 
 
+class _LockedEvents:
+    """The observed store's webhook events, opened only for a verified event, under the lock."""
+
+    def __init__(self, services: Services) -> None:
+        self.services = services
+
+    def ingest_once(self, event: Any, action: Any) -> None:
+        with self.services.lock:
+            reconcile.SqlWebhookEvents(self.services.gateway()).ingest_once(event, action)
+
+
 @bp.post("/webhooks/airwallex")
 def webhook():
     s = services()
     if not s.webhook_secret:
         raise Refused(503, "webhook_not_configured", "AIRWALLEX_WEBHOOK_SECRET is not set")
-    with s.lock:
-        verifier = reconcile.webhook_verifier(s.gateway(), s.webhook_secret)
-        status = verifier.verify_and_ingest(dict(request.headers), request.get_data(),
-                                            s.wall_ms())
+    # The signature is checked first, outside the lock and before the gateway exists: an
+    # unsigned post holds nothing and reaches no provider.
+    verifier = WebhookVerifier(s.webhook_secret, _LockedEvents(s),
+                               lambda hint: reconcile.on_hint(s.gateway(), hint))
+    status = verifier.verify_and_ingest(dict(request.headers), request.get_data(), s.wall_ms())
     if status != 200:
         raise Refused(401, "bad_signature", "the webhook's signature or timestamp does not verify")
     return _reply(c6.WebhookAck, {"accepted": True})
@@ -384,11 +410,7 @@ def interview():
 
 @bp.get("/reports/<run_id>")
 def report(run_id: str):
-    doc = _run(run_id)
-    state, _ = _job_state(run_id, RUN)
-    if state != "done":
-        raise Refused(409, "run_not_done", f"run {run_id} is {state}; a report reads a "
-                      "finished run")
+    doc = _finished_run(run_id, "a report reads")
     s = services()
     body = reports.report(doc, s.jobs.get("decisions", run_id), key=s.report_key)
     return _reply(c6.ReportResponse, body, as_of=doc["as_of"])

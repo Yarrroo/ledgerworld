@@ -6,7 +6,9 @@
 - the job queue and its records (runs, decisions, transcripts, the demo context) in the ledger
   store's database;
 - the execution gateway on the observed store, built on first use (it reads the provider);
-- the demo token, the provider mode, the simulated clock the observed state is read at.
+- the demo token, the provider mode, and the clock the observed state is read at: the snapshot's
+  `as_of` plus the time this process has been up, so a frozen snapshot goes stale and an
+  approval expires as they would on the provider's clock.
 
 `Services.from_env()` is the deployed wiring; tests build one directly with fakes.
 """
@@ -14,13 +16,14 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 import secrets
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from ...execution.gateway import Gateway
@@ -30,16 +33,20 @@ from ...finance.store import LedgerStore
 from ...jobs.queue import JobQueue
 from ...jobs.store import JobStore
 from ...simulation.scenarios import load_world
+from .views import treasury_entity
 
 API_VERSION = "v1"
 APPROVER = "operator"
 
 
+log = logging.getLogger("ledgerworld.api")
+
+
 def beneficiaries_for(snapshot: Snapshot) -> dict[str, str]:
     """Each treasury obligation's payee: the allowlisted beneficiary `ben-<obligation_id>`."""
-    treasury = {e.entity_id for e in snapshot.entities if e.kind == "treasury"}
+    treasury = treasury_entity(snapshot)
     return {o.obligation_id: f"ben-{o.obligation_id}" for o in snapshot.obligations
-            if o.entity in treasury}
+            if o.entity == treasury}
 
 
 @dataclass
@@ -52,7 +59,7 @@ class Services:
     mode: Mode
     token: str | None
     make_gateway: Callable[[Services], Gateway] | None = None
-    clock: Callable[[], datetime] | None = None  # the simulated now; the snapshot's as_of
+    clock: Callable[[], datetime] | None = None  # None: as_of + this process's uptime
     wall_ms: Callable[[], int] = field(default=lambda: int(time.time() * 1000))
     webhook_secret: str | None = None
     connected_setting: str = "auto"
@@ -68,6 +75,9 @@ class Services:
     def __post_init__(self) -> None:
         if self.beneficiaries is None:
             self.beneficiaries = beneficiaries_for(self.snapshot)
+        if self.clock is None:
+            started, as_of = time.monotonic(), self.snapshot.as_of
+            self.clock = lambda: as_of + timedelta(seconds=time.monotonic() - started)
 
     @classmethod
     def build(cls, snapshot: Snapshot, *, store: LedgerStore | None = None,
@@ -91,17 +101,26 @@ class Services:
             import redis as redis_lib
 
             redis = redis_lib.Redis.from_url(os.environ["REDIS_URL"])
-        return cls.build(
+        services = cls.build(
             world.snapshot, store=LedgerStore(), redis=redis, epoch=world.epoch,
             mode=mode_from(os.environ), token=os.environ.get("LEDGERWORLD_DEMO_TOKEN") or None,
             make_gateway=gateway_from_env,
             webhook_secret=os.environ.get("AIRWALLEX_WEBHOOK_SECRET") or None,
             connected_setting=connected_setting())
+        try:  # at start, so no public read ever builds it (and probes the provider)
+            services.gateway()
+        except Exception:  # a POST that needs it tries again
+            log.exception("the execution gateway could not start")
+        return services
 
     # -------------------------------------------------------------------------- reading
 
     def now(self) -> datetime:
-        return self.clock() if self.clock is not None else self.snapshot.as_of
+        return self.clock()
+
+    @property
+    def has_gateway(self) -> bool:
+        return self._gateway is not None
 
     @property
     def connected(self) -> bool:
@@ -151,9 +170,8 @@ def gateway_from_env(services: Services) -> Gateway:
 
     client = client_from_env()
     leg_mode = client.probe_connected(services.connected_setting)
-    currency = next(a.currency for a in services.snapshot.accounts
-                    if any(e.entity_id == a.entity and e.kind == "treasury"
-                           for e in services.snapshot.entities))
+    treasury = treasury_entity(services.snapshot)
+    currency = next(a.currency for a in services.snapshot.accounts if a.entity == treasury)
     global_account = os.environ.get("AIRWALLEX_GLOBAL_ACCOUNT_ID") or next(
         (g["id"] for g in client.global_accounts() if g.get("currency") == currency), None)
     return Gateway(services.store, client, mode=services.mode, leg_mode=leg_mode,

@@ -82,14 +82,33 @@ def _pool(store: LedgerStore) -> str | None:
     return pools[0]["pool_entity_id"] if pools else None
 
 
+def _pool_capacity(store: LedgerStore, pool: str, now: datetime) -> tuple[Any, str]:
+    """K_p of ``pool`` and its status: stale when any of the pool's cash accounts is."""
+    cap = capacity(store, pool, now)
+    stale = any(state_of(v, now) == "stale" for v in cash_accounts(store, pool))
+    return cap, "stale" if stale else "known"
+
+
 def _capacity_metric(store: LedgerStore, pool: str | None, now: datetime,
                      currency: str) -> Body:
     if pool is None:
         return metric(None, currency, "unassessed")
-    cap = capacity(store, pool, now)
-    views = cash_accounts(store, pool)
-    stale = any(state_of(v, now) == "stale" for v in views)
-    return metric(cap.K_p, cap.currency, "stale" if stale else "known", now)
+    cap, status = _pool_capacity(store, pool, now)
+    return metric(cap.K_p, cap.currency, status, now)
+
+
+def _combined_low(views: list[AccountView], now: datetime,
+                  horizon: timedelta = HORIZON) -> tuple[int, datetime]:
+    """The lowest P of the accounts together over the horizon, and when it is first reached;
+    P moves only at a flow's or an obligation's time, so only those times are evaluated."""
+    if len(views) == 1:
+        return min_projected(views[0], now, horizon)
+    end = now + horizon
+    times = sorted({now, *(x.at for v in views
+                           for x in v.pending_in + v.pending_out + v.obligations
+                           if now < x.at <= end)})
+    return min(((sum(projected_cash(v, t) for v in views), t) for t in times),
+               key=lambda pair: pair[0])
 
 
 # ---------------------------------------------------------------------------- Overview
@@ -99,13 +118,8 @@ def overview(store: LedgerStore, snapshot: Snapshot, now: datetime, demo: Body) 
     currency = views[0].currency
     cash = _sum_metric(views, now, lambda v: v.settled_minor)
     spendable = _sum_metric(views, now, lambda v: spendability(v, now, now).value or 0)
-    lows = [min_projected(v, now) for v in views]
     status = cash["status"]
-    if status == "unknown":
-        low, at = None, None
-    else:
-        low = sum(lo for lo, _ in lows)
-        at = min((t for _, t in lows if t is not None), default=None)
+    low, at = (None, None) if status == "unknown" else _combined_low(views, now)
     floor_minor = sum(v.floor_minor or 0 for v in views)
     floor_known = any(v.floor_minor is not None for v in views)
     floor = metric(floor_minor, currency, "known" if floor_known else "unassessed")
@@ -190,10 +204,8 @@ def lending(store: LedgerStore, snapshot: Snapshot, now: datetime) -> Body | Non
     pool = _pool(store)
     if pool is None:
         return None
-    cap = capacity(store, pool, now)
+    cap, status = _pool_capacity(store, pool, now)
     c = cap.currency
-    views = cash_accounts(store, pool)
-    status = "stale" if any(state_of(v, now) == "stale" for v in views) else "known"
     parts = {k: metric(getattr(cap.parts, k), c, "known", now)
              for k in ("settled_known", "committed_undrawn", "pledged", "obligations_due",
                        "floor")}

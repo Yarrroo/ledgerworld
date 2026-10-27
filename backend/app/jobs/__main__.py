@@ -20,6 +20,9 @@ def main() -> None:
     url = os.environ.get("REDIS_URL")
     if not url:
         raise SystemExit("REDIS_URL is not set: the worker has no queue to read")
+    if not os.environ.get("LEDGER_DATABASE_URL"):
+        raise SystemExit("LEDGER_DATABASE_URL is not set: the worker would keep its jobs in a "
+                         "database of its own that the API never reads")
     store = JobStore(LedgerStore().engine)
     queue = JobQueue(store, redis.Redis.from_url(url))
     runner = Runner(store, Path("var") / "jobs")  # each job works in its own temporary dir

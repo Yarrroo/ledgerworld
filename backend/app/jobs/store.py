@@ -146,14 +146,13 @@ class JobStore:
     # -------------------------------------------------------------------------- records
 
     def put(self, kind: str, key: str, body: Any) -> None:
-        text = json.dumps(body, sort_keys=True)
+        text, now = json.dumps(body, sort_keys=True), _now()
         with self.engine.begin() as c:
             done = c.execute(update(records).where(
                 records.c.kind == kind, records.c.key == key).values(
-                body=text, updated_at=_now())).rowcount
+                body=text, updated_at=now)).rowcount
             if not done:
-                c.execute(insert(records).values(kind=kind, key=key, body=text,
-                                                 updated_at=_now()))
+                c.execute(insert(records).values(kind=kind, key=key, body=text, updated_at=now))
 
     def get(self, kind: str, key: str) -> Any | None:
         with self.engine.begin() as c:

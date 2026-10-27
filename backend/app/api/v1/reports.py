@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...finance.schemas import Money
+from ...jobs.runner import base_branch
 from ...reports.grounded import ground, sign_result, template_draft
 
 
@@ -34,7 +35,7 @@ def _money(metric: dict) -> Money | None:
 def report(run: dict, decisions: dict | None, *, key: bytes) -> dict:
     run_id = run["run_id"]
     sections = []
-    base = next((p for p in run["cash_paths"] if p["branch_id"] == run_id + "-base"), None)
+    base = next((p for p in run["cash_paths"] if p["branch_id"] == base_branch(run_id)), None)
     if base and base["points"]:
         first, last = base["points"][0], base["points"][-1]
         values = {k: m for k, m in (("opening_cash", first["value"]),

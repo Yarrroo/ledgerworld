@@ -10,6 +10,9 @@ kept between jobs, so the fork rebuilds it on the same family, seed and script u
 checkpoint and refuses to go on unless every round committed the same journals as the run did
 (replay identity); the policies then run on that checkpoint to the horizon.
 
+Only a scripted run can be forked: a live model asked again answers differently, so its replay
+could never match. Each job works in a scratch directory removed when it ends.
+
 A handler is re-run whole on retry: it rewrites what it writes. This module runs in the simulation
 role and imports no provider connector and no execution gateway.
 """
@@ -20,7 +23,7 @@ import asyncio
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +51,25 @@ def base_branch(run_id: str) -> str:
 def fork_branch(run_id: str, scenario_id: str, policy: str) -> str:
     """The id ``evaluate`` gives a policy branch: ``<run_id>-<scenario>-<policy>``."""
     return f"{run_id}-{scenario_id}-{policy}"
+
+
+def new_run(run_id: str, snapshot_id: str, as_of: datetime) -> dict:
+    """A run's record before its first round: queued, nothing committed, on the run's clock."""
+    return {"run_id": run_id, "snapshot_id": snapshot_id, "committed_round": None, "rounds": [],
+            "feed": [], "cash_paths": [], "branches": [], "as_of": as_of.isoformat()}
+
+
+def cohort(family: Family, scenarios: int) -> str:
+    return (f"{family.id} seed {family.seed}: {scenarios} scenario"
+            f"{'s' if scenarios != 1 else ''}, each policy in a fresh branch")
+
+
+def pending_decisions(run_id: str, snapshot_id: str, checkpoint_round: int, family: Family,
+                      job_id: str) -> dict:
+    """A run's decisions while its fork job has not finished; the job id names the fork."""
+    return {"run_id": run_id, "snapshot_id": snapshot_id, "checkpoint_round": checkpoint_round,
+            "cohort": cohort(family, 1), "weight_kind": WEIGHT_KIND, "status": "pending",
+            "results": [], "selected": None, "escalation": None, "job_id": job_id}
 
 
 def family_of(scenario: Mapping[str, Any]) -> Family:
@@ -107,7 +129,15 @@ class Runner:
         self.world = self.world or load_world()
 
     def handlers(self) -> dict[str, Handler]:
-        return {RUN: self.run, FORK: self.fork}
+        return {RUN: self._in_scratch(self.run), FORK: self._in_scratch(self.fork)}
+
+    def _in_scratch(self, body: Any) -> Handler:
+        """``body(job, ctx, scratch)`` in a directory of its own, removed when it ends."""
+        def handler(job: Job, ctx: JobContext) -> None:
+            with tempfile.TemporaryDirectory(prefix=f"{job.job_id}-", dir=self.workdir,
+                                             ignore_cleanup_errors=True) as scratch:
+                body(job, ctx, Path(scratch))
+        return handler
 
     def _world(self, family: Family, workdir: Path, branch_id: str) -> World:
         if family.scripted:
@@ -118,21 +148,16 @@ class Runner:
         return build_world(family, model=self.model, workdir=workdir, branch_id=branch_id,
                            world=self.world)
 
-    def _scratch(self, job: Job) -> Path:
-        return Path(tempfile.mkdtemp(prefix=f"{job.job_id}-", dir=self.workdir))
-
     # ------------------------------------------------------------------------------- run
 
-    def run(self, job: Job, ctx: JobContext) -> None:
+    def run(self, job: Job, ctx: JobContext, scratch: Path) -> None:
         p = job.payload
         run_id = p["run_id"]
         family = family_of(p["scenario"])
-        world = self._world(family, self._scratch(job), base_branch(run_id))
-        doc = self.store.get("run", run_id) or {}
-        doc.update(run_id=run_id, snapshot_id=world.snapshot.snapshot_id, committed_round=None,
-                   rounds=[], feed=[], as_of=world.clock.now.isoformat(),
-                   branches=[{"branch_id": world.branch_id, "parent_branch_id": None,
-                              "checkpoint_round": None, "policy": None, "replay": False}])
+        world = self._world(family, scratch, base_branch(run_id))
+        doc = new_run(run_id, world.snapshot.snapshot_id, world.clock.now)
+        doc["branches"] = [{"branch_id": world.branch_id, "parent_branch_id": None,
+                            "checkpoint_round": None, "policy": None, "replay": False}]
         asyncio.run(self._simulate(world, p["rounds"], doc, ctx))
         self.store.put("transcript", transcript_key(run_id, world.branch_id), {
             "world_id": world.world_id, "branch_id": world.branch_id,
@@ -159,7 +184,7 @@ class Runner:
 
     # ------------------------------------------------------------------------------ fork
 
-    def fork(self, job: Job, ctx: JobContext) -> None:
+    def fork(self, job: Job, ctx: JobContext, scratch: Path) -> None:
         p = job.payload
         run_id, cp_round = p["run_id"], p["checkpoint_round"]
         run = self.store.get("run", run_id)
@@ -167,7 +192,6 @@ class Runner:
             raise ValueError(f"run {run_id} has not committed round {cp_round}")
         family = family_of(p["scenario"])
         policies = [POLICIES[pid] for pid in p["policies"]]
-        scratch = self._scratch(job)
         (scratch / "base").mkdir()
         (scratch / "branches").mkdir()
         base = self._world(family, scratch / "base", base_branch(run_id))
@@ -190,10 +214,12 @@ class Runner:
                       checkpoint={"branch": cp.branch_id, "round": cp.round,
                                   "snapshot_id": cp.snapshot.snapshot_id},
                       escalate_to=escalate_to, currency=currency)
+        current = self.store.get("decisions", run_id) or {}
+        if current.get("job_id") not in (None, job.job_id):
+            return  # a later fork of this run owns its decisions now
         self.store.put("decisions", run_id, {
             "run_id": run_id, "snapshot_id": cp.snapshot.snapshot_id, "checkpoint_round": cp.round,
-            "cohort": f"{family.id} seed {family.seed}: {len(result.scenarios)} scenario, "
-                      "each policy in a fresh branch",
+            "cohort": cohort(family, len(result.scenarios)), "job_id": job.job_id,
             "weight_kind": WEIGHT_KIND, "status": result.status, "selected": result.selected,
             "label": result.label,
             "results": [{
@@ -232,6 +258,6 @@ class Runner:
                 ctx.checkpoint()
                 result = await world.coordinator.run_round(world)
                 if list(result.transcript_entry["journal_ids"]) != recorded["journal_ids"]:
-                    raise RuntimeError(f"replay_mismatch: round {result.round} committed other "
+                    raise ValueError(f"replay_mismatch: round {result.round} committed other "
                                        f"journals than run {run['run_id']}")
             return checkpoint(world)

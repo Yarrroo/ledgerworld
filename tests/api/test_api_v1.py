@@ -90,11 +90,11 @@ def interview_model(actor_id: str):
         actor_id, lambda: 0)
 
 
-def build(snapshot: dict | None = None, *, clock=None, token: str | None = TOKEN,
-          redis=None) -> Services:
+def build(snapshot: dict | None = None, *, clock=lambda: NOW, token: str | None = TOKEN,
+          redis=None, make_gateway=fake_gateway) -> Services:
     snap = Snapshot.model_validate(snapshot or observed())
     return Services.build(snap, redis=redis or fakeredis.FakeRedis(), epoch=T0, mode="fake",
-                          token=token, make_gateway=fake_gateway, clock=clock, terms=TERMS,
+                          token=token, make_gateway=make_gateway, clock=clock, terms=TERMS,
                           webhook_secret=WEBHOOK_SECRET, interview_model=interview_model,
                           wall_ms=lambda: 1_700_000_000_000)
 
@@ -291,6 +291,7 @@ def ran(tmp_path_factory):
     pending = check(http.get(f"/api/v1/decisions/{accepted['run_id']}"), "DecisionsResponse")
     forked = worker(services, tmp).run_once()
     return {"services": services, "http": http, "accepted": accepted, "submit_s": submit_s,
+            "jobs_dir": tmp / "jobs",
             "queued": queued, "job": done, "run": finished, "fork": fork, "pending": pending,
             "fork_job": forked}
 
@@ -555,3 +556,136 @@ def test_the_simulation_worker_loads_no_connector_and_no_gateway(tmp_path):
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                          cwd=tmp_path, env=env, check=True)
     assert out.stdout.strip() == "[]", out.stdout + out.stderr
+
+
+# ------------------------------------------------------------ vet round 1 regressions
+
+def finished_run(services: Services, run_id: str = "run-done", scenario: dict = DELAYED) -> str:
+    """A run whose job is done, with five committed rounds, as the worker leaves it."""
+    services.jobs.put("run_spec", run_id, {"scenario": scenario, "rounds": 5})
+    services.jobs.put("run", run_id, {
+        "run_id": run_id, "snapshot_id": "demo-world", "committed_round": 5,
+        "rounds": [], "feed": [], "cash_paths": [], "branches": [], "as_of": iso(NOW)})
+    job = services.jobs.create(f"job-{run_id}", "run", run_id, {}, max_attempts=1)
+    services.jobs.move(job.job_id, ["queued"], "done")
+    return run_id
+
+
+def test_reap_requeues_a_job_whose_worker_died_before_taking_its_lease():
+    q = queue()
+    job = q.submit("run", "run-1", {})
+    q.redis.rpoplpush(q.queue_key, q.processing_key)  # the worker dies right here
+    q.reap()
+    assert q.claim("w2").job_id == job.job_id
+
+
+def test_the_worker_refuses_to_start_on_a_database_the_api_cannot_see(monkeypatch):
+    from app.jobs import __main__ as entry
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.delenv("LEDGER_DATABASE_URL", raising=False)
+    monkeypatch.setattr(entry.Worker, "run_forever", lambda self, **_: pytest.fail("started"))
+    with pytest.raises(SystemExit, match="LEDGER_DATABASE_URL"):
+        entry.main()
+
+
+def test_a_long_handler_keeps_its_lease():
+    q = queue(lease_s=0.2)
+
+    def long(job, ctx):
+        time.sleep(0.5)  # longer than the lease, with no checkpoint in between
+        q.reap()  # another worker's reaper looks now
+
+    q.submit("run", "run-1", {})
+    assert Worker(q, {"run": long}).run_once().state == "done"
+
+
+def test_a_second_fork_waits_for_the_first():
+    services = build()
+    http = client(services)
+    run_id = finished_run(services)
+    ask = {"checkpoint_round": 2, "policies": ["integrated"]}
+    check(http.post(f"/api/v1/runs/{run_id}/fork", headers=AUTH, json=ask), "JobAccepted", 202)
+    refused(http.post(f"/api/v1/runs/{run_id}/fork", headers=AUTH, json=ask), 409,
+            "fork_in_progress")
+
+
+def test_a_run_off_its_scripted_parameters_cannot_be_forked():
+    services = build()
+    run_id = finished_run(services, scenario=DELAYED | {"params": {"delay_h": 120}})
+    refused(client(services).post(f"/api/v1/runs/{run_id}/fork", headers=AUTH, json={
+        "checkpoint_round": 2, "policies": ["integrated"]}), 422, "not_replayable")
+
+
+def test_a_failed_fork_does_not_show_its_raw_error_on_a_public_read():
+    services = build()
+    run_id = finished_run(services)
+    services.jobs.put("decisions", run_id, {"status": "pending"})
+    job = services.jobs.create("job-fork", "fork", run_id, {}, max_attempts=1)
+    services.jobs.move(job.job_id, ["queued"], "failed", error="OperationalError: db.internal")
+    body = refused(client(services).get(f"/api/v1/decisions/{run_id}"), 409, "fork_failed")
+    assert "db.internal" not in body["error"]["detail"]
+
+
+def test_coverage_is_the_minimum_of_the_combined_projection():
+    snap = observed()
+    second = copy.deepcopy(next(a for a in snap["accounts"]
+                                if a["id"] == "borrower-a/operating"))
+    second.update(id="borrower-a/second", floor=None)
+    second["buckets"].update(settled={"minor": 1_000_000, "currency": "USD"},
+                             reserved={"minor": 0, "currency": "USD"}, pending_in=[],
+                             pending_out=[])
+    snap["accounts"].append(second)
+    snap["obligations"].append({
+        "obligation_id": "rent-1", "entity": "borrower-a", "account": "borrower-a/second",
+        "amount": {"minor": 1_000_000, "currency": "USD"},
+        "due_at": iso(T0 + timedelta(hours=60)), "kind": "rent"})
+    cov = check(client(build(snap)).get("/api/v1/overview"), "OverviewResponse")["coverage"]
+    # operating bottoms at 20,000 at t=40, second at 0 at t=60, but never together:
+    # combined is 30,000 at t=40, 45,000 at t=48, 35,000 at t=60.
+    assert (cov["min_projected"]["minor"], cov["at"]) == (
+        3_000_000, iso(T0 + timedelta(hours=40)))
+
+
+def test_a_job_leaves_no_scratch_behind(ran):
+    assert list(ran["jobs_dir"].iterdir()) == []
+
+
+def test_an_approval_expires_on_the_deployed_clock(monkeypatch):
+    from app.api.v1 import services as services_module
+
+    wall = [1000.0]
+    monkeypatch.setattr(services_module.time, "monotonic", lambda: wall[0])
+    services = build(clock=None)
+    http = client(services)
+    run_id = decided(services)
+    approval = check(http.post("/api/v1/approvals", headers=AUTH, json={
+        "run_id": run_id, "policy": "integrated"}), "ApprovalResponse", 201)["approval"]
+    wall[0] += 16 * 60  # past the approval's 15-minute lifetime
+    refused(http.post("/api/v1/executions", headers=AUTH, json={
+        "approval_id": approval["approval_id"]}), 409, "approval_expired")
+
+
+def counting_gateway():
+    built = []
+
+    def make(services: Services) -> Gateway:
+        built.append(1)
+        return fake_gateway(services)
+    return built, make
+
+
+def test_an_unsigned_webhook_never_reaches_the_provider():
+    built, make = counting_gateway()
+    http = client(build(make_gateway=make))
+    raw = b'{"id": "evt-1", "name": "payout.transfer.paid"}'
+    refused(http.post("/api/v1/webhooks/airwallex", data=raw,
+                      headers=signed(raw, 1_700_000_000_000, "wrong")), 401, "bad_signature")
+    assert built == []
+
+
+def test_a_public_execution_read_never_builds_the_gateway():
+    built, make = counting_gateway()
+    refused(client(build(make_gateway=make)).get("/api/v1/executions/apr-x"), 404,
+            "unknown_execution")
+    assert built == []

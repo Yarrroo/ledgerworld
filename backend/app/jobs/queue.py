@@ -19,11 +19,12 @@ reaped cannot finish a job another worker now runs.
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 
 from .store import Job, JobStore
 
@@ -111,17 +112,17 @@ class JobQueue:
         self.redis.lrem(self.processing_key, 0, job_id)
         self.redis.delete(self._lease(job_id))
 
-    def complete(self, job: Job, worker: str) -> bool:
-        done = self.store.move(job.job_id, ["running"], "done", owner=worker, error=None)
+    def _finish(self, job: Job, worker: str, to: str, **values: Any) -> bool:
+        done = self.store.move(job.job_id, ["running"], to, owner=worker, **values)
         if done:
             self._release(job.job_id)
         return done
 
+    def complete(self, job: Job, worker: str) -> bool:
+        return self._finish(job, worker, "done", error=None)
+
     def finish_cancelled(self, job: Job, worker: str) -> bool:
-        done = self.store.move(job.job_id, ["running"], "cancelled", owner=worker)
-        if done:
-            self._release(job.job_id)
-        return done
+        return self._finish(job, worker, "cancelled")
 
     def fail(self, job: Job, worker: str | None, error: str, *, retry: bool = True) -> str:
         """Re-queue while attempts remain (and it is not cancelled), else fail; the new state."""
@@ -139,7 +140,8 @@ class JobQueue:
         return to
 
     def reap(self) -> list[str]:
-        """Expired leases count as a failed attempt; queued rows Redis lost are pushed again."""
+        """Expired leases count as a failed attempt; a queued job left in the processing list
+        (its worker died before taking the lease) and a queued row Redis lost are pushed again."""
         touched = []
         for raw in self.redis.lrange(self.processing_key, 0, -1):
             job_id = _text(raw)
@@ -149,8 +151,11 @@ class JobQueue:
             if job is not None and job.state == "running":
                 self.fail(job, job.worker, "lease expired: the worker stopped renewing it")
                 touched.append(job_id)
-            elif job is None or job.state != "queued":
+            else:
                 self.redis.lrem(self.processing_key, 0, job_id)
+                if job is not None and job.state == "queued":
+                    self.redis.lpush(self.queue_key, job_id)
+                    touched.append(job_id)
         listed = {_text(x) for key in (self.queue_key, self.processing_key)
                   for x in self.redis.lrange(key, 0, -1)}
         for job in self.store.in_state("queued"):
@@ -180,18 +185,47 @@ class JobContext:
 Handler = Callable[[Job, JobContext], None]
 
 
+class _Heartbeat:
+    """Renews a job's lease in the background while its handler runs, so one long unit of work
+    (a fork's whole evaluation) is not mistaken for a dead worker."""
+
+    def __init__(self, queue: JobQueue, job: Job, worker: str) -> None:
+        self._stop = threading.Event()
+        every = queue.lease_ms / 3000
+
+        def beat() -> None:
+            while not self._stop.wait(every) and queue.heartbeat(job, worker):
+                pass
+
+        self._thread = threading.Thread(target=beat, name=f"lease-{job.job_id}", daemon=True)
+
+    def __enter__(self) -> Self:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        self._thread.join()
+
+
 class Worker:
-    """Claims one job at a time and runs its kind's handler."""
+    """Claims one job at a time and runs its kind's handler; reaps at most every ``reap_s``."""
 
     def __init__(self, queue: JobQueue, handlers: Mapping[str, Handler],
-                 worker: str | None = None) -> None:
+                 worker: str | None = None, *, reap_s: float = 30.0) -> None:
         self.queue = queue
         self.handlers = dict(handlers)
         self.worker = worker or f"worker-{uuid.uuid4().hex[:8]}"
+        self.reap_s = reap_s
+        self._reaped_at: float | None = None
 
     def run_once(self) -> Job | None:
-        """Reap, claim and run one job; the job as it ended, or None when none was queued."""
-        self.queue.reap()
+        """Reap when due, claim and run one job; the job as it ended, or None when none was
+        queued."""
+        now = time.monotonic()
+        if self._reaped_at is None or now - self._reaped_at >= self.reap_s:
+            self.queue.reap()
+            self._reaped_at = now
         job = self.queue.claim(self.worker)
         if job is None:
             return None
@@ -203,7 +237,8 @@ class Worker:
                                 retry=False)
                 return self.queue.store.job(job.job_id)
             ctx.checkpoint()
-            handler(job, ctx)
+            with _Heartbeat(self.queue, job, self.worker):
+                handler(job, ctx)
         except Cancelled:
             self.queue.finish_cancelled(job, self.worker)
         except LeaseLost:
