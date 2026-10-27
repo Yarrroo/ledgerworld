@@ -36,7 +36,8 @@ export class ApiError extends Error {
  * slash joins them: "//api/v1/…" would be a protocol-relative URL to a host called "api".
  */
 export function apiUrl (path, base = BASE) {
-  return `${String(base).replace(/\/+$/, '')}/api/v1/${String(path).replace(/^\/+/, '')}`
+  const tail = path.replace(/^\/+/, '')
+  return `${base.replace(/\/+$/, '')}/api/v1${tail && `/${tail}`}`
 }
 
 /** One request to /api/v1, no retry. A C6 ErrorResponse becomes an ApiError with its code. */
