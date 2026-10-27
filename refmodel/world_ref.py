@@ -24,6 +24,7 @@ import copy
 import hashlib
 import json
 import random
+import re
 
 ROUND_HOURS = 4
 HORIZON_HOURS = 72
@@ -135,7 +136,10 @@ def post_journal(ledger: dict, postings: list, kind: str, intent_id: str | None 
 # ---------------------------------------------------------------- intents and clearing
 
 def sort_key(intent: dict) -> tuple:
-    return (intent["priority_class"], intent["sim_minute"], intent["actor_id"], intent["intent_id"])
+    # The call number is read as a number: i-r1-x-2 clears before i-r1-x-10.
+    found = re.fullmatch(rf"i-r(\d+)-{re.escape(intent['actor_id'])}-(\d+)", intent["intent_id"])
+    order = (int(found[1]), int(found[2]), "") if found else (2**63, 2**63, intent["intent_id"])
+    return (intent["priority_class"], intent["sim_minute"], intent["actor_id"], order)
 
 
 def drain(queue: list) -> list:
