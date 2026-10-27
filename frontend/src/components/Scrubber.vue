@@ -44,7 +44,7 @@ const props = defineProps({
   rounds: { type: Array, required: true },
   loaded: { type: Array, default: () => [] },
   modelValue: { type: Number, default: null },
-  roundHours: { type: Number, default: 4 },
+  tHours: { type: Number, default: null },
   label: { type: String, default: 'Committed round' }
 })
 const emit = defineEmits(['update:modelValue'])
@@ -53,7 +53,9 @@ const first = computed(() => props.rounds[0] ?? 0)
 const last = computed(() => props.rounds[props.rounds.length - 1] ?? 0)
 const valueText = computed(() => props.modelValue == null
   ? 'No round committed yet'
-  : `Round ${props.modelValue} of ${last.value} · simulated t=${props.modelValue * props.roundHours} h`)
+  : `Round ${props.modelValue} of ${last.value} · ${props.tHours === null
+    ? 'simulated time not loaded'
+    : `simulated t=${props.tHours} h`}`)
 
 function pick (r) {
   if (r !== props.modelValue) emit('update:modelValue', r)

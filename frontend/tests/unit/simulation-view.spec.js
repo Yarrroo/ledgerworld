@@ -5,7 +5,7 @@
 // C6 RunResponse carries cash paths, not a per-round lender capacity: the fixture's K_p is
 // projected onto a lender-account cash path, which is how the screen shows any account's path.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { defineComponent, h } from 'vue'
+import { defineComponent, h, watch } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
@@ -21,11 +21,13 @@ const at = (hours) => new Date(EPOCH + hours * 3_600_000).toISOString().replace(
 const ctx = scrubber.context
 
 /** The upstream graph view stands in as a button that asks to expand, as the real one does. */
+const graphs = []
 const GraphStub = defineComponent({
   name: 'GraphPanel',
   props: { graphData: Object },
   emits: ['toggle-maximize', 'refresh'],
   setup (props, { emit }) {
+    watch(() => props.graphData, (g) => graphs.push(g), { immediate: true })
     return () => h('div', { 'data-test': 'graph-panel', 'data-nodes': props.graphData?.nodes.length ?? 0 }, [
       h('button', { type: 'button', 'data-test': 'expand', onClick: () => emit('toggle-maximize') }, 'Expand')
     ])
@@ -72,18 +74,30 @@ function run (change = {}) {
   }
 }
 
-/** Record every request and answer it: GET /runs/<id> from ``body``, POSTs from ``posts``. */
+/**
+ * Record every request and answer it: GET /runs/<id> from ``body``, POSTs from ``posts``. An
+ * answer may be a function (called per request, may return a promise held by the test).
+ */
 function serve (body, posts = {}) {
   const calls = []
   vi.stubGlobal('fetch', vi.fn(async (url, init = {}) => {
     const path = new URL(url).pathname.replace('/api/v1', '')
     const method = init.method || 'GET'
     calls.push({ path, method, headers: init.headers, body: init.body ? JSON.parse(init.body) : undefined })
-    const answer = method === 'GET' ? (path === `/runs/${ctx.run_id}` ? body : undefined) : posts[path]
+    let answer = method === 'GET' ? (path === `/runs/${ctx.run_id}` ? body : undefined) : posts[path]
+    if (typeof answer === 'function') answer = await answer()
+    if (answer instanceof Error) throw answer
     if (answer === undefined) throw new Error(`no recorded answer for ${method} ${path}`)
     return { ok: true, status: method === 'GET' ? 200 : 202, json: async () => clone(answer) }
   }))
   return calls
+}
+
+/** A promise the test resolves itself: a request held in flight. */
+function held () {
+  let resolve
+  const promise = new Promise((r) => { resolve = r })
+  return { promise, resolve }
 }
 
 async function open (body, posts) {
@@ -101,7 +115,7 @@ async function open (body, posts) {
   const wrapper = mount(Simulation, { attachTo: document.body, global: { plugins: [r], stubs: { GraphPanel: GraphStub } } })
   await flushPromises()
   mounted.push(wrapper)
-  return { wrapper, calls }
+  return { wrapper, calls, router: r }
 }
 
 const mounted = []
@@ -290,5 +304,101 @@ describe('scrubber fixture', () => {
     expect(slider.attributes('aria-valuenow')).toBe(String(ctx.last_committed_round))
     await w.get('[data-test="expand"]').trigger('click')
     expect(w.find('.lw-live').classes()).toContain('is-graph-expanded') // graph_can_expand
+  })
+})
+
+describe('review findings, each pinned', () => {
+  it('another run selected: the old run\'s state cannot fork or interview into the new one', async () => {
+    const { wrapper: w, router } = await open(run())
+    await w.get('[data-test="token"]').setValue('demo-token-for-test')
+    await w.get('[data-actor="lender"]').trigger('click')
+    await w.get('[data-test="question"]').setValue('Why?')
+    expect(disabled(w, 'fork')).toBe(false)
+    await router.push('/simulation?run_id=run-other') // its GET has no answer: it fails
+    await flushPromises()
+    expect(text(w, 'fork-why')).toBe('Not current: load this run first')
+    expect(text(w, 'interview-why')).toBe('Not current: load this run first')
+  })
+
+  it('an interview answered after the run changed is not shown under the new run', async () => {
+    const late = held()
+    const reply = { run_id: ctx.run_id, branch_id: ctx.branch_id, round: 5, as_of: at(20), mode: 'fake',
+      actor_id: 'lender', answer: 'old run', read_only: true, replay: false, evidence_ids: [] }
+    const { wrapper: w, router } = await open(run(), { '/interview': () => late.promise })
+    await w.get('[data-test="token"]').setValue('demo-token-for-test')
+    await w.get('[data-actor="lender"]').trigger('click')
+    await w.get('[data-test="question"]').setValue('Why?')
+    await w.get('[data-test="interview"]').trigger('submit')
+    await router.push('/simulation?run_id=run-other')
+    await flushPromises()
+    late.resolve(reply)
+    await flushPromises()
+    expect(w.find('[data-test="answer"]').exists()).toBe(false)
+  })
+
+  it('playing a finished run to its end stops without claiming a pause', async () => {
+    vi.useFakeTimers()
+    const { wrapper: w } = await open(run())
+    await w.get('[data-test="play"]').trigger('click')
+    await vi.advanceTimersByTimeAsync(1500 * 6)
+    expect(text(w, 'cursor')).toContain(`Round ${ctx.last_committed_round} of`)
+    expect(text(w, 'play')).toBe('Play')
+    expect(w.find('[data-test="paused"]').exists()).toBe(false)
+  })
+
+  it('an actor who has not acted by the selected round cannot be interviewed there', async () => {
+    const { wrapper: w } = await open(run())
+    await w.get('[data-test="token"]').setValue('demo-token-for-test')
+    await w.get('[data-actor="lender"]').trigger('click')
+    await w.get('[data-test="question"]').setValue('Why?')
+    expect(disabled(w, 'ask')).toBe(false)
+    await scrubTo(w, 4)
+    expect(text(w, 'interview-why')).toBe('lender has not acted by round 4')
+    expect(disabled(w, 'ask')).toBe(true)
+  })
+
+  it('a poll that changes nothing keeps the graph object and the controls', async () => {
+    vi.useFakeTimers()
+    const body = run()
+    body.status = 'running'
+    const slow = held()
+    let gets = 0
+    const { wrapper: w } = await open(() => (++gets === 1 ? body : slow.promise))
+    const shown = graphs[graphs.length - 1]
+    await vi.advanceTimersByTimeAsync(4000) // the poll is in flight
+    expect(disabled(w, 'refresh')).toBe(false)
+    expect(disabled(w, 'play')).toBe(false)
+    slow.resolve(body)
+    await flushPromises()
+    expect(graphs[graphs.length - 1]).toBe(shown)
+  })
+
+  it('a successful fork reloads the run, and a later failure clears the old success', async () => {
+    let answer = { as_of: at(20), mode: 'fake', job_id: 'job-1', run_id: ctx.run_id, branch_ids: ['b-1'] }
+    const { wrapper: w, calls } = await open(run(), { [`/runs/${ctx.run_id}/fork`]: () => answer })
+    await w.get('[data-test="token"]').setValue('demo-token-for-test')
+    await scrubTo(w, 4)
+    const before = calls.filter((c) => c.method === 'GET').length
+    await w.get('[data-test="fork"]').trigger('click')
+    await flushPromises()
+    expect(calls.filter((c) => c.method === 'GET').length).toBe(before + 1)
+    expect(w.find('[data-test="forked"]').exists()).toBe(true)
+    answer = new Error('fork_in_progress')
+    await w.get('[data-test="fork"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="forked"]').exists()).toBe(false)
+    expect(text(w, 'fork-error')).toContain('fork_in_progress')
+  })
+
+  it('the cursor names the round\'s own simulated time, and none for an unloaded round', async () => {
+    const body = run()
+    body.rounds[1].t_hours = 17 // round 4 at an hour that is not round × 4
+    body.cash_paths[0].points[2].t = at(17)
+    const { wrapper: w } = await open(body)
+    await scrubTo(w, 4)
+    expect(text(w, 'cursor')).toBe('Round 4 of 5 · simulated t=17 h')
+    expect(text(w, 'cash-value')).toBe('USD 42,000.00')
+    await scrubTo(w, 2)
+    expect(text(w, 'cursor')).toBe('Round 2 of 5 · simulated time not loaded')
   })
 })

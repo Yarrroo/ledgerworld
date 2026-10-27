@@ -8,7 +8,7 @@
         <p v-if="base.replay" class="lw-live__phase" data-test="replay-note">
           <span class="lw-live-tag">Replay</span> these rounds were replayed, not run fresh
         </p>
-        <Scrubber :model-value="display" :rounds="ticks" :loaded="loadedRounds" :round-hours="ROUND_HOURS"
+        <Scrubber :model-value="display" :rounds="ticks" :loaded="loadedRounds" :t-hours="current?.t_hours ?? null"
                   @update:model-value="scrub" />
         <div class="lw-live__row">
           <button type="button" class="lw-button" data-test="play" :disabled="!ticks.length"
@@ -116,7 +116,6 @@ import ActionFeed from '../components/ActionFeed.vue'
 import CashPaths from '../components/CashPaths.vue'
 import { ApiError, LABELS, ScreenShell, request, routeExists, sourceLabel, useReading } from '../api/v1.js'
 
-const ROUND_HOURS = 4
 const HORIZON_ROUNDS = 18
 const POLICIES = ['no-action', 'fixed-reserve', 'integrated']
 const PLAY_MS = 1500
@@ -131,7 +130,11 @@ const { state, refresh } = useReading(() => runId.value
   : Promise.reject(new ApiError(0, 'no_run', 'No run selected: open the simulation from Overview')))
 
 const body = computed(() => state.body)
-const busy = computed(() => state.status === 'loading')
+// A background poll is not a user-visible load: the screen keeps its controls while it runs.
+const polling = ref(false)
+const busy = computed(() => state.status === 'loading' && !polling.value)
+// The body on screen is the selected run's current answer: not another run's, not a failed reload.
+const currentRun = computed(() => body.value?.run_id === runId.value && !state.error)
 const committed = computed(() => body.value?.committed_round ?? null)
 
 const base = computed(() => {
@@ -141,7 +144,7 @@ const base = computed(() => {
 
 // The banner names the branch these rounds belong to, and Replay when they were replayed.
 const shellReading = computed(() => ({
-  status: state.status,
+  status: polling.value && body.value ? 'loaded' : state.status,
   error: state.error,
   contextChanged: state.contextChanged,
   body: body.value && { ...body.value, branch_id: base.value.branch_id, replay: base.value.replay }
@@ -232,8 +235,17 @@ const graphData = computed(() => {
       }
     }
   }
-  return { nodes: [...nodes.values()], edges }
+  return same({ nodes: [...nodes.values()], edges })
 })
+
+// A poll that changes nothing the graph shows hands back the same object, so the graph view
+// keeps its layout, zoom and selection instead of re-rendering every few seconds.
+let shownGraph = { key: '', data: null }
+function same (graph) {
+  const key = JSON.stringify(graph)
+  if (key !== shownGraph.key) shownGraph = { key, data: graph }
+  return shownGraph.data
+}
 
 const graphExpanded = ref(false)
 const actor = ref(null)
@@ -251,15 +263,20 @@ function play () {
   player = setInterval(() => {
     const i = ticks.value.indexOf(display.value)
     if (i < ticks.value.length - 1) selected.value = ticks.value[i + 1]
-    else if (!phase.value.running) pause()
+    else if (!phase.value.running) stopPlaying() // played to the end: finished, not paused
   }, PLAY_MS)
 }
 
-function pause () {
+function stopPlaying () {
   clearInterval(player)
   player = null
-  if (playing.value) paused.value = true
   playing.value = false
+}
+
+/** The operator paused: local playback stops, the job does not. */
+function pause () {
+  if (playing.value) paused.value = true
+  stopPlaying()
 }
 
 /** The operator moved the cursor: playback stops where they put it. */
@@ -271,9 +288,18 @@ function scrub (round) {
 // ------------------------------------------------------------- polling a running job
 
 let poller = null
+async function poll () {
+  if (state.status === 'loading') return
+  polling.value = true
+  try {
+    await refresh()
+  } finally {
+    polling.value = false
+  }
+}
 watch(() => phase.value.running, (running) => {
   clearInterval(poller)
-  poller = running ? setInterval(() => { if (!busy.value) refresh() }, POLL_MS) : null
+  poller = running ? setInterval(poll, POLL_MS) : null
 }, { immediate: true })
 
 onBeforeUnmount(() => {
@@ -303,6 +329,7 @@ watch(runId, () => {
 })
 
 const forkWhy = computed(() => {
+  if (!currentRun.value) return 'Not current: load this run first'
   if (phase.value.invalid) return 'Branch invalid: there is no checkpoint to fork'
   if (body.value?.status !== 'done') return 'A fork needs a finished run'
   if (!current.value) return 'Round not loaded: nothing to fork from'
@@ -314,24 +341,29 @@ const forkWhy = computed(() => {
 
 async function fork () {
   if (forkWhy.value) return
-  const round = display.value
+  const [run, round] = [runId.value, display.value]
   forking.value = true
+  forked.value = null
   forkError.value = ''
   try {
-    const accepted = await request(`/runs/${encodeURIComponent(runId.value)}/fork`, {
+    const accepted = await request(`/runs/${encodeURIComponent(run)}/fork`, {
       method: 'POST', token: token.value, body: { checkpoint_round: round, policies: POLICIES }
     })
+    if (run !== runId.value) return // answered for a run no longer on screen
     forked.value = { round, branch_ids: accepted?.branch_ids ?? [] }
+    refresh() // the new branches and their cash paths
   } catch (error) {
-    forkError.value = `Fork not accepted: ${error.message}`
+    if (run === runId.value) forkError.value = `Fork not accepted: ${error.message}`
   } finally {
     forking.value = false
   }
 }
 
 const interviewWhy = computed(() => {
+  if (!currentRun.value) return 'Not current: load this run first'
   if (!current.value) return 'Round not loaded: nothing to ask about'
   if (!actor.value) return 'Pick an actor above'
+  if (!actors.value.some((a) => a.id === actor.value)) return `${actor.value} has not acted by round ${display.value}`
   if (!question.value.trim()) return 'Write a question'
   if (!token.value) return 'Enter the demo token to interview'
   if (asking.value) return 'Asking'
@@ -340,16 +372,19 @@ const interviewWhy = computed(() => {
 
 async function interview () {
   if (interviewWhy.value) return
+  const run = runId.value
   asking.value = true
+  answer.value = null
   interviewError.value = ''
   try {
-    answer.value = await request('/interview', {
+    const reply = await request('/interview', {
       method: 'POST', token: token.value,
-      body: { run_id: runId.value, branch_id: base.value.branch_id, round: display.value,
+      body: { run_id: run, branch_id: base.value.branch_id, round: display.value,
         actor_id: actor.value, question: question.value.trim() }
     })
+    if (run === runId.value) answer.value = reply // never another run's answer
   } catch (error) {
-    interviewError.value = `Interview not answered: ${error.message}`
+    if (run === runId.value) interviewError.value = `Interview not answered: ${error.message}`
   } finally {
     asking.value = false
   }
