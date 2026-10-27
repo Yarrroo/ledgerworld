@@ -502,3 +502,59 @@ describe('accessibility: keyboard review (mocked transport only)', () => {
     expect(a11y('status-not-colour').expect.each_state_has_text).toBe(true)
   })
 })
+
+describe('vet round 1', () => {
+  it('a 5xx on the execution POST is an unknown outcome: read back by approval id, never resent', async () => {
+    const { w, calls } = await reviewReady({ 'POST /executions': refuse(504, 'http_error', 'HTTP 504') })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    expect(calls.filter((x) => x.method === 'GET' && x.path === '/executions/apr-1')).toHaveLength(1)
+    expect(posts(calls, '/executions')).toHaveLength(1)
+    expect(text(w, 'blocked')).toContain('Do not send again')
+  })
+
+  it('a 5xx on the approval POST blocks for the operator like a timeout', async () => {
+    const { w, calls } = await reviewReady({ 'POST /approvals': refuse(502, 'http_error', 'HTTP 502') })
+    await approve(w)
+    expect(text(w, 'blocked')).toBe(kase('approval-post-timeout').expect.message)
+    expect(disabled(w, 'confirm')).toBe(true)
+    expect(posts(calls, '/approvals')).toHaveLength(1)
+  })
+
+  it('a failed decisions read still shows the receipts and says why review is unavailable', async () => {
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': refuse(409, 'fork_failed', 'the fork of run-1 failed; fork it again'),
+      'GET /executions/apr-1': executionBody({ legs: [advance()] })
+    })
+    const w = await open(Execution, '/execution')
+    expect(text(w, 'leg-status')).toContain('SETTLED · reconciled as of')
+    expect(disabled(w, 'review-plan')).toBe(true)
+    expect(text(w, 'review-why')).toContain('fork it again')
+  })
+
+  it('review=1 opens the review once; Cancel then Refresh does not reopen it', async () => {
+    serve({ 'GET /overview': overview(), 'GET /decisions/run-1': decisionsBody() })
+    const w = await open(Execution, '/execution?run_id=run-1&review=1')
+    expect(w.find('[data-test="review"]').exists()).toBe(true)
+    await w.get('[data-test="review"]').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="review"]').exists()).toBe(false)
+  })
+
+  it('an expired approval is dropped on close, so a fresh review can confirm again', async () => {
+    const { w } = await reviewReady({
+      'POST /approvals': { ...approvalBody(), as_of: boundApproval.instance.expires_at }
+    })
+    await approve(w)
+    expect(text(w, 'execute-why')).toBe('Approval expired')
+    await w.get('[data-test="review"]').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="confirm"]').exists()).toBe(true)
+  })
+})

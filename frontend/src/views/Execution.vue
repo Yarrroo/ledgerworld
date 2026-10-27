@@ -197,12 +197,18 @@ const { state, refresh } = useReading(async () => {
   const runId = asked || overview.demo.run_id
   const demo = !asked || asked === overview.demo.run_id
   const executionId = route.query.execution_id || (demo ? overview.demo.execution_id : null) || null
-  const decisions = runId ? await optional(`/decisions/${enc(runId)}`) : null
+  let decisions = null
+  let decisionsError = ''
+  try {
+    decisions = runId ? await optional(`/decisions/${enc(runId)}`) : null
+  } catch (error) { // the receipts still read; only the review needs the decision
+    decisionsError = error.message
+  }
   const execution = executionId ? await optional(`/executions/${enc(executionId)}`) : null
   const head = execution ?? overview
   return {
     as_of: head.as_of, mode: head.mode, snapshot_id: head.snapshot_id, run_id: runId,
-    execution_id: executionId, decisions, execution
+    execution_id: executionId, decisions, decisionsError, execution
   }
 })
 
@@ -242,6 +248,7 @@ const reviewWhy = computed(() => {
   if (state.status === 'loading') return 'Loading'
   if (state.status === 'error') return 'Last loaded, not current: reload first'
   const d = decisions.value
+  if (state.body.decisionsError) return `Decision unavailable: ${state.body.decisionsError}`
   if (!d) return 'No decision is available for this run'
   if (/reverse[_-]stress/.test(d.cohort)) return 'A search result is not a decision; nothing to review'
   if (d.status === 'all_infeasible') return 'No feasible plan: escalate on Decisions, nothing to approve'
@@ -278,6 +285,9 @@ const executeWhy = computed(() => {
   return ''
 })
 
+/** No answer, or a server/proxy failure: the POST may or may not have taken effect. */
+const unanswered = (error) => error.status === 0 || error.status >= 500
+
 function refusal (error) {
   return REFUSALS[error.code] || `Refused: ${error.message}`
 }
@@ -291,7 +301,7 @@ async function openReview () {
 
 async function closeReview () {
   flow.open = false
-  if (flow.invalid || flow.executed) {
+  if (flow.invalid || flow.executed || (flow.approval && executeWhy.value && !authority.value)) {
     flow.approval = null
     flow.invalid = ''
     flow.executed = false
@@ -317,7 +327,7 @@ async function confirmApproval () {
     await nextTick()
     heading.value?.focus()
   } catch (error) {
-    if (error.status === 0) flow.blocked = APPROVAL_UNKNOWN
+    if (unanswered(error)) flow.blocked = APPROVAL_UNKNOWN
     else flow.message = refusal(error)
   } finally {
     flow.submitting = false
@@ -338,7 +348,7 @@ async function executePlan () {
     follow(answer.execution_id)
   } catch (error) {
     flow.submitting = false
-    if (error.status !== 0) {
+    if (!unanswered(error)) {
       flow.invalid = refusal(error)
       return
     }
@@ -357,7 +367,8 @@ const notFound = shallowRef(false)
 const pollError = shallowRef('')
 const guard = latestOnly()
 let timer = null
-let followed = false // an execution this tab sent: a refresh never swaps it for another
+let followed = false
+let autoReviewed = false // review=1 opens the review once, not on every refresh // an execution this tab sent: a refresh never swaps it for another
 
 const execution = computed(() =>
   live.value ?? (state.body?.execution?.execution_id === activeId.value ? state.body.execution : null))
@@ -405,7 +416,10 @@ watch(() => state.body, (body) => {
   notFound.value = Boolean(body.execution_id && !body.execution)
   pollError.value = ''
   schedule(body.execution)
-  if (route.query.review === '1' && !flow.open && !reviewWhy.value && !flow.approval) openReview()
+  if (route.query.review === '1' && !autoReviewed && !reviewWhy.value) {
+    autoReviewed = true
+    openReview()
+  }
 })
 
 onUnmounted(() => {
