@@ -43,8 +43,8 @@ class Rejected(Exception):
 
 
 class DuplicateRequest(Exception):
-    """The provider already holds this `request_id` (`request_id_duplicate`, a conversion's
-    "has been used", or 409 in flight)."""
+    """The provider already holds this `request_id` (`request_id_duplicate`,
+    `duplicate_request_id`, a conversion's "has been used", or 409 in flight)."""
 
 
 class OutcomeUnknown(Exception):
