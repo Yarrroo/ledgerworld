@@ -42,8 +42,3 @@ partial unique index; minor units are BIGINT integers.
 Obligation and pending_out are never subtracted twice in P: an obligation whose reservation is
 committed is counted through its pending_out flow only.
 
-## Run footer
-
-Architect run, tier Sketch: the module design (`design/modules/ledger/HANDOFF.md`) was already
-written and approved; this note records consumers and code shape only. No reviewer pack on this
-machine; no publish step (unattended order, nothing outward).

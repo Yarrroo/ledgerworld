@@ -15,9 +15,9 @@ from functools import cache
 from pathlib import Path
 
 import pytest
-from app.finance.ledger import check_outflow, pay
+from app.finance.ledger import check_outflow, from_snapshot, pay, settle_due
 from app.finance.models import Journal, LedgerRefusal, Posting, metadata, pledges, postings
-from app.finance.spendability import spendability
+from app.finance.spendability import projected_cash, spendability
 from app.finance.store import LedgerStore
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -365,3 +365,125 @@ def test_property_no_collateral_ref_is_in_two_active_pledges(ops):
     assert len(active) == len(set(active))
     assert sum(p["amount_minor"] for p in store.rows("pledges") if p["state"] == "active") \
         <= store.view("a/operating").settled_minor
+
+
+# ------------------------------------------------------- settlement and loading regressions
+
+def lf1_snapshot() -> dict:
+    snap = json.loads((ROOT / "fixtures/lf1_treasury.json").read_text(encoding="utf-8"))
+    return snap["snapshot"]
+
+
+def test_a_committed_obligation_is_paid_once():
+    store = lifecycle_world()
+    store.hold("a/operating", 300, now=T0, reservation_id="r1")
+    store.add_obligation("ob", "a/operating", 300, h(1), kind="payroll", reservation_id="r1")
+    store.commit("r1", due_at=h(5))
+    settle_due(store, h(2))
+    assert store.rows("obligations")[0]["state"] == "open"  # its flow lands at t=5
+    settle_due(store, h(6))
+    assert store.view("a/operating").settled_minor == 7000000 - 300
+    assert store.rows("obligations")[0]["state"] == "met"
+
+
+def test_settle_due_leaves_a_discretionary_obligation_alone():
+    store = lifecycle_world()
+    store.add_obligation("bonus", "a/operating", 1000, h(1), kind="bonus", mandatory=False)
+    settle_due(store, h(2))
+    assert store.view("a/operating").settled_minor == 7000000
+    assert store.rows("obligations")[0]["state"] == "open"
+
+
+def test_a_missed_obligation_stays_owed_and_is_retried():
+    store = lifecycle_world()
+    store.add_obligation("rent", "a/operating", 8000000, h(1), kind="rent")
+    settle_due(store, h(1))
+    assert store.rows("obligations")[0]["state"] == "missed"
+    assert projected_cash(store.view("a/operating"), h(1)) == 7000000 - 8000000
+    store.expect("a/operating", "in", 2000000, h(2), kind="receivable")
+    settle_due(store, h(2))
+    assert store.rows("obligations")[0]["state"] == "met"
+    assert store.view("a/operating").settled_minor == 1000000
+
+
+def test_a_snapshot_obligation_already_committed_loads_once():
+    snap = lf1_snapshot()
+    buckets = snap["accounts"][0]["buckets"]
+    buckets["reserved"]["minor"] = 0
+    buckets["pending_out"] = [{"flow_id": "pay-1", "amount": {"minor": 5000000, "currency": "USD"},
+                               "expected_at": "2026-01-06T16:00:00Z", "kind": "payroll",
+                               "reservation_id": "res-payroll-1"}]
+    store = LedgerStore(URL)
+    from_snapshot(store, snap)
+    view = store.view("borrower-a/operating")
+    assert (view.reserved_minor, view.pending_out_minor) == (0, 5000000)
+    assert projected_cash(view, h(40)) == 4000000  # payroll counted once, through its flow
+
+
+def test_a_snapshot_met_obligation_holds_nothing():
+    snap = lf1_snapshot()
+    snap["accounts"][0]["buckets"]["reserved"]["minor"] = 0
+    snap["obligations"][0]["state"] = "met"
+    store = LedgerStore(URL)
+    from_snapshot(store, snap)
+    assert store.view("borrower-a/operating").reserved_minor == 0
+    assert store.rows("reservations") == []
+
+
+def test_a_snapshot_unknown_account_keeps_its_observed_reservations():
+    snap = lf1_snapshot()
+    account = snap["accounts"][0]
+    account["observability"], account["buckets"]["settled"] = "unknown", None
+    store = LedgerStore(URL)
+    from_snapshot(store, snap)
+    assert store.view("borrower-a/operating").reserved_minor == 5000000
+    with pytest.raises(LedgerRefusal) as refused:
+        store.hold("borrower-a/operating", 1, now=T0)
+    assert refused.value.code == "unknown_balance"
+
+
+def test_a_refusal_caught_inside_a_transaction_leaves_nothing():
+    store = lifecycle_world()
+    store.hold("a/operating", 6000000, now=T0)
+    before = store.dump()
+    with store.transaction() as c, pytest.raises(LedgerRefusal):
+        store.apply(Journal("drain", (Posting("a/operating", -2000000),
+                                      Posting("payroll/external", 2000000)),
+                            sim_time=T0), conn=c)
+    assert store.dump() == before
+
+
+def test_an_automatic_id_never_takes_an_explicit_one():
+    store = lifecycle_world()
+    store.hold("a/operating", 1, now=T0, reservation_id="res-2")
+    assert store.hold("a/operating", 1, now=T0) == "res-3"
+
+
+def test_a_duplicate_pledge_id_is_not_a_double_pledge():
+    store = lifecycle_world()
+    store.pledge("a/operating", 1, "lot-1", pledge_id="p1")
+    with pytest.raises(ValueError, match="taken"):
+        store.pledge("a/operating", 1, "lot-2", pledge_id="p1")
+
+
+def test_a_flow_cannot_settle_against_its_own_account():
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="r1")
+    store.commit("r1", due_at=h(1))
+    with pytest.raises(ValueError, match="own account"):
+        store.settle("r1", to_account="a/operating", at=h(1))
+    assert store.reservation("r1").state == "committed"
+
+
+def test_an_obligation_reservation_covers_its_account_and_amount():
+    store = lifecycle_world()
+    store.hold("a/operating", 1, now=T0, reservation_id="tiny")
+    with pytest.raises(ValueError, match="is not"):
+        store.add_obligation("ob", "a/operating", 100, h(1), kind="rent", reservation_id="tiny")
+
+
+def test_an_amount_beyond_bigint_is_refused():
+    store = lifecycle_world()
+    with pytest.raises(LedgerRefusal) as refused:
+        store.hold("a/operating", 2**63, now=T0)
+    assert refused.value.code == "amount_not_integer_minor"

@@ -7,7 +7,7 @@ journals. Money is integer minor units (BIGINT) with an ISO-4217 code everywhere
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, get_args
 
@@ -32,6 +32,7 @@ from sqlalchemy import (
 
 STALE_AFTER = timedelta(hours=6)  # a balance strictly older than this (simulated) is stale
 HORIZON = timedelta(hours=72)  # the default planning horizon (system brief §6)
+EPOCH = datetime(1970, 1, 1, tzinfo=UTC)  # the time of what has no time of its own
 
 RefusalCode = Literal[
     "journal_unbalanced", "no_journal", "zero_amount", "amount_not_integer_minor",
@@ -74,7 +75,7 @@ class Journal:
     postings: tuple[Posting, ...]
     kind: str = "transfer"
     round: int = 0
-    sim_time: datetime = field(default_factory=lambda: datetime(1970, 1, 1, tzinfo=UTC))
+    sim_time: datetime = EPOCH
     source_intent_id: str | None = None
     source_leg_id: str | None = None
     mode: Literal["simulation", "fake", "sandbox", "sandbox_simulation"] = "simulation"

@@ -1,9 +1,9 @@
 """The ledger store: SQLAlchemy 2 Core over SQLite (tests) or PostgreSQL (`LEDGER_DATABASE_URL`).
 
-Every write is one transaction. A write checks everything it can before its first insert and
-any refusal rolls the transaction back, so a refused write leaves the store exactly as it was.
-Every method takes an optional `conn` so a caller (`ledger.pay`, `ledger.settle_due`) can make a
-check and several writes one transaction.
+Every write is one transaction, and a refused write leaves the store exactly as it was. Every
+method takes an optional `conn` so a caller (`ledger.pay`, `ledger.settle_due`) can make a check
+and several writes one transaction; inside a caller's transaction each write is a savepoint, so a
+refusal the caller catches still leaves nothing of the refused write behind.
 
 Buckets map to tables: settled ← Σ postings · reserved ← reservations held · pending_in/out ←
 expected_flows pending · pledged ← pledges active · unknown ← account_observations.
@@ -18,12 +18,13 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from sqlalchemy import Connection, create_engine, event, func, insert, select, update
+from sqlalchemy import Connection, Table, create_engine, event, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
 
 from . import migrations
 from .models import (
+    EPOCH,
     Journal,
     LedgerRefusal,
     Posting,
@@ -39,9 +40,12 @@ from .models import (
     postings,
     reservations,
 )
+from .schemas import MINOR_MAX
 from .spendability import AccountView, Due, Flow
 
 EXTERNAL_ENTITY = "external"
+OPEN_OBLIGATION = ("open", "missed")  # a missed obligation is still owed and still counted
+KIND_MAX = 32  # the width of every kind/purpose column
 
 
 def _naive(when: datetime) -> datetime:
@@ -55,13 +59,26 @@ def _aware(when: datetime | None) -> datetime | None:
     return None if when is None else when.replace(tzinfo=UTC)
 
 
+def _kind(kind: str) -> str:
+    return kind[:KIND_MAX]
+
+
 def minor_amount(value: Any, *, positive: bool = False) -> int:
-    """An integer number of minor units, never a float, a string or a bool; never zero."""
-    if isinstance(value, bool) or not isinstance(value, int):
+    """An integer number of minor units within BIGINT, never a float, a string or a bool.
+
+    Zero is refused, and so is a negative amount where `positive` (a hold, a pledge, an outflow):
+    the closed code set has no separate code for it, and both move nothing a caller asked for.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or abs(value) > MINOR_MAX:
         raise LedgerRefusal("amount_not_integer_minor", value=repr(value))
     if value == 0 or (positive and value < 0):
         raise LedgerRefusal("zero_amount", value=value)
     return value
+
+
+def _sum(c: Connection, table: Table, account_id: str, *where: Any) -> int:
+    return int(c.execute(select(func.coalesce(func.sum(table.c.amount_minor), 0))
+                         .where(table.c.account_id == account_id, *where)).scalar())
 
 
 class LedgerStore:
@@ -72,7 +89,8 @@ class LedgerStore:
         if url.startswith("sqlite"):
             self.engine = create_engine(url, poolclass=StaticPool,
                                         connect_args={"check_same_thread": False})
-            event.listen(self.engine, "connect", _sqlite_foreign_keys)
+            event.listen(self.engine, "connect", _sqlite_connect)
+            event.listen(self.engine, "begin", _sqlite_begin)
         else:
             self.engine = create_engine(url)
         migrations.upgrade(self.engine)
@@ -81,9 +99,10 @@ class LedgerStore:
 
     @contextmanager
     def transaction(self, conn: Connection | None = None) -> Iterator[Connection]:
-        """A new transaction, or the caller's when it passes one in."""
+        """A new transaction, or a savepoint inside the caller's when it passes one in."""
         if conn is not None:
-            yield conn
+            with conn.begin_nested():
+                yield conn
             return
         with self.engine.begin() as new:
             yield new
@@ -112,12 +131,13 @@ class LedgerStore:
         """The outside world's account in one currency: counterparty of arrivals and payees."""
         account_id = f"{EXTERNAL_ENTITY}/{currency}"
         with self.transaction(conn) as c:
+            if self._account(c, account_id, required=False) is not None:
+                return account_id
             if c.execute(select(entities.c.entity_id)
                          .where(entities.c.entity_id == EXTERNAL_ENTITY)).first() is None:
                 self.add_entity(EXTERNAL_ENTITY, "Outside world", "external", conn=c)
-            if self._account(c, account_id, required=False) is None:
-                self.open_account(account_id, EXTERNAL_ENTITY, currency, kind="external",
-                                  as_of=datetime(1970, 1, 1, tzinfo=UTC), conn=c)
+            self.open_account(account_id, EXTERNAL_ENTITY, currency, kind="external",
+                              as_of=EPOCH, conn=c)
         return account_id
 
     def observe(self, account_id: str, observability: Literal["known", "unknown"],
@@ -132,7 +152,10 @@ class LedgerStore:
     # ----------------------------------------------------------------------------- journals
 
     def apply(self, journal: Journal | Posting, conn: Connection | None = None) -> Journal:
-        """Commit a balanced journal whole, or refuse it and change nothing."""
+        """Commit a balanced journal whole, or refuse it and change nothing.
+
+        A bare `Posting` is accepted only to be refused: no posting exists outside a journal.
+        """
         if isinstance(journal, Posting):
             raise LedgerRefusal("no_journal", account=journal.account_id)
         if not isinstance(journal, Journal):
@@ -143,10 +166,14 @@ class LedgerStore:
     def _apply(self, c: Connection, journal: Journal) -> Journal:
         if not journal.postings:
             raise LedgerRefusal("zero_amount", journal_id=journal.journal_id)
+        held = {r.account_id: r for r in c.execute(select(accounts).where(
+            accounts.c.account_id.in_({p.account_id for p in journal.postings})))}
         rows, totals = [], defaultdict(int)
         for p in journal.postings:
             amount = minor_amount(p.amount_minor)
-            currency = self._account(c, p.account_id).currency
+            if p.account_id not in held:
+                raise UnknownAccount(p.account_id)
+            currency = held[p.account_id].currency
             if p.currency is not None and p.currency != currency:
                 raise LedgerRefusal("journal_unbalanced", account=p.account_id,
                                     currency=p.currency, holds=currency)
@@ -158,7 +185,7 @@ class LedgerStore:
                 raise LedgerRefusal("journal_unbalanced", currency=currency, diff=diff)
         seq = (c.execute(select(func.max(journals.c.seq))).scalar() or 0) + 1
         c.execute(insert(journals).values(
-            journal_id=journal.journal_id, kind=journal.kind, round=journal.round,
+            journal_id=journal.journal_id, kind=_kind(journal.kind), round=journal.round,
             sim_time=_naive(journal.sim_time), seq=seq, source_intent_id=journal.source_intent_id,
             source_leg_id=journal.source_leg_id, mode=journal.mode))
         c.execute(insert(postings), rows)
@@ -166,30 +193,60 @@ class LedgerStore:
             self._check_spoken_for(c, account_id)
         return Journal(**{**journal.__dict__, "seq": seq})
 
+    def _free(self, c: Connection, account_id: str) -> tuple[Any, str, int, int]:
+        """(account, observability, settled, free): free = settled − everything promised."""
+        acc = self._account(c, account_id)
+        observability = c.execute(select(account_observations.c.observability).where(
+            account_observations.c.account_id == account_id)).scalar_one()
+        settled = _sum(c, postings, account_id)
+        free = (settled
+                - _sum(c, reservations, account_id, reservations.c.state == "held")
+                - _sum(c, pledges, account_id, pledges.c.state == "active")
+                - _sum(c, expected_flows, account_id, expected_flows.c.direction == "out",
+                       expected_flows.c.state == "pending"))
+        return acc, observability, settled, free
+
     def _check_spoken_for(self, c: Connection, account_id: str) -> None:
-        """reserved ≤ settled: no write may leave a cash account below what it has promised."""
-        view = self.view(account_id, conn=c)
-        if view.kind == "cash" and view.free_minor < 0:
+        """reserved ≤ settled: no write may leave a known cash account below its promises.
+
+        An unknown balance cannot be checked against anything; nothing executes on it anyway
+        (`check_outflow` refuses `unknown_balance`).
+        """
+        acc, observability, settled, free = self._free(c, account_id)
+        if acc.kind == "cash" and observability == "known" and free < 0:
             raise LedgerRefusal("reserved_exceeds_settled", account=account_id,
-                                settled=view.settled_minor,
-                                spoken_for=view.settled_minor - view.free_minor)
+                                settled=settled, spoken_for=settled - free)
+
+    def _room(self, c: Connection, account_id: str, amount: int, code: str,
+              observed: bool) -> str:
+        """Refuse a hold or a pledge the free units cannot cover; returns the currency.
+
+        `observed` marks a write that records a snapshot's own buckets: on an unknown account
+        those are taken as observed, since no balance exists to check them against.
+        """
+        acc, observability, _, free = self._free(c, account_id)
+        if observability == "unknown":
+            if not observed:
+                raise LedgerRefusal("unknown_balance", account=account_id)
+        elif amount > free:
+            raise LedgerRefusal(code, account=account_id, amount=amount, free=free)
+        return acc.currency
 
     # ------------------------------------------------------------------------- reservations
 
     def hold(self, account_id: str, amount_minor: int, *, now: datetime,
              reservation_id: str | None = None, purpose: str = "hold",
-             expires_at: datetime | None = None, conn: Connection | None = None) -> str:
+             expires_at: datetime | None = None, observed: bool = False,
+             conn: Connection | None = None) -> str:
         """settled → reserved; refused when the free settled units do not cover it."""
         amount = minor_amount(amount_minor, positive=True)
         with self.transaction(conn) as c:
-            view = self.view(account_id, conn=c)
-            if amount > view.free_minor:
-                raise LedgerRefusal("reserved_exceeds_settled", account=account_id,
-                                    amount=amount, free=view.free_minor)
+            currency = self._room(c, account_id, amount, "reserved_exceeds_settled", observed)
             reservation_id = reservation_id or self._next_id(c, reservations, "res")
             c.execute(insert(reservations).values(
-                reservation_id=reservation_id, account_id=account_id, currency=view.currency,
-                amount_minor=amount, state="held", purpose=purpose, created_at=_naive(now),
+                reservation_id=reservation_id, account_id=account_id, currency=currency,
+                amount_minor=amount, state="held", purpose=_kind(purpose),
+                created_at=_naive(now),
                 expires_at=None if expires_at is None else _naive(expires_at)))
         return reservation_id
 
@@ -205,7 +262,7 @@ class LedgerStore:
                 flow_id=flow_id, account_id=res.account_id, direction="out",
                 currency=res.currency, amount_minor=res.amount_minor,
                 expected_at=_naive(due_at), state="pending", reservation_id=reservation_id,
-                kind=kind))
+                kind=_kind(kind)))
         return flow_id
 
     def release(self, reservation_id: str, conn: Connection | None = None) -> None:
@@ -251,6 +308,8 @@ class LedgerStore:
                              .where(expected_flows.c.flow_id == flow_id)).one()
             if flow.state != "pending":
                 raise ValueError(f"flow {flow_id} is {flow.state}, not pending")
+            if counterparty == flow.account_id:
+                raise ValueError(f"flow {flow_id} cannot settle against its own account")
             sign = 1 if flow.direction == "in" else -1
             c.execute(update(expected_flows).where(expected_flows.c.flow_id == flow_id)
                       .values(state="settled"))
@@ -260,10 +319,10 @@ class LedgerStore:
                           .values(state="settled"))
                 c.execute(update(obligations)
                           .where(obligations.c.reservation_id == flow.reservation_id,
-                                 obligations.c.state == "open")
+                                 obligations.c.state.in_(OPEN_OBLIGATION))
                           .values(state="met"))
             return self._apply(c, Journal(
-                journal_id=journal_id or f"settle:{flow_id}", kind=f"settle_{flow.kind}"[:32],
+                journal_id=journal_id or f"settle:{flow_id}", kind=f"settle_{flow.kind}",
                 round=round, sim_time=at, postings=(
                     Posting(flow.account_id, sign * flow.amount_minor),
                     Posting(counterparty, -sign * flow.amount_minor))))
@@ -272,7 +331,7 @@ class LedgerStore:
 
     def pledge(self, account_id: str, amount_minor: int, collateral_ref: str, *,
                pledge_id: str | None = None, facility_id: str | None = None,
-               conn: Connection | None = None) -> str:
+               observed: bool = False, conn: Connection | None = None) -> str:
         """Move units to pledged; the same collateral_ref is never in two active pledges."""
         amount = minor_amount(amount_minor, positive=True)
         with self.transaction(conn) as c:
@@ -281,15 +340,15 @@ class LedgerStore:
             if active is not None:
                 raise LedgerRefusal("already_pledged", collateral_ref=collateral_ref,
                                     pledge_id=active.pledge_id)
-            view = self.view(account_id, conn=c)
-            if amount > view.free_minor:
-                raise LedgerRefusal("pledge_exceeds_free", account=account_id, amount=amount,
-                                    free=view.free_minor)
+            if pledge_id and c.execute(select(pledges.c.pledge_id)
+                                       .where(pledges.c.pledge_id == pledge_id)).first():
+                raise ValueError(f"pledge id {pledge_id} is taken")
+            currency = self._room(c, account_id, amount, "pledge_exceeds_free", observed)
             pledge_id = pledge_id or self._next_id(c, pledges, "pledge")
             try:
                 c.execute(insert(pledges).values(
                     pledge_id=pledge_id, account_id=account_id, collateral_ref=collateral_ref,
-                    currency=view.currency, amount_minor=amount, state="active",
+                    currency=currency, amount_minor=amount, state="active",
                     facility_id=facility_id))
             except IntegrityError as exc:  # a concurrent pledge won the partial unique index
                 raise LedgerRefusal("already_pledged", collateral_ref=collateral_ref) from exc
@@ -314,7 +373,7 @@ class LedgerStore:
             c.execute(insert(expected_flows).values(
                 flow_id=flow_id, account_id=account_id, direction=direction, currency=currency,
                 amount_minor=amount, expected_at=_naive(expected_at), state="pending",
-                kind=kind))
+                kind=_kind(kind)))
             if direction == "out":
                 self._check_spoken_for(c, account_id)
         return flow_id
@@ -330,23 +389,53 @@ class LedgerStore:
             if done.rowcount != 1:
                 raise ValueError(f"no pending flow {flow_id}")
 
+    def due_flows(self, direction: Literal["in", "out"], now: datetime,
+                  conn: Connection | None = None) -> list[Any]:
+        """Pending flows expected by `now`, in time order."""
+        with self.transaction(conn) as c:
+            return c.execute(select(expected_flows).where(
+                expected_flows.c.direction == direction, expected_flows.c.state == "pending",
+                expected_flows.c.expected_at <= _naive(now))
+                .order_by(expected_flows.c.expected_at, expected_flows.c.flow_id)).all()
+
     def add_obligation(self, obligation_id: str, account_id: str, amount_minor: int,
                        due_at: datetime, *, kind: str, reservation_id: str | None = None,
                        mandatory: bool = True, state: str = "open",
                        conn: Connection | None = None) -> None:
+        """An obligation; its reservation, when named, is on its account for its amount."""
         amount = minor_amount(amount_minor, positive=True)
         with self.transaction(conn) as c:
             account = self._account(c, account_id)
+            if reservation_id and state in OPEN_OBLIGATION:
+                self._covers(self._reservation(c, reservation_id), account_id, amount)
             c.execute(insert(obligations).values(
                 obligation_id=obligation_id, entity_id=account.entity_id, account_id=account_id,
-                currency=account.currency, amount_minor=amount, due_at=_naive(due_at), kind=kind,
-                mandatory=mandatory, state=state, reservation_id=reservation_id))
+                currency=account.currency, amount_minor=amount, due_at=_naive(due_at),
+                kind=_kind(kind), mandatory=mandatory, state=state,
+                reservation_id=reservation_id))
+
+    def attach_reservation(self, obligation_id: str, reservation_id: str,
+                           conn: Connection | None = None) -> None:
+        with self.transaction(conn) as c:
+            ob = c.execute(select(obligations)
+                           .where(obligations.c.obligation_id == obligation_id)).one()
+            self._covers(self._reservation(c, reservation_id), ob.account_id, ob.amount_minor)
+            c.execute(update(obligations).where(obligations.c.obligation_id == obligation_id)
+                      .values(reservation_id=reservation_id))
 
     def set_obligation_state(self, obligation_id: str, state: str,
                              conn: Connection | None = None) -> None:
         with self.transaction(conn) as c:
             c.execute(update(obligations).where(obligations.c.obligation_id == obligation_id)
                       .values(state=state))
+
+    def due_obligations(self, now: datetime, conn: Connection | None = None) -> list[Any]:
+        """Mandatory obligations still owed (open or missed) and due by `now`, in time order."""
+        with self.transaction(conn) as c:
+            return c.execute(select(obligations).where(
+                obligations.c.state.in_(OPEN_OBLIGATION), obligations.c.mandatory.is_(True),
+                obligations.c.due_at <= _naive(now))
+                .order_by(obligations.c.due_at, obligations.c.obligation_id)).all()
 
     # -------------------------------------------------------------------------------- reads
 
@@ -356,19 +445,15 @@ class LedgerStore:
             acc = self._account(c, account_id)
             obs = c.execute(select(account_observations).where(
                 account_observations.c.account_id == account_id)).one()
-            settled = c.execute(select(func.coalesce(func.sum(postings.c.amount_minor), 0))
-                                .where(postings.c.account_id == account_id)).scalar()
-            reserved = c.execute(select(func.coalesce(func.sum(reservations.c.amount_minor), 0))
-                                 .where(reservations.c.account_id == account_id,
-                                        reservations.c.state == "held")).scalar()
-            pledged = c.execute(select(func.coalesce(func.sum(pledges.c.amount_minor), 0))
-                                .where(pledges.c.account_id == account_id,
-                                       pledges.c.state == "active")).scalar()
+            settled = _sum(c, postings, account_id)
+            reserved = _sum(c, reservations, account_id, reservations.c.state == "held")
+            pledged = _sum(c, pledges, account_id, pledges.c.state == "active")
             flows = c.execute(select(expected_flows).where(
                 expected_flows.c.account_id == account_id, expected_flows.c.state == "pending")
                 .order_by(expected_flows.c.expected_at, expected_flows.c.flow_id)).all()
             dues = c.execute(select(obligations).where(
-                obligations.c.account_id == account_id, obligations.c.state == "open")
+                obligations.c.account_id == account_id,
+                obligations.c.state.in_(OPEN_OBLIGATION))
                 .order_by(obligations.c.due_at, obligations.c.obligation_id)).all()
         pending = {d: tuple(Flow(f.flow_id, f.amount_minor, _aware(f.expected_at), f.kind,
                                  f.reservation_id) for f in flows if f.direction == d)
@@ -378,8 +463,8 @@ class LedgerStore:
         return AccountView(
             account_id=acc.account_id, entity_id=acc.entity_id, currency=acc.currency,
             kind=acc.kind, floor_minor=acc.floor_minor, observability=obs.observability,
-            as_of=_aware(obs.as_of), settled_minor=int(settled), reserved_minor=int(reserved),
-            pledged_minor=int(pledged), pending_in=pending["in"], pending_out=pending["out"],
+            as_of=_aware(obs.as_of), settled_minor=settled, reserved_minor=reserved,
+            pledged_minor=pledged, pending_in=pending["in"], pending_out=pending["out"],
             obligations=tuple(Due(d.obligation_id, d.amount_minor, _aware(d.due_at), d.kind,
                                   d.reservation_id)
                               for d in dues if d.reservation_id not in carried))
@@ -424,12 +509,28 @@ class LedgerStore:
         return res
 
     @staticmethod
-    def _next_id(c: Connection, table: Any, prefix: str) -> str:
-        count = c.execute(select(func.count()).select_from(table)).scalar()
-        return f"{prefix}-{count + 1}"
+    def _covers(res: Any, account_id: str, amount: int) -> None:
+        if res.account_id != account_id or res.amount_minor != amount:
+            raise ValueError(f"reservation {res.reservation_id} is not {amount} on {account_id}")
+
+    @staticmethod
+    def _next_id(c: Connection, table: Table, prefix: str) -> str:
+        """`<prefix>-<n>`, the first n past the row count that no row already uses."""
+        key = next(iter(table.primary_key.columns))
+        n = c.execute(select(func.count()).select_from(table)).scalar()
+        while True:
+            n += 1
+            if c.execute(select(key).where(key == f"{prefix}-{n}")).first() is None:
+                return f"{prefix}-{n}"
 
 
-def _sqlite_foreign_keys(dbapi_connection: Any, _record: Any) -> None:
+def _sqlite_connect(dbapi_connection: Any, _record: Any) -> None:
+    # pysqlite's own transaction handling breaks SAVEPOINT; SQLAlchemy emits BEGIN instead.
+    dbapi_connection.isolation_level = None
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
+
+
+def _sqlite_begin(conn: Connection) -> None:
+    conn.exec_driver_sql("BEGIN")

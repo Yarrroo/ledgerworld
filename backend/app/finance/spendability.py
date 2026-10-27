@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from .models import HORIZON, STALE_AFTER
-from .schemas import EXPONENT
+from .schemas import Money, to_decimal
 
 State = Literal["known", "stale", "unknown"]
 Authority = Literal["full", "reduced"]
@@ -168,7 +168,6 @@ def floor_check(view: AccountView, now: datetime, horizon: timedelta = HORIZON) 
 
 def grouped(minor: int, currency: str) -> str:
     """Minor units as a grouped decimal for a reason or a label: 3000000 USD -> '30,000.00'."""
-    exponent = EXPONENT[currency]
-    sign = "-" if minor < 0 else ""
-    whole, frac = divmod(abs(minor), 10**exponent)
-    return f"{sign}{whole:,}" + (f".{frac:0{exponent}d}" if exponent else "")
+    whole, dot, frac = to_decimal(Money(minor=minor, currency=currency)).partition(".")
+    sign = "-" if whole.startswith("-") else ""
+    return f"{sign}{int(whole.lstrip('-')):,}{dot}{frac}"
