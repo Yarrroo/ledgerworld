@@ -15,6 +15,7 @@ import copy
 import json
 import random
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from app.finance.lending import capacity
@@ -147,7 +148,7 @@ def test_one_clock_four_hour_rounds_and_a_drift_fails():
         clock.check(0)
     # OASIS's clock moves at step 1; the step's own advance is taken back, and a step that did
     # not advance it once fails the round.
-    oasis = type("SandboxClock", (), {"time_step": 1})()
+    oasis = SimpleNamespace(time_step=1)
     assert clock.advance(oasis) == 2 and oasis.time_step == 2
     oasis.time_step += 1  # what env.step does after its actions
     clock.settle_step(oasis)
@@ -155,7 +156,7 @@ def test_one_clock_four_hour_rounds_and_a_drift_fails():
     with pytest.raises(ClockDrift):
         clock.settle_step(oasis)
     with pytest.raises(ClockDrift):
-        clock.advance(type("SandboxClock", (), {"time_step": 0})())
+        clock.advance(SimpleNamespace(time_step=0))
 
 
 # ---------------------------------------------------------------- clearing-order.json (step 7)
