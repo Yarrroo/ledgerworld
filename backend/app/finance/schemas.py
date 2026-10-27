@@ -667,6 +667,9 @@ class Capacity(_Shape):
     """K_p, the parts it is computed from, and the pool's cash accounts it could not count, all
     read at one moment: authority is full exactly when nothing is unobserved."""
 
+    model_config = _rules(_when("authority", "full", _props(unobserved={"maxItems": 0}),
+                                _props(unobserved={"minItems": 1})))
+
     K_p: Metric
     authority: Authority
     parts: CapacityParts

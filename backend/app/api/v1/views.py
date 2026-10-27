@@ -82,10 +82,9 @@ def _pool(store: LedgerStore) -> str | None:
 
 
 def _pool_capacity(store: LedgerStore, pool: str, now: datetime) -> tuple[Any, str]:
-    """K_p of ``pool`` and its status: stale when any of the pool's cash accounts is."""
+    """K_p of ``pool`` and its status: stale when any cash account it reads is, from the same read."""
     cap = capacity(store, pool, now)
-    stale = any(state_of(v, now) == "stale" for v in cash_accounts(store, pool))
-    return cap, "stale" if stale else "known"
+    return cap, "stale" if cap.stale else "known"
 
 
 def _capacity_metric(store: LedgerStore, pool: str | None, now: datetime,

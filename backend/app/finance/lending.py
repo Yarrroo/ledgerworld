@@ -72,9 +72,13 @@ class PoolCapacity:
     pool: str
     currency: str
     K_p: int  # the system brief's name for it
-    authority: Authority
     parts: CapacityParts
     unobserved: tuple[str, ...] = ()  # the pool's cash accounts not counted: not known at `now`
+    stale: bool = False  # one of them is stale (observed, older than STALE_AFTER), not unknown
+
+    @property
+    def authority(self) -> Authority:
+        return "reduced" if self.unobserved else "full"
 
     @property
     def binding(self) -> str:
@@ -107,12 +111,15 @@ def capacity(store: LedgerStore, pool: str, now: datetime, horizon: timedelta = 
             accounts.c.currency == row.currency).order_by(accounts.c.account_id)).scalars().all()
         settled = pledged = due = 0
         unobserved: list[str] = []
+        stale = False
         for account_id in cash:
             view = store.view(account_id, conn=c)
-            if state_of(view, now) == "known":
+            state = state_of(view, now)
+            if state == "known":
                 settled += view.settled_minor
             else:
                 unobserved.append(account_id)
+                stale = stale or state == "stale"
             pledged += view.pledged_minor
             due += view.pending_out_minor + sum(d.amount_minor for d in view.obligations
                                                 if d.at <= end)
@@ -122,8 +129,7 @@ def capacity(store: LedgerStore, pool: str, now: datetime, horizon: timedelta = 
     parts = CapacityParts(settled_known=settled, committed_undrawn=undrawn, pledged=pledged,
                           obligations_due=due, floor=row.floor_minor)
     k_p = settled - undrawn - pledged - due - row.floor_minor
-    authority: Authority = "reduced" if unobserved else "full"
-    return PoolCapacity(pool, row.currency, k_p, authority, parts, tuple(unobserved))
+    return PoolCapacity(pool, row.currency, k_p, parts, tuple(unobserved), stale)
 
 
 def check_draw(store: LedgerStore, pool: str, amount_minor: int, now: datetime,

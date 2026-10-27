@@ -637,6 +637,34 @@
     },
     "Capacity": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "unobserved": {
+                "minItems": 1
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "authority": {
+                "const": "full"
+              }
+            },
+            "required": [
+              "authority"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unobserved": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ],
       "description": "K_p, the parts it is computed from, and the pool's cash accounts it could not count, all\nread at one moment: authority is full exactly when nothing is unobserved.",
       "properties": {
         "K_p": {

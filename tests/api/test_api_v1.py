@@ -210,10 +210,31 @@ def test_lending_carries_its_own_completeness_across_the_freshness_boundary():
 
 def test_lending_capacity_full_authority_means_nothing_unobserved():
     body = check(client(build()).get("/api/v1/lending"), "LendingResponse")
+    schema = {"$schema": C6["$schema"], "$defs": C6["$defs"], "$ref": "#/$defs/LendingResponse"}
     for authority, unobserved in (("full", ["lender/venue"]), ("reduced", [])):
-        capacity = body["capacity"] | {"authority": authority, "unobserved": unobserved}
+        wrong = body | {"capacity": body["capacity"] | {"authority": authority,
+                                                         "unobserved": unobserved}}
         with pytest.raises(ValueError, match="authority is full exactly when"):
-            c6.LendingResponse.model_validate(body | {"capacity": capacity})
+            c6.LendingResponse.model_validate(wrong)
+        assert not Draft202012Validator(schema).is_valid(wrong)
+
+
+def test_k_p_status_reads_only_the_accounts_k_p_counts():
+    """A stale pool account in another currency is not counted in K_p, so it leaves K_p's status
+    and its authority alone: both come from the one read that computes K_p."""
+    snap = observed()
+    snap["accounts"].append({
+        "id": "lender/eur", "entity": "lender", "currency": "EUR", "observability": "known",
+        "as_of": iso(NOW - timedelta(hours=7)),
+        "buckets": {k: {"minor": 0, "currency": "EUR"} for k in ("settled", "reserved", "pledged")}
+        | {"pending_in": [], "pending_out": []}})
+    http = client(build(snap))
+    capacity = check(http.get("/api/v1/lending"), "LendingResponse")["capacity"]
+    assert (capacity["authority"], capacity["unobserved"]) == ("full", [])
+    assert capacity["K_p"]["status"] == "known"
+    overview = check(http.get("/api/v1/overview"), "OverviewResponse")
+    assert overview["lender_capacity"]["status"] == "known"
+    assert "lender/eur" in overview["completeness"]["missing"]
 
 
 def test_lending_shows_k_p_its_parts_and_an_unassessed_revenue():
