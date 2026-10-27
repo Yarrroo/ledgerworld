@@ -30,7 +30,7 @@ from app.finance.models import (
     revenue_observations,
 )
 from app.finance.store import LedgerStore
-from sqlalchemy import String, create_engine
+from sqlalchemy import Column, String, create_engine
 
 T0 = datetime(2026, 1, 5, tzinfo=UTC)
 WEEK = timedelta(days=7)
@@ -179,3 +179,27 @@ def test_every_generated_id_fits_on_postgres():
     metadata.drop_all(engine)
     engine.dispose()
     assert too_long(run_paths(url)) == []
+
+
+@pytest.mark.parametrize("path,value", [
+    (("obligations", 0, "obligation_id"), "o" * 65),
+    (("accounts", 0, "buckets", "pending_in", 0, "flow_id"), "f" * 65),
+    (("accounts", 0, "buckets", "pending_out", 0, "reservation_id"), "r" * 65),
+    (("contracts", 1, "contract_id"), "c" * 65),
+], ids=["obligation", "flow", "reservation", "contract"])
+def test_a_source_id_wider_than_its_column_is_refused_on_sqlite_as_on_postgres(path, value):
+    snap = snapshot()
+    node = snap
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    store = LedgerStore("sqlite://")
+    before = store.dump()
+    with pytest.raises(ValueError, match="longer than"):
+        from_snapshot(store, snap)
+    assert store.dump() == before
+
+
+def test_a_column_too_narrow_for_a_bounded_id_is_refused_not_overflowed():
+    with pytest.raises(ValueError, match="leaves"):
+        bounded_id(Column("narrow", String(16)), "x" * 40)

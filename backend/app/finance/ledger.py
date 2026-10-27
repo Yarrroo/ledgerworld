@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import Connection, insert
+from sqlalchemy import Column, Connection, insert
 
 from . import contracts
 from .models import (
@@ -20,9 +20,12 @@ from .models import (
     Posting,
     accounts,
     bounded_id,
+    entities,
     expected_flows,
+    facilities,
     journals,
     lending_pools,
+    obligations,
     pledges,
     reservations,
 )
@@ -172,9 +175,11 @@ def from_snapshot(store: LedgerStore, snapshot: Snapshot | dict) -> None:
     split into the named holds of open obligations and committed lines not already committed,
     and the rest is one hold `<account>:reserved`; the pledged bucket is one pledge
     `<account>#snapshot`. On an unknown account the buckets are taken as observed. Every contract
-    becomes a facility of its lender's pool (`contracts.load`).
+    becomes a facility of its lender's pool (`contracts.load`). Ids the ledger derives are
+    bounded to their columns (`bounded_id`); a source id wider than its own column is refused.
     """
     snap = snapshot if isinstance(snapshot, Snapshot) else Snapshot.model_validate(snapshot)
+    _source_ids_fit(snap)
     committed = {f.reservation_id for a in snap.accounts for f in a.buckets.pending_out
                  if f.reservation_id}
     named: dict[str, list[tuple[str, int, str]]] = {}
@@ -201,6 +206,38 @@ def from_snapshot(store: LedgerStore, snapshot: Snapshot | dict) -> None:
                                  kind=ob.kind, reservation_id=ob.reservation_id,
                                  mandatory=ob.mandatory, state=ob.state, conn=c)
         contracts.load(store, snap, conn=c)
+
+
+def _source_ids_fit(snap: Snapshot) -> None:
+    """Refuse, by name, a source id wider than the column it is stored in as written.
+
+    C5 allows ids up to 128 characters; several columns hold 64. SQLite ignores the width and
+    PostgreSQL refuses the write, so the same snapshot is refused here on both.
+    """
+    ids: list[tuple[Column, str | None]] = []
+    ids += [(entities.c.entity_id, e.entity_id) for e in snap.entities]
+    ids += [(lending_pools.c.pool_entity_id, p.entity) for p in snap.pools]
+    for a in snap.accounts:
+        ids += [(accounts.c.account_id, a.id), (accounts.c.entity_id, a.entity),
+                (accounts.c.venue, a.venue)]
+        for f in a.buckets.pending_in + a.buckets.pending_out:
+            ids += [(expected_flows.c.flow_id, f.flow_id),
+                    (reservations.c.reservation_id, f.reservation_id)]
+    for ob in snap.obligations:
+        ids += [(obligations.c.obligation_id, ob.obligation_id),
+                (obligations.c.entity_id, ob.entity), (obligations.c.account_id, ob.account),
+                (obligations.c.reservation_id, ob.reservation_id)]
+    for k in snap.contracts:
+        ids += [(facilities.c.facility_id, k.contract_id),
+                (facilities.c.pool_entity_id, k.lender),
+                (facilities.c.borrower_entity_id, k.borrower),
+                (facilities.c.reservation_id, getattr(k, "reservation_id", None)),
+                (accounts.c.account_id, getattr(k, "reserved_on", None)),
+                (pledges.c.collateral_ref, getattr(k, "collateral_ref", None))]
+    for column, value in ids:
+        if value is not None and len(value) > column.type.length:
+            raise ValueError(f"snapshot id {value!r} is longer than {column} allows "
+                             f"({column.type.length})")
 
 
 def _load_account(store: LedgerStore, c: Connection, a: Account, as_of: datetime,

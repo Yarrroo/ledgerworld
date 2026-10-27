@@ -1,8 +1,10 @@
 """Contract terms: committed lines, revenue advances, collateral facilities (system brief §6).
 
 A snapshot contract (C5) becomes one `facilities` row and one receivable account of the lender,
-`<lender>/loan:<contract_id>`, whose balance is what the borrower owes: the drawn part of a line,
-the principal plus fee of a disbursed advance. Outstanding is therefore Σ postings, never a column.
+`<lender>/loan:<contract_id>` (its head and a hash when that outgrows the column, as every
+generated id: `models.bounded_id`), whose balance is what the borrower owes: the drawn part of a
+line, the principal plus fee of a disbursed advance. Outstanding is therefore Σ postings, never a
+column.
 
 The money rules of the terms are pure integer functions here, so lending, decisions and the API
 compute the same numbers: the fee is bps on principal, recognised at disbursal; a repayment is
