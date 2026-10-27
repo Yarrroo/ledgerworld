@@ -1,0 +1,17 @@
+{
+  "board_item": 58,
+  "goal": "g2",
+  "goal_text": "The world is coupled",
+  "line_id": "l_22532ab838",
+  "outcome": "Every coupling behaviour of the agent world is demonstrated by a passing executable test against the product code (backend/app/simulation, packages/oasis-finance), never by a task marked done: agents act only through tools, a public shock produces a response traceable to it, a failed round rolls back, sibling branches stay isolated, a replay is identical, all six scenario families run, report numbers are grounded in the ledger, and the interview is read-only. Measured by running the tests, never counted from tasks closed.",
+  "name": "coupling_checks_pct",
+  "unit": "percent of the 8 required g2 checks in checks/required.json whose registered pytest node ids all pass in one offline run (a check with no registered tests, or a registered id that does not exist, counts as failing); 0 to 100",
+  "source": "python3 checks/kpi.py g2 --print (T22: runs uv run pytest -q --junitxml var/kpi/g2.xml on the node ids listed under group g2 of checks/required.json and prints the passing share in %; prints the baseline on any error). The test ids are registered under g2 by T07, T08, T09, T10 and T20 in the same commit as each test. Defined in prp/2026-10-20-ledgerworld/00-system.md section 17, row g2 (KPI coupling_checks_pct, target 100).",
+  "baseline": 0,
+  "baseline_observed_at": "2026-10-27T04:29:28Z",
+  "target": 100,
+  "target_comparison": ">=",
+  "direction": "up",
+  "observation": "At the commit under test, offline (fake transport, ScriptedModel, FakeGraphMemory, SQLite, fakeredis), run python3 checks/kpi.py g2 --print and read the printed percent. Until kpi.py exists, read checks/required.json group g2: a check passes only when it lists at least one pytest node id and uv run pytest -q <those ids> exits 0; the value is 100 * passing / 8. Observe after every landing train and before the build freeze (2026-11-12) and submission close (2026-11-13 18:29 UTC). Met when the value is 100.",
+  "evidence": "Definition: 00-system.md section 17 (g2: KPI coupling_checks_pct, target 100, passing share of group g2; required ids: actions only through tools, public shock traceable response, failed round rolls back, sibling isolation, replay identity, six families run, report numbers grounded, interview read-only). briefs/T22.md: kpi.py g1/g2 run pytest on the required.json ids and print the passing share, ids that do not exist count as failing. briefs/T07, T08, T09, T10, T20: each registers its test ids under g2. checks/required.json (T01): 8 g2 checks, and 'a check with no tests counts as not passing'. Baseline observed 2026-10-27T04:29:28Z in this checkout at fa860e4: python3 checks/kpi.py g2 --print -> no such file, exit 2; checks/required.json group g2 has 8 checks with 0 registered test ids, so 0 of 8 pass -> 0. The executable reference models under refmodel/ (test_branch_ref.py, test_world_ref.py) test a model of branches and the world, not the product, and are not registered under g2, so they do not count."
+}
