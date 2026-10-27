@@ -16,7 +16,9 @@ Any exception or cancellation before that commit aborts the round: admission clo
 the round created (``env.step``'s gather children and theirs, found by a context variable) is
 cancelled and joined, the platform is fenced so a write a cancelled agent already sent has
 landed, then the ledger rolls back and every captured component is restored and checked
-against the capture. If a writer outlives its cancellation, the platform cannot be fenced or the
+against the capture. A cancellation that arrives during the abort waits for it to end, and
+however the abort ends, the ledger rolls back and its connection closes. If a writer outlives
+its cancellation, the platform cannot be fenced, the abort itself fails or is cancelled, or the
 restored world differs from its capture, the world is marked unusable and refuses every later
 round. This is exception rollback, not process-crash recovery. A rejected intent, or malformed
 output the guardrail turned into ``no_action``, is a C2 result, not a failed round.
@@ -636,32 +638,61 @@ class Coordinator:
                 conn.close()
                 raise
             world.unusable = f"round {round_} is aborting"
-            await self._abort(world, token, conn, trans, capture, error)
+            world.close_admission()
+            status = "cancelled" if isinstance(error, asyncio.CancelledError) else "failed"
+            world.failures.append({"round": round_, "status": status, "error": repr(error)})
+            # The abort is bounded and runs to its end in its own task: a cancellation that
+            # arrives meanwhile waits for it, then propagates.
+            cleanup = asyncio.create_task(self._abort(world, token, conn, trans, capture, status),
+                                          name=f"round-{round_}-abort")
+            again = None
+            while not cleanup.done():
+                try:
+                    await asyncio.wait({cleanup})
+                except asyncio.CancelledError as cancel:
+                    again = cancel
+            if cleanup.cancelled():  # perhaps before its first step: stop what it never reached
+                broken, why = None, "cancelled"
+                for task in self.round_tasks(token):
+                    task.cancel()
+                conn.close()  # rolls back a transaction the abort left open
+            else:
+                broken = cleanup.exception()
+                why = None if broken is None else repr(broken)
+            if why is not None:
+                world.unusable = f"round {round_}: the abort did not finish ({why})"
+                world.lifecycle.append(("abort_failed", world.unusable))
+            if broken is not None and (again is not None or not isinstance(error, Exception)):
+                (again or error).add_note(f"the abort failed: {broken!r}")
+            if again is not None:
+                raise again from error
+            if broken is not None and isinstance(error, Exception):
+                raise broken
             raise
         conn.close()
         return result
 
     async def _abort(self, world: World, token: object, conn: Connection, trans: Any,
-                     capture: Any, error: BaseException) -> None:
-        status = "cancelled" if isinstance(error, asyncio.CancelledError) else "failed"
+                     capture: Any, status: str) -> None:
         round_ = capture.round + 1
-        world.close_admission()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.quiesce_timeout_s
         pending = self.round_tasks(token)
-        while pending and loop.time() < deadline:
-            for task in pending:
-                task.cancel()
-            done, _ = await asyncio.wait(pending, timeout=max(0.0, deadline - loop.time()))
-            for task in done:
-                if not task.cancelled():
-                    task.exception()  # retrieved: the round's own error is the one raised
-                world.lifecycle.append(("task_done", task.get_name()))
-            pending = self.round_tasks(token)
-        trans.rollback()
-        conn.close()
-        failure = {"round": round_, "status": status, "error": repr(error)}
-        world.failures.append(failure)
+        try:
+            while pending and loop.time() < deadline:
+                for task in pending:
+                    task.cancel()
+                done, _ = await asyncio.wait(pending, timeout=max(0.0, deadline - loop.time()))
+                for task in done:
+                    if not task.cancelled():
+                        task.exception()  # retrieved: the round's own error is the one raised
+                    world.lifecycle.append(("task_done", task.get_name()))
+                pending = self.round_tasks(token)
+        finally:  # whatever ends the wait, the ledger rolls back and the connection closes
+            try:
+                trans.rollback()
+            finally:
+                conn.close()
         if pending:
             world.unusable = (f"round {round_}: {len(pending)} round task(s) outlived their "
                               "cancellation")
