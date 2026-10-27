@@ -28,8 +28,8 @@
 - Vet: T3 (money surface), 2 rounds, 0 open. Round 1 (`/code-review high`, `/simplify` inline,
   `/security-review`: none): 11 findings, 9 applied (6 correctness, each with a test that fails
   on 0098a40), 2 recorded. Round 2 (`/code-review medium` on the fixes): 10 findings, 6 applied
-  (each with a test that fails on ea7ce32), 4 recorded. Recorded with reasons in the vet report
-  of the session; the open ones are listed below.
+  (each with a test that fails on ea7ce32), 4 recorded. The recorded ones and why are under
+  Follow-ups below.
 
 ## Docs updated
 - Module docstrings carry the rules (K_p formula, committed vs discretionary, observed revenue
