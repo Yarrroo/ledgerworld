@@ -45,7 +45,7 @@ TOOL_SCHEMAS = {
     "repay": ({**MONEY_ARGS, "to": str}, {}),
     "convert": ({**MONEY_ARGS, "to_currency": str}, {}),
     "pay": ({**MONEY_ARGS, "to": str}, {}),
-    "pledge": ({**MONEY_ARGS}, {"account": str}),
+    "pledge": (MONEY_ARGS, {"account": str}),
     "release": ({}, {"facility_id": str, "account": str}),
     "defer": ({}, {"obligation_id": str, "until_h": int}),
     "create_post": ({"content": str}, {}),

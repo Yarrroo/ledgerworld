@@ -3,6 +3,7 @@
 Run: python -m unittest discover -s refmodel -p test_tools_ref.py
 """
 
+import hashlib
 import json
 import sys
 import unittest
@@ -58,7 +59,6 @@ class ObservationScope(unittest.TestCase):
         self.assertEqual((obs_a, h_a), (obs_b, h_b))
 
     def test_obs_hash_is_sha256_of_canonical_json(self):
-        import hashlib
         obs, h, _ = self.build(self.fx["world_items"])
         text = ref.canonical_json(obs)
         self.assertNotIn(" ", text)
