@@ -770,6 +770,36 @@ describe('a POST answered after a query navigation stays with its own run', () =
     expect(text(w, 'elsewhere')).toBe('Read execution apr-1 of run run-1')
   })
 
+  it('two outcomes that answered on other screens each keep their own link', async () => {
+    const { w, hold } = await answeredOnRun2()
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-3')
+    await flushPromises()
+    hold.release({ as_of: '2026-11-05T10:00:09Z', mode: 'fake', execution_id: 'apr-2' })
+    await flushPromises()
+    expect(w.findAll('[data-test="elsewhere"]').map((l) => l.text())).toEqual([
+      'Read execution apr-1 of run run-1', 'Read execution apr-2 of run run-2'
+    ])
+  })
+
+  it('an outcome delivered to its run closes a review opened there meanwhile', async () => {
+    const { w, hold } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-1')
+    await flushPromises()
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="review"]').exists()).toBe(true)
+    hold.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    await flushPromises()
+    expect(w.find('[data-test="review"]').exists()).toBe(false)
+    expect(text(w, 'context')).toContain('Run run-1 · execution apr-1')
+  })
+
   it('a refusal answered after leaving and returning is shown, and does not disable the next approval', async () => {
     const { w, hold } = await heldOn('POST /executions')
     await approve(w)

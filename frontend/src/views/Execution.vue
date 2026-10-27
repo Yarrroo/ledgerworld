@@ -22,10 +22,10 @@
 
     <p v-if="flow.blocked" class="lw-alert" role="alert" data-test="blocked">{{ flow.blocked }}</p>
     <p v-else-if="flow.message" class="lw-note" role="status" data-test="message">{{ flow.message }}</p>
-    <p v-if="flow.elsewhere" class="lw-actions">
+    <p v-for="[run, sent] in pending" :key="run" class="lw-actions">
       <RouterLink class="lw-button lw-button--quiet" data-test="elsewhere"
-                  :to="{ path: route.path, query: { run_id: flow.elsewhere.run, execution_id: flow.elsewhere.id } }">
-        Read execution {{ flow.elsewhere.id }} of run {{ flow.elsewhere.run }}
+                  :to="{ path: route.path, query: { run_id: run, execution_id: sent.id } }">
+        Read execution {{ sent.id }} of run {{ run }}
       </RouterLink>
     </p>
 
@@ -241,7 +241,7 @@ const scenarioCost = computed(() => {
 
 const flow = reactive({
   open: false, approval: null, serverAt: 0, receivedAt: 0, submitting: false, executed: false,
-  invalid: '', blocked: '', message: '', elsewhere: null
+  invalid: '', blocked: '', message: ''
 })
 const opener = shallowRef(null)
 const heading = shallowRef(null)
@@ -392,7 +392,6 @@ async function executePlan () {
   // the screen moved on: the outcome waits for its own run's screen, and is shown there only
   pending.set(from.run, { id: sentId, unknown })
   if (state.status === 'loaded' && deliver(state.body)) return
-  flow.elsewhere = { run: from.run, id: sentId }
   if (unknown) {
     flow.blocked = `Execution outcome unknown for run ${from.run}; its status is read by approval id ` +
       `${id} on that run's screen. Do not send again.`
@@ -412,7 +411,9 @@ function deliver (body) {
   const asked = route.query.execution_id
   if (!sent || (asked && asked !== sent.id)) return false
   pending.delete(body.run_id)
-  if (flow.elsewhere?.run === body.run_id) flow.elsewhere = null
+  if (!flow.submitting) { // a review opened meanwhile closes, as after an execution sent in place
+    Object.assign(flow, { open: false, approval: null, invalid: '', executed: false })
+  }
   announce(sent)
   follow(sent.id)
   return true
@@ -428,7 +429,9 @@ const guard = latestOnly()
 let timer = null
 const followedId = shallowRef(null)
 let followed = false // an execution this tab sent: a refresh re-reads it, never swaps it for another
-const pending = new Map() // run id -> an execution this tab sent that answered after its screen moved on
+// run id -> an execution this tab sent that answered after its screen moved on; each is linked
+// until its own run's screen shows it
+const pending = reactive(new Map())
 let autoReviewed = false // review=1 opens the review once, not on every refresh
 
 const execution = computed(() =>
