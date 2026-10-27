@@ -10,17 +10,20 @@ the stop conditions in docs/video-script.md "Recording prerequisites":
   prepared_run          the overview names a prepared demo run_id
   prepared_execution    ... and the execution associated with it
   decisions             GET /decisions/{run_id} answers 200 and is no longer pending
-  feasible_policy       at least one policy is feasible (all_infeasible stops the take)
+  feasible_policy       a policy is selected and feasible (all_infeasible stops the take)
   execution_read        GET /executions/{execution_id} answers 200
-  execution_reconciled  every leg carries a provider receipt and is reconciled; no open incident
+  execution_reconciled  every leg settled, carries a provider receipt and is reconciled; no open
+                        incident (a failed leg is reconciled too, and still spoils the take)
 
 One line per check (`ok`, `FAIL` or `skip` when an earlier failure leaves nothing to read), then
-`GO` or `NO-GO: <first failure>`. Exit 0 on GO, 1 on NO-GO, 2 when the host cannot be reached or
-on bad usage. It never writes and never sends a credential. Stdlib only.
+`GO` or `NO-GO: <first failure>`. A malformed answer, or a later read that gets no answer, fails
+the check in hand. Exit 0 on GO, 1 on NO-GO, 2 when the first read gets no answer or on bad
+usage. It never writes and never sends a credential. Stdlib only.
 """
 
 from __future__ import annotations
 
+import http.client
 import json
 import sys
 import urllib.error
@@ -53,7 +56,7 @@ def http_get(url: str) -> tuple[int, object]:
             status, raw = response.status, response.read()
     except urllib.error.HTTPError as exc:
         status, raw = exc.code, exc.read()
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
         raise Unreachable(str(getattr(exc, "reason", exc))) from exc
     try:
         return status, json.loads(raw)
@@ -67,7 +70,12 @@ def api_base(base: str) -> str:
 
 
 def _read(fetch: Fetch, api: str, path: str, what: str) -> dict:
-    status, body = fetch(f"{api}/{path}")
+    try:
+        status, body = fetch(f"{api}/{path}")
+    except Unreachable as exc:
+        if path == "overview":
+            raise
+        raise NoGo(f"{what} got no answer: {exc}") from exc
     if status != 200:
         code = body.get("code") if isinstance(body, dict) else None
         raise NoGo(f"{what} answered HTTP {status}" + (f" ({code})" if code else ""))
@@ -87,6 +95,8 @@ def _reconciled(execution: dict) -> str:
             return f"leg {name} has no provider receipt (state {leg.get('state')})"
         if leg.get("reconciled") is not True:
             return f"leg {name} is not reconciled (state {leg.get('state')})"
+        if leg.get("state") != "settled":
+            return f"leg {name} is {leg.get('state')}, not settled"
     open_ = [i.get("incident_id") for i in execution.get("incidents") or []
              if i.get("state") == "open"]
     return f"open incident {', '.join(map(str, open_))}" if open_ else ""
@@ -119,18 +129,23 @@ def run(base: str, fetch: Fetch = http_get) -> tuple[list[tuple[str, str, str]],
         ok(f"status {decisions.get('status')}, {len(decisions.get('results') or [])} results")
         feasible = sorted({r.get("policy") for r in decisions.get("results") or []
                            if r.get("feasible") is True})
+        selected = decisions.get("selected")
         if decisions.get("status") == "all_infeasible" or not feasible:
             raise NoGo(f"every policy of {run_id} is infeasible")
-        ok(f"feasible {', '.join(map(str, feasible))}; selected {decisions.get('selected')}")
+        if decisions.get("status") != "selected" or selected not in feasible:
+            raise NoGo(f"decisions of {run_id} are {decisions.get('status')} with selected "
+                       f"{selected}, not a feasible selection")
+        ok(f"feasible {', '.join(map(str, feasible))}; selected {selected}")
         execution = _read(fetch, api, f"executions/{urllib.parse.quote(execution_id, safe='')}",
                           f"execution {execution_id}")
         ok(f"{len(execution.get('legs') or [])} legs")
         problem = _reconciled(execution)
         if problem:
             raise NoGo(f"execution {execution_id} not reconciled: {problem}")
-        ok("every leg receipted and reconciled, no open incident")
-    except NoGo as failure:
-        lines.append(("FAIL", pending.pop(0), str(failure)))
+        ok("every leg settled, receipted and reconciled; no open incident")
+    except (NoGo, AttributeError, TypeError) as failure:  # the last two: a field of the wrong shape
+        detail = str(failure) if isinstance(failure, NoGo) else f"malformed answer: {failure}"
+        lines.append(("FAIL", pending.pop(0), detail))
         lines.extend(("skip", name, "") for name in pending)
         return lines, 1
     return lines, 0

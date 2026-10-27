@@ -6,6 +6,7 @@ import json
 import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ ROOT = CHECKS.parent
 sys.path.insert(0, str(CHECKS))
 
 import recording_ready
+from app.finance import schemas as c6
 
 BASE = "https://demo.example"
 API = BASE + "/api/v1"
@@ -26,7 +28,7 @@ def _instance(name: str) -> dict:
 
 
 def _decisions(*feasible: bool) -> dict:
-    policies = ["hold", "draw", "defer"][: len(feasible)]
+    policies = ["no-action", "fixed-reserve", "integrated"][: len(feasible)]
     results = [{"policy": p, "scenario_id": "shock-1", "branch_id": f"b-{p}", "replay": True,
                 "obligations_unmet": 0 if ok else 1, "floor_kept": ok,
                 "min_cash": {"minor": 1, "currency": "USD", "status": "known"},
@@ -50,6 +52,14 @@ def answers() -> dict[str, tuple[int, object]]:
             f"{API}/executions/apr-1": (200, _instance("valid-execution.json"))}
 
 
+def test_answers_are_api_shapes():
+    table = answers()
+    c6.OverviewResponse.model_validate(table[f"{API}/overview"][1])
+    c6.DecisionsResponse.model_validate(table[f"{API}/decisions/run-1"][1])
+    c6.DecisionsResponse.model_validate(_decisions(False, False, False))
+    c6.ExecutionResponse.model_validate(table[f"{API}/executions/apr-1"][1])
+
+
 def check(table: dict, capsys) -> tuple[int, list[str]]:
     def fetch(url: str) -> tuple[int, object]:
         return table.get(url, (404, {"code": "not_found"}))
@@ -63,7 +73,7 @@ def test_go(capsys):
     assert code == 0
     assert out[-1] == "GO"
     assert [line.split()[0] for line in out[:-1]] == ["ok"] * len(recording_ready.CHECKS)
-    assert "feasible defer, hold; selected hold" in "\n".join(out)
+    assert "feasible integrated, no-action; selected no-action" in "\n".join(out)
 
 
 def test_api_suffix_is_not_doubled():
@@ -160,3 +170,63 @@ def test_unreachable_exits_2():
 @pytest.mark.parametrize("argv", [[], ["ftp://x"], [BASE, BASE]])
 def test_bad_usage_exits_2(argv, capsys):
     assert recording_ready.main(argv) == 2
+
+
+def test_selected_must_be_a_feasible_policy(capsys):
+    table = answers()
+    table[f"{API}/decisions/run-1"][1]["selected"] = None
+    code, out = check(table, capsys)
+    assert code == 1
+    assert out[-1].startswith("NO-GO: feasible_policy: decisions of run-1 are selected with selected None")
+
+
+def test_failed_leg_reconciled_is_no_go(capsys):
+    table = answers()
+    execution = table[f"{API}/executions/apr-1"][1]
+    execution["legs"][0].update(state="failed", provider_id=None)
+    execution["legs"][0]["receipt"]["status"] = "FAILED"
+    c6.ExecutionResponse.model_validate(execution)  # the API can answer this
+    code, out = check(table, capsys)
+    assert code == 1
+    assert out[-1].endswith("is failed, not settled")
+
+
+def test_later_read_without_answer_fails_that_check(capsys):
+    table = answers()
+
+    def fetch(url: str) -> tuple[int, object]:
+        if "/executions/" in url:
+            raise recording_ready.Unreachable("timed out")
+        return table[url]
+
+    assert recording_ready.main([BASE], fetch) == 1
+    out = capsys.readouterr().out.splitlines()
+    assert out[-1] == "NO-GO: execution_read: execution apr-1 got no answer: timed out"
+    assert out[0].startswith("ok   reachable")
+
+
+def test_malformed_answer_fails_the_check_in_hand(capsys):
+    table = answers()
+    table[f"{API}/executions/apr-1"][1]["legs"] = [None]
+    code, out = check(table, capsys)
+    assert code == 1
+    assert out[-1].startswith("NO-GO: execution_reconciled: malformed answer:")
+
+
+def test_garbled_http_answer_is_unreachable():
+    with socket.socket() as server:  # answers one connection with a line that is not HTTP
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def garble() -> None:
+            conn, _ = server.accept()
+            with conn:
+                conn.recv(4096)
+                conn.sendall(b"garbage\r\n\r\n")
+
+        thread = threading.Thread(target=garble, daemon=True)
+        thread.start()
+        with pytest.raises(recording_ready.Unreachable):
+            recording_ready.http_get(f"http://127.0.0.1:{port}/api/v1/overview")
+        thread.join(5)
