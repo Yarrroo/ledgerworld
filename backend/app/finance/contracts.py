@@ -109,19 +109,24 @@ def advance_payable(f: Facility) -> str:
 
 def repay_journal_id(facility_id: str, period_end: datetime) -> str:
     """One id per facility and period, the same instant in any zone: what makes it repaid once."""
-    return f"repay:{facility_id}:{_naive(period_end):%Y%m%dT%H%M%S}Z"
+    return f"repay:{facility_id}:{_naive(period_end):%Y%m%dT%H%M%S%f}Z"
 
 
 def _ids_fit(contract: SnapshotContract) -> None:
     """Every id this contract will generate fits its column (SQLite ignores widths; PG does not)."""
     cid, loan = contract.contract_id, receivable_account(contract.lender, contract.contract_id)
-    width = {journals.c.journal_id: [f"open:{loan}", f"disburse:{cid}",
-                                     repay_journal_id(cid, EPOCH), f"draw:{cid}-{10**9}"],
-             reservations.c.reservation_id: [f"{cid}:undrawn@{10**9}"],
-             accounts.c.account_id: [f"{loan}:opening",
-                                     f"{contract.borrower}/advance-payable:{cid}",
-                                     f"{contract.borrower}/line-payable:{cid}"]}
+    width = {journals.c.journal_id: [f"open:{loan}"], reservations.c.reservation_id: [],
+             accounts.c.account_id: [f"{loan}:opening"]}
+    if isinstance(contract, CommittedLine):
+        width[journals.c.journal_id].append(f"draw:{cid}-{10**9}")
+        width[reservations.c.reservation_id].append(f"{cid}:undrawn@{10**9}")
+        width[accounts.c.account_id].append(f"{contract.borrower}/line-payable:{cid}")
+    if isinstance(contract, RevenueAdvance):
+        width[journals.c.journal_id] += [f"disburse:{cid}", repay_journal_id(cid, EPOCH)]
+        width[accounts.c.account_id].append(f"{contract.borrower}/advance-payable:{cid}")
     for column, ids in width.items():
+        if not ids:
+            continue
         longest = max(ids, key=len)
         if len(longest) > column.type.length:
             raise ValueError(f"contract {cid}: id {longest!r} is longer than {column} allows "
@@ -154,7 +159,7 @@ def register(store: LedgerStore, contract: SnapshotContract, *, as_of: datetime,
         limit, fee, share = contract.limit, 0, None
     else:
         raise TypeError(f"not a contract: {contract!r}")
-    if isinstance(contract, RevenueAdvance) and contract.state != "offered":
+    if isinstance(contract, RevenueAdvance) and contract.state in ("active", "defaulted"):
         # C5 carries no outstanding for an advance; reading it as zero would hide the exposure.
         raise ValueError(f"contract {contract.contract_id}: a {contract.state} advance needs "
                          "its outstanding, which a snapshot does not carry")

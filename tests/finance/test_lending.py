@@ -418,3 +418,64 @@ def test_a_contract_id_too_long_for_its_generated_ids_is_refused_at_load():
     next(c for c in snap["contracts"] if c["contract_id"] == "adv-a")["contract_id"] = "a" * 50
     with pytest.raises(ValueError, match="longer than"):
         from_snapshot(LedgerStore("sqlite://"), snap)
+
+
+def unheld_line(operating_minor: int = 4500000) -> dict:
+    """LF-2 with line-b naming a reservation but no account to hold it on."""
+    snap = lf2()["snapshot"]
+    line = next(c for c in snap["contracts"] if c["contract_id"] == "line-b")
+    del line["reserved_on"]
+    operating = snap["accounts"][0]["buckets"]
+    operating["reserved"]["minor"], operating["settled"]["minor"] = 0, operating_minor
+    return snap
+
+
+def test_a_line_draw_beyond_the_pools_free_cash_is_refused_as_insufficient():
+    store = world(unheld_line(operating_minor=500000))
+    before = store.dump()
+    with pytest.raises(LedgerRefusal) as refused:
+        draw_line(store, "line-b", 600000, now=T0)
+    assert refused.value.code == "insufficient_spendable"
+    assert store.dump() == before
+
+
+def test_a_line_draw_with_no_live_hold_clears_the_facilitys_reservation():
+    store = world(unheld_line())
+    assert contracts.facility(store, "line-b").reservation_id == "res-line-b"
+    draw_line(store, "line-b", 100000, now=T0)
+    assert contracts.facility(store, "line-b").reservation_id is None
+
+
+def test_a_stale_refusal_carries_the_balances_as_of():
+    store = world()
+    with pytest.raises(LedgerRefusal) as refused:
+        draw_line(store, "line-b", 100000, now=h(7))
+    assert refused.value.detail["as_of"] == T0.isoformat()
+
+
+@pytest.mark.parametrize("state", ["repaid", "closed"])
+def test_a_finished_advance_in_a_snapshot_loads_with_nothing_outstanding(state):
+    snap = lf2()["snapshot"]
+    next(c for c in snap["contracts"] if c["contract_id"] == "adv-a")["state"] = state
+    store = world(snap)
+    adv = contracts.facility(store, "adv-a")
+    assert (adv.state, contracts.outstanding_minor(store, adv)) == (state, 0)
+    assert capacity(store, POOL, T0).K_p == 4200000
+
+
+def test_two_periods_within_one_second_are_each_repaid():
+    store = world(borrower_cash=1000000)
+    disburse(store, "adv-a", now=T0)
+    first = T0 + WEEK + timedelta(microseconds=250000)
+    second = first + timedelta(microseconds=500000)
+    store.observe("borrower-a/operating", "known", second)
+    for end in (first, second):
+        observe_revenue(store, "adv-a", end, 100000, observed_at=second, source="sales ledger")
+        assert repay(store, "adv-a", end, now=second).amount_minor == 15000
+
+
+def test_a_line_id_is_not_measured_against_ids_only_an_advance_generates():
+    snap = lf2()["snapshot"]
+    next(c for c in snap["contracts"] if c["contract_id"] == "line-b")["contract_id"] = "b" * 45
+    store = world(snap)
+    assert contracts.facility(store, "b" * 45).kind == "committed_line"

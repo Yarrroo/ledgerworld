@@ -148,6 +148,22 @@ def _cash_of(c: Connection, account_id: str, entity: str, currency: str) -> None
         raise ValueError(f"{account_id} is not a {currency} cash account of {entity}")
 
 
+def _payable_from(store: LedgerStore, c: Connection, account_id: str, amount: int,
+                  now: datetime) -> None:
+    """A contractual payment (a line draw, a repayment) needs a known, fresh balance that covers
+    it in S(now); the reserve floor does not apply, since the payment is owed, not chosen."""
+    view = store.view(account_id, conn=c)
+    state = state_of(view, now)
+    if state == "unknown":
+        raise LedgerRefusal("unknown_balance", account=account_id)
+    if state == "stale":
+        raise LedgerRefusal("stale_balance", account=account_id, as_of=view.as_of.isoformat())
+    s_now = spendability(view, now, now).value
+    if amount > s_now:
+        raise LedgerRefusal("insufficient_spendable", account=account_id, amount=amount,
+                            S_now=s_now)
+
+
 def _kind(f: Facility, kind: str, *states: str) -> None:
     if f.kind != kind or f.state not in states:
         raise ValueError(f"facility {f.facility_id} is a {f.state} {f.kind}, not "
@@ -220,11 +236,9 @@ def draw_line(store: LedgerStore, facility_id: str, amount_minor: int, *, now: d
         payee = borrower_account or f"{f.borrower}/operating"
         _cash_of(c, source, f.pool, f.currency)
         _cash_of(c, payee, f.borrower, f.currency)
-        state = state_of(store.view(source, conn=c), now)
-        if state != "known":  # an execution needs a known, fresh balance
-            raise LedgerRefusal(f"{state}_balance", account=source)
         if held is not None:
             store.release(held.reservation_id, conn=c)
+        _payable_from(store, c, source, amount, now)  # the released hold is free again
         payable = f"{f.borrower}/line-payable:{f.facility_id}"
         ensure_account(store, payable, f.borrower, f.currency, "payable", c)
         journal = store.apply(Journal(
@@ -242,6 +256,8 @@ def draw_line(store: LedgerStore, facility_id: str, amount_minor: int, *, now: d
                                     reservation_id=f"{f.facility_id}:undrawn@{journal.seq}",
                                     conn=c)
             set_facility(store, f.facility_id, reservation_id=new_id, conn=c)
+        elif f.reservation_id:  # it named a hold no longer held: say so
+            set_facility(store, f.facility_id, reservation_id=None, conn=c)
         return journal
 
 
@@ -308,14 +324,7 @@ def repay(store: LedgerStore, facility_id: str, period_end: datetime, *, now: da
         payee = to_account or f"{f.pool}/operating"
         _cash_of(c, payer, f.borrower, f.currency)
         _cash_of(c, payee, f.pool, f.currency)
-        view = store.view(payer, conn=c)
-        state = state_of(view, now)
-        if state != "known":
-            raise LedgerRefusal(f"{state}_balance", account=payer)
-        s_now = spendability(view, now, now).value
-        if amount > s_now:
-            raise LedgerRefusal("insufficient_spendable", account=payer, amount=amount,
-                                S_now=s_now)
+        _payable_from(store, c, payer, amount, now)
         journal = store.apply(Journal(
             journal_id=journal_id, kind="advance_repayment", round=round, sim_time=now,
             source_intent_id=source_intent_id, source_leg_id=source_leg_id, mode=mode,
