@@ -160,8 +160,8 @@ def uncovered(obs: Mapping[str, Any]) -> list[tuple[dict, int]]:
             continue
         amount, where = o["amount"], o.get("account", home)
         if where != home:
-            paid = min(amount, free.get(where, 0))
-            free[where] = free.get(where, 0) - paid
+            paid = min(amount, free.setdefault(where, 0))
+            free[where] -= paid
             amount -= paid
         out.append((o, amount))
     return out
@@ -301,7 +301,7 @@ class Integrated(_Policy):
             if amount and currency != obs["currency"] and t < o["due_h"] <= t + CONVERT_LEAD_H:
                 convert = {"type": "convert", "buy": {"minor": amount, "currency": currency},
                            "sell_currency": obs["currency"], "for_obligation": o["id"]}
-                if o.get("account", obs.get("account")) != obs.get("account"):
+                if "account" in o:  # set only off the home account
                     convert["to_account"] = o["account"]
                 actions.append(convert)
         deferred: dict[str, int] = {}
@@ -370,7 +370,9 @@ def _facilities(store: Any, borrower: str, terms: Mapping[str, Mapping[str, Any]
 
 def _free(settled: int | None, pledged: int, committed_out: int, known: bool) -> int:
     """A holding's cash free to pay its own account's open obligations: settled less what is
-    pledged and what its committed outflows will take; nothing when unknown."""
+    pledged and what its committed outflows will take; nothing when unknown. Unlike
+    ``AccountView.free_minor`` it keeps the reserved cash, because the obligations those
+    reservations back are counted against it."""
     return max(0, (settled or 0) - pledged - committed_out) if known else 0
 
 
@@ -416,7 +418,7 @@ def branch_observation(world: World, conn: Connection, actor: str, *,
                         for w in (v, *others) for d in w.obligations],
         "holdings": [{"id": w.account_id, "currency": w.currency,
                       "settled": _free(w.settled_minor, w.pledged_minor,
-                                       sum(f.amount_minor for f in w.pending_out),
+                                       w.pending_out_minor,
                                        w.observability == "known")} for w in others],
         "outflows": [],  # this world holds no contract that lets an outflow be deferred
         "facilities": _facilities(world.store, actor, terms or {}, conn),
@@ -701,7 +703,7 @@ def plan_for_now(policy: _Policy, observed_snapshot: Snapshot, *, epoch: datetim
     short_at = proposal.projected_short.at_h
     for o in sorted(obs["obligations"], key=lambda o: (o["due_h"], o["id"])):
         if not obs["t_h"] < o["due_h"] <= short_at or o["currency"] != currency \
-                or o.get("account", account) != account:  # paid from its own account
+                or "account" in o:  # paid from its own account
             continue
         if o["id"] not in beneficiaries:
             raise ValueError(f"no beneficiary for {o['id']}, which this plan's funding protects")
