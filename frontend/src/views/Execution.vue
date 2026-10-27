@@ -21,11 +21,11 @@
     </section>
 
     <p v-if="flow.blocked" class="lw-alert" role="alert" data-test="blocked">{{ flow.blocked }}</p>
-    <p v-else-if="flow.message" class="lw-note" role="status" data-test="message">{{ flow.message }}</p>
+    <p v-if="flow.message" class="lw-note" role="status" data-test="message">{{ flow.message }}</p>
     <p v-for="[run, held] in waiting" :key="run" class="lw-actions">
       <RouterLink class="lw-button lw-button--quiet" data-test="elsewhere"
                   :to="{ path: route.path, query: { run_id: run, execution_id: held.followedId } }">
-        <template v-if="held.followedId">Read execution {{ held.followedId }} of run {{ run }}</template>
+        <template v-if="held.unseen === 'execution'">Read execution {{ held.followedId }} of run {{ run }}</template>
         <template v-else>Open run {{ run }}: approval outcome unknown</template>
       </RouterLink>
     </p>
@@ -173,14 +173,19 @@ const token = ref('')
 // An operation whose outcome this tab does not know, kept in the same tab memory as the token:
 // run id -> { blocked, followedId, readBy, unseen }. Leaving the screen and coming back restores
 // the block and resumes reading the execution, so the token never outlives its quarantine. Forget
-// token does not lift it: only a reload does. `unseen` marks an execution that answered after its
-// screen moved on: it is linked until its own run's screen shows it.
+// token does not lift it: only a reload does. `unseen` ('execution' or 'approval') marks an outcome
+// that answered after its screen moved on: it is linked until its own run's screen shows it.
 const unresolved = reactive(new Map())
+
+// Runs with a POST still unanswered, whichever view sent it: a view since left keeps no other trace,
+// so a returned screen must not send a second one for the same run before the first answers.
+const inflight = reactive(new Set())
 
 /** The tab reloaded, as far as this screen can tell: token and quarantine both forgotten. */
 export function forgetTab () {
   token.value = ''
   unresolved.clear()
+  inflight.clear()
 }
 </script>
 
@@ -284,7 +289,12 @@ const reviewWhy = computed(() => {
   if (d.status !== 'selected') return 'Nothing is selected yet'
   if (flow.blocked) return flow.blocked
   const held = unresolved.get(state.body.run_id)
-  if (held?.unseen) return `Execution ${held.followedId} of this run answered while you were away: read it first`
+  if (held?.unseen === 'execution') {
+    return `Execution ${held.followedId} of this run answered while you were away: read it first`
+  }
+  if (inflight.has(state.body.run_id) && !flow.submitting) {
+    return 'A request for this run, sent from a screen since left, is not answered yet'
+  }
   return ''
 })
 
@@ -350,11 +360,7 @@ async function openReview () {
 async function closeReview () {
   if (flow.submitting) return // the answer to an in-flight POST is shown where it was asked
   flow.open = false
-  if (flow.invalid || flow.executed || (flow.approval && executeWhy.value && !authority.value)) {
-    flow.approval = null
-    flow.invalid = ''
-    flow.executed = false
-  }
+  if (flow.invalid || flow.executed || (flow.approval && executeWhy.value && !authority.value)) dropReview()
   await nextTick()
   opener.value?.focus()
 }
@@ -364,6 +370,7 @@ async function confirmApproval () {
   const from = origin()
   const runId = from.run
   flow.submitting = true
+  inflight.add(runId)
   flow.message = ''
   try {
     const answer = await request('/approvals', {
@@ -388,12 +395,13 @@ async function confirmApproval () {
         hold(runId, { blocked: APPROVAL_UNKNOWN })
         flow.blocked = APPROVAL_UNKNOWN
       } else {
-        hold(runId, { blocked: APPROVAL_UNKNOWN, unseen: true })
+        hold(runId, { blocked: APPROVAL_UNKNOWN, unseen: 'approval' })
         flow.message = `Run ${runId}: ${APPROVAL_UNKNOWN}`
       }
     } else flow.message = (moved(from) ? `Run ${runId}: ` : '') + refusal(error)
   } finally {
     flow.submitting = false
+    inflight.delete(runId)
   }
 }
 
@@ -403,6 +411,7 @@ async function executePlan () {
   const from = origin()
   const runId = from.run
   flow.submitting = true
+  inflight.add(runId)
   flow.executed = true
   try {
     const answer = await request('/executions', {
@@ -414,12 +423,13 @@ async function executePlan () {
       flow.message = accepted(answer.execution_id)
       follow(answer.execution_id)
     } else {
-      hold(runId, { followedId: answer.execution_id, unseen: true })
+      hold(runId, { followedId: answer.execution_id, unseen: 'execution' })
       flow.message = `Execution ${answer.execution_id} for run ${runId} was accepted after this screen moved on.`
     }
   } catch (error) {
     if (!unanswered(error)) {
       flow.submitting = false
+      inflight.delete(runId)
       if (moved(from)) flow.message = `Run ${runId}: ${refusal(error)}`
       else flow.invalid = refusal(error)
       return
@@ -430,12 +440,13 @@ async function executePlan () {
       flow.blocked = blocked
       follow(id)
     } else {
-      hold(runId, { blocked, followedId: id, readBy: id, unseen: true })
+      hold(runId, { blocked, followedId: id, readBy: id, unseen: 'execution' })
       flow.message = `Execution outcome unknown for run ${runId}; its status is read by approval id ` +
         `${id} on that run's screen. Do not send again.`
     }
   }
   flow.submitting = false
+  inflight.delete(runId)
   if (!moved(from)) await closeReview()
 }
 
@@ -531,9 +542,9 @@ function restore (body) {
   const named = route.query.execution_id
   const resume = held?.followedId && !followed && (!named || named === held.followedId)
   if (resume) follow(held.followedId)
-  if (held?.unseen && (!held.followedId || followedId.value === held.followedId)) {
+  if (held?.unseen === 'approval' || (held?.unseen && followedId.value === held.followedId)) {
+    if (held.unseen === 'execution' && !held.readBy) flow.message = accepted(held.followedId)
     held.unseen = false // shown on its own run's screen at last
-    if (held.followedId && !held.readBy) flow.message = accepted(held.followedId)
     if (!flow.submitting) dropReview() // a review opened meanwhile closes, as after one sent in place
   }
   flow.blocked = held?.blocked ? blockFor(held) : ''
@@ -568,9 +579,9 @@ watch(() => state.body, (body) => {
 // a navigation to the same run), or the quarantine forgotten. A load is the body watcher's.
 watch(() => {
   const held = state.body && unresolved.get(state.body.run_id)
-  return [state.body?.run_id, held?.blocked, held?.followedId, held?.unseen].join('|')
-}, (now, before) => {
-  if (state.status === 'loaded' && now.split('|')[0] === before.split('|')[0]) restore(state.body)
+  return [state.body?.run_id, held?.blocked, held?.followedId, held?.unseen]
+}, ([run], [before]) => {
+  if (state.status === 'loaded' && run === before) restore(state.body)
 })
 
 // The view is reused across query-only navigation: a new run or execution is a new screen. A

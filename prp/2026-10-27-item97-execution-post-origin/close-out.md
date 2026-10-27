@@ -20,15 +20,17 @@ unknown outcome's block on its own run and restores it on every load.
     (`restore(body)`, run on every load and whenever the held entry of the run on screen
     changes). Showing it closes a review opened meanwhile, and the run is not reviewed again until
     it has been read. An unknown approval is linked the same way ("Open run R: approval outcome
-    unknown"); a refusal is a message naming its run.
+    unknown"); a refusal is a message naming its run, shown even while this screen is blocked.
+  - A run with a POST still unanswered from a view since left is not reviewed again until it
+    answers (`inflight`, tab memory like `unresolved`), so two screens never race on one run.
   - A view left while a POST was in flight neither follows nor polls the answer (its read guard
     is dropped on unmount); the screen that came back shows it at once if it shows that run, and
     links it otherwise. Forgetting the tab lifts a block already on screen.
-- `frontend/tests/unit/decide-execute.spec.js`: 17 cases under "a POST answered after a query
+- `frontend/tests/unit/decide-execute.spec.js`: 20 cases under "a POST answered after a query
   navigation stays with its own run", each failing on the code before its fix.
 
 ## Verification
-- Tests: `npx vitest run` (frontend), 158 passed, item 95's cases included.
+- Tests: `npx vitest run` (frontend), 167 passed, items 95's and 96's cases included.
 - Build: `vite build` ok. `checks/no_secrets.py` ok, `checks/attribution.py` ok. No Python changed.
 - Browser: Playwright on the dev server with the API intercepted. Execute, hold the POST, open
   run-2, answer: run-2 shows no execution; the link (293x44 px) works from the keyboard and opens
@@ -43,4 +45,6 @@ unknown outcome's block on its own run and restores it on every load.
 - A refusal that answers after the view was left is not carried to the screen that came back:
   nothing was sent, and that screen correctly shows no pending outcome.
 - After a failed reload the screen still shows the last run, and that run's block, as item 95
-  decided.
+  decided; an outcome answered during that failure is shown on the next successful load.
+- `forgetTab()` (the tab reloaded) while an execution is followed leaves the shown execution in
+  place; a real reload rebuilds the view.

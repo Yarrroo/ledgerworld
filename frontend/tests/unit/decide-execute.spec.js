@@ -911,6 +911,68 @@ describe('a POST answered after a query navigation stays with its own run', () =
     expect(w.find('[data-test="blocked"]').exists()).toBe(false)
   })
 
+  it('a returned screen does not send for a run while a left view\'s POST for it is unanswered', async () => {
+    const { w, hold } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    const back = await remount(w)
+    expect(text(back, 'review-why')).toBe('A request for this run, sent from a screen since left, is not answered yet')
+    expect(disabled(back, 'review-plan')).toBe(true)
+    hold.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    await flushPromises()
+    expect(text(back, 'context')).toContain('execution apr-1')
+    expect(disabled(back, 'review-plan')).toBe(false)
+  })
+
+  it('an unknown approval is linked as an approval, not as the run\'s earlier execution', async () => {
+    let approvals = 0
+    const held = {}
+    const { w } = await reviewReady({
+      'POST /approvals': () => (++approvals === 1 ? approvalBody() : new Promise((resolve, reject) => { held.fail = reject })),
+      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'GET /executions/apr-1': executionBody({ legs: [paidPayout()] }),
+      'GET /decisions/run-2': { ...decisionsBody(), run_id: 'run-2' }
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-test="confirm"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    held.fail(timeout())
+    await flushPromises()
+    expect(text(w, 'elsewhere')).toBe('Open run run-1: approval outcome unknown')
+  })
+
+  it('a refusal for another run is shown even while this run is blocked', async () => {
+    let approvals = 0
+    const held = {}
+    const { w } = await reviewReady({
+      'POST /approvals': () => (++approvals === 1 ? timeout() : approvalBody()),
+      'POST /executions': () => new Promise((resolve) => { held.release = resolve }),
+      'GET /decisions/run-2': { ...decisionsBody(), run_id: 'run-2' }
+    })
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    await approve(w) // run-2's approval outcome is unknown: run-2 is blocked
+    await w.vm.$router.push('/execution?run_id=run-1')
+    await flushPromises()
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    held.release(refuse(409, 'approval_expired'))
+    await flushPromises()
+    expect(w.find('[data-test="blocked"]').exists()).toBe(true)
+    expect(text(w, 'message')).toBe('Run run-1: Approval expired')
+  })
+
   it('a refusal answered after leaving and returning is shown, and does not disable the next approval', async () => {
     const { w, hold } = await heldOn('POST /executions')
     await approve(w)
