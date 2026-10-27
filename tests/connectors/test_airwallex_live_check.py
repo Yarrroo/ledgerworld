@@ -40,7 +40,8 @@ def test_fake_runs_every_check_and_exits_0() -> None:
     lines = done.stdout.splitlines()
     assert "14/14 PASS" in lines
     assert not [line for line in lines if line.startswith("FAIL")]
-    assert "PASS payout-to-paid transfer-6 · status PAID, USD moved -10000 minor" in lines
+    assert any(line.startswith("PASS payout-to-paid transfer-")
+               and line.endswith("· status PAID, USD moved -10000 minor") for line in lines)
     assert any(line.startswith("PASS advance deposit-") and "JSON number: accepted" in line
                for line in lines)
 
@@ -138,3 +139,44 @@ def test_bad_configuration_exits_2(name: str, value: str, capsys) -> None:
            "AIRWALLEX_BENEFICIARY_ID": "b", name: value}
     assert live.main(["--require-key"], env) == 2
     assert "configuration refused" in capsys.readouterr().err
+
+
+def test_a_status_only_one_side_carries_is_a_listed_key_not_a_failing_status() -> None:
+    fake = _pass(FakeTransport())
+    sandbox = _pass(FakeTransport())
+    accounts = next(c for c in sandbox.checks if c.name == "global-accounts")
+    accounts.shape = live.Shape(accounts.shape.http, accounts.shape.keys | {"status"}, "ACTIVE")
+    assert live.diff(sandbox, fake) == ([], ["global-accounts: only the sandbox returns status"])
+
+
+def test_the_connected_probe_answer_is_recorded_not_failed() -> None:
+    fake = _pass(FakeTransport())
+    sandbox = _pass(FakeTransport())
+    probe = next(c for c in sandbox.checks if c.name == "connected-probe")
+    probe.shape = live.Shape(404, frozenset({"code", "message"}), "resource_not_found")
+    failing, listed = live.diff(sandbox, fake)
+    assert failing == []
+    assert listed == [("connected-probe: sandbox answered http 404 resource_not_found, "
+                       "fake http 403 unauthorized")]
+
+
+def test_an_unexpected_answer_shape_fails_its_check_and_the_pass_goes_on() -> None:
+    class ListQuote(FakeTransport):
+        def _quote(self, body):
+            return [super()._quote(body)]
+
+    run = _pass(ListQuote())
+    by_name = {c.name: c for c in run.checks}
+    assert not by_name["fx-quote"].ok and "AttributeError" in by_name["fx-quote"].detail
+    assert len(run.checks) == 14 and by_name["payout-to-paid"].ok
+
+
+class FailedAdvance(FakeTransport):
+    def _new_connected_account_transfers(self, body, account):
+        return {**super()._new_connected_account_transfers(body, account), "status": "FAILED"}
+
+
+def test_a_failed_mode_a_advance_fails_the_check() -> None:
+    run = _pass(FailedAdvance(connected=True))
+    advance = next(c for c in run.checks if c.name == "advance")
+    assert not advance.ok and "status FAILED" in advance.detail

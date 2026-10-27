@@ -63,6 +63,8 @@ FX_BUY = Money(minor=1_000_000, currency="EUR")
 PAYOUT = Money(minor=10_000, currency="USD")
 ADVANCE = Money(minor=1_000_000, currency="USD")
 TO_PAID = ("PROCESSING", "SENT", "PAID")
+# The probe path is assumed (canonical-requests.json): its answer is recorded, not diffed.
+RECORDED_ONLY = frozenset({"connected-probe"})
 # The minimum key sets of canonical-requests.json; both sides must carry them.
 KEYS_MIN = {
     "login": {"token", "expires_at"},
@@ -198,7 +200,7 @@ class ContractPass:
             except Skipped as missing:
                 ok, provider_id, detail = False, None, f"skipped: no {missing}"
             # A failed check is reported and the pass goes on.
-            except (AirwallexError, ValueError, TypeError, KeyError) as failed:
+            except (AirwallexError, AttributeError, KeyError, TypeError, ValueError) as failed:
                 ok, provider_id, detail = False, None, self._scrub(
                     f"{type(failed).__name__}: {failed}")
             self.checks.append(Check(name, ok, provider_id, detail, self._shape))
@@ -359,7 +361,8 @@ class ContractPass:
             moved = self.client.connected_account_transfer(
                 f"canon-adv-{self.run_id}", amount=ADVANCE, destination=destination)
             self._observe()
-            return True, moved.provider_id, f"mode A, status {moved.status}"
+            ok = moved.status not in ("FAILED", "CANCELLED")
+            return ok, moved.provider_id, f"mode A, status {moved.status}"
         before = self._usd()
         deposit = self.client.simulate_deposit(
             amount=ADVANCE, global_account_id=self._need("global_account"),
@@ -382,16 +385,23 @@ class ContractPass:
 
 
 def diff(sandbox: ContractPass, fake: ContractPass) -> tuple[list[str], list[str]]:
-    """Failing differences and listed-only ones, per check both sides answered."""
+    """Failing differences and listed-only ones, per check both sides answered; the probe's
+    answer is recorded, never failed (any refusal there means Mode B)."""
     failing, listed = [], []
     fakes = {c.name: c.shape for c in fake.checks}
     for check in sandbox.checks:
         real, double = check.shape, fakes.get(check.name)
         if real is None or double is None:
             continue
+        if check.name in RECORDED_ONLY:
+            if real != double:
+                listed.append(f"{check.name}: sandbox answered http {real.http} {real.status}, "
+                              f"fake http {double.http} {double.status}")
+            continue
         if real.http != double.http:
             failing.append(f"{check.name}: http sandbox {real.http}, fake {double.http}")
-        if real.status != double.status:
+        # A status only one side carries is a key difference, reported below.
+        if None not in (real.status, double.status) and real.status != double.status:
             failing.append(f"{check.name}: status sandbox {real.status}, fake {double.status}")
         if invented := sorted(double.keys - real.keys):
             failing.append(f"{check.name}: only the fake returns {', '.join(invented)}")
