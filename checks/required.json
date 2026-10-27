@@ -1,12 +1,37 @@
 {
   "about": "Required checks per goal (system brief §17). Each task that implements a check adds its pytest node ids to `tests` in the same commit as the test. A check with no tests counts as not passing.",
   "g1": [
-    {"id": "lf1_reproduction", "name": "LF-1 reproduction", "tests": []},
-    {"id": "ledger_balance", "name": "ledger invariant: journals balance", "tests": []},
-    {"id": "ledger_no_orphan_posting", "name": "ledger invariant: no orphan posting", "tests": []},
-    {"id": "ledger_reserved_le_settled", "name": "ledger invariant: reserved <= settled", "tests": []},
-    {"id": "ledger_no_double_pledge", "name": "ledger invariant: no double pledge", "tests": []},
-    {"id": "ledger_unknown_not_zero", "name": "ledger invariant: unknown != zero", "tests": []},
+    {"id": "lf1_reproduction", "name": "LF-1 reproduction", "tests": [
+      "tests/finance/test_fixtures.py::test_lf1_no_shock",
+      "tests/finance/test_fixtures.py::test_lf1_shock_receipt_delayed_240h",
+      "tests/finance/test_fixtures.py::test_lf1_integrated_plan",
+      "tests/finance/test_fixtures.py::test_lf1_payment_at_t0",
+      "tests/finance/test_fixtures.py::test_lf1_double_pledge",
+      "tests/finance/test_fixtures.py::test_lf1_inaction_keeps_the_obligation",
+      "tests/finance/test_fixtures.py::test_every_lf1_rejection_is_reproduced"
+    ]},
+    {"id": "ledger_balance", "name": "ledger invariant: journals balance", "tests": [
+      "tests/finance/test_ledger.py::test_every_journal_balances_per_currency",
+      "tests/finance/test_ledger.py::test_zero_and_float_amounts_are_refused",
+      "tests/finance/test_ledger.py::test_property_any_sequence_of_journals_keeps_every_currency_balanced"
+    ]},
+    {"id": "ledger_no_orphan_posting", "name": "ledger invariant: no orphan posting", "tests": [
+      "tests/finance/test_ledger.py::test_no_posting_without_a_journal"
+    ]},
+    {"id": "ledger_reserved_le_settled", "name": "ledger invariant: reserved <= settled", "tests": [
+      "tests/finance/test_ledger.py::test_reserved_never_exceeds_settled",
+      "tests/finance/test_ledger.py::test_a_committed_outflow_is_not_respendable",
+      "tests/finance/test_ledger.py::test_reservation_lifecycle",
+      "tests/finance/test_ledger.py::test_a_committed_reservation_is_counted_once"
+    ]},
+    {"id": "ledger_no_double_pledge", "name": "ledger invariant: no double pledge", "tests": [
+      "tests/finance/test_ledger.py::test_the_same_units_are_never_pledged_twice",
+      "tests/finance/test_ledger.py::test_property_no_collateral_ref_is_in_two_active_pledges"
+    ]},
+    {"id": "ledger_unknown_not_zero", "name": "ledger invariant: unknown != zero", "tests": [
+      "tests/finance/test_ledger.py::test_unknown_is_not_zero_and_lowers_authority",
+      "tests/finance/test_ledger.py::test_stale_means_strictly_older_than_six_hours"
+    ]},
     {"id": "lf2_reproduction", "name": "LF-2 reproduction", "tests": []},
     {"id": "draw_beyond_kp_rejected", "name": "draw beyond K_p rejected", "tests": []},
     {"id": "no_duplicate_movement", "name": "no duplicate movement", "tests": []},
