@@ -107,6 +107,15 @@ class LedgerStore:
         with self.engine.begin() as new:
             yield new
 
+    @contextmanager
+    def reading(self, conn: Connection | None = None) -> Iterator[Connection]:
+        """The caller's connection as it is (a read needs no savepoint), or a new transaction."""
+        if conn is not None:
+            yield conn
+            return
+        with self.engine.begin() as new:
+            yield new
+
     # ------------------------------------------------------------------------------- setup
 
     def add_entity(self, entity_id: str, name: str, kind: str, *, synthetic: bool = True,
@@ -242,6 +251,9 @@ class LedgerStore:
         amount = minor_amount(amount_minor, positive=True)
         with self.transaction(conn) as c:
             currency = self._room(c, account_id, amount, "reserved_exceeds_settled", observed)
+            if reservation_id and c.execute(select(reservations.c.reservation_id).where(
+                    reservations.c.reservation_id == reservation_id)).first():
+                raise ValueError(f"reservation id {reservation_id} is taken")
             reservation_id = reservation_id or self._next_id(c, reservations, "res")
             c.execute(insert(reservations).values(
                 reservation_id=reservation_id, account_id=account_id, currency=currency,
@@ -392,7 +404,7 @@ class LedgerStore:
     def due_flows(self, direction: Literal["in", "out"], now: datetime,
                   conn: Connection | None = None) -> list[Any]:
         """Pending flows expected by `now`, in time order."""
-        with self.transaction(conn) as c:
+        with self.reading(conn) as c:
             return c.execute(select(expected_flows).where(
                 expected_flows.c.direction == direction, expected_flows.c.state == "pending",
                 expected_flows.c.expected_at <= _naive(now))
@@ -431,7 +443,7 @@ class LedgerStore:
 
     def due_obligations(self, now: datetime, conn: Connection | None = None) -> list[Any]:
         """Mandatory obligations still owed (open or missed) and due by `now`, in time order."""
-        with self.transaction(conn) as c:
+        with self.reading(conn) as c:
             return c.execute(select(obligations).where(
                 obligations.c.state.in_(OPEN_OBLIGATION), obligations.c.mandatory.is_(True),
                 obligations.c.due_at <= _naive(now))
@@ -441,7 +453,7 @@ class LedgerStore:
 
     def view(self, account_id: str, conn: Connection | None = None) -> AccountView:
         """Every bucket of one account, read in one transaction."""
-        with self.transaction(conn) as c:
+        with self.reading(conn) as c:
             acc = self._account(c, account_id)
             obs = c.execute(select(account_observations).where(
                 account_observations.c.account_id == account_id)).one()
@@ -470,19 +482,19 @@ class LedgerStore:
                               for d in dues if d.reservation_id not in carried))
 
     def reservation(self, reservation_id: str, conn: Connection | None = None) -> Any:
-        with self.transaction(conn) as c:
+        with self.reading(conn) as c:
             return self._reservation(c, reservation_id)
 
     def rows(self, table_name: str, conn: Connection | None = None) -> list[dict]:
         """A table's rows in primary-key order (inspection and tests)."""
         table = metadata.tables[table_name]
-        with self.transaction(conn) as c:
+        with self.reading(conn) as c:
             return [dict(r._mapping)
                     for r in c.execute(select(table).order_by(*table.primary_key.columns))]
 
     def dump(self) -> dict[str, list[dict]]:
         """Every table, every row: two equal dumps are the same ledger."""
-        with self.transaction() as c:
+        with self.reading() as c:
             return {name: self.rows(name, conn=c) for name in sorted(metadata.tables)}
 
     # ------------------------------------------------------------------------------ helpers

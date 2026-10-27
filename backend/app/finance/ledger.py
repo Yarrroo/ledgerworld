@@ -69,7 +69,8 @@ def settle_due(store: LedgerStore, now: datetime, *, round: int = 0,
     Expire lapsed holds; land every pending flow due by `now` (arrivals before payments); pay
     every mandatory obligation due by `now` from its held reservation, or from free cash when it
     has none. One whose reservation is already committed waits for its pending_out flow. One the
-    cash cannot cover is marked missed: still owed, still in P, and tried again next round.
+    cash cannot cover is marked missed: still owed, still in P, and tried again next round. One
+    on an unknown balance stays open: nothing observed says the cash is short.
     """
     done: list[Journal] = []
     with store.transaction(conn) as c:
@@ -88,14 +89,19 @@ def settle_due(store: LedgerStore, now: datetime, *, round: int = 0,
         for ob in store.due_obligations(now, conn=c):
             reservation_id = ob.reservation_id
             state = store.reservation(reservation_id, conn=c).state if reservation_id else None
-            if state in ("committed", "settled"):
+            if state == "settled":  # paid through its reservation already
+                store.set_obligation_state(ob.obligation_id, "met", conn=c)
+                continue
+            if state == "committed":
                 continue
             if state != "held":
                 try:
                     reservation_id = store.hold(ob.account_id, ob.amount_minor, now=now,
                                                 purpose=ob.kind, conn=c)
-                except LedgerRefusal:
-                    store.set_obligation_state(ob.obligation_id, "missed", conn=c)
+                except LedgerRefusal as refusal:
+                    # An unknown balance is not a shortfall: the obligation waits, still open.
+                    if refusal.code != "unknown_balance":
+                        store.set_obligation_state(ob.obligation_id, "missed", conn=c)
                     continue
                 store.attach_reservation(ob.obligation_id, reservation_id, conn=c)
             flow_id = store.commit(reservation_id, due_at=now, flow_id=f"out:{ob.obligation_id}",

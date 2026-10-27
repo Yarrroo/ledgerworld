@@ -487,3 +487,29 @@ def test_an_amount_beyond_bigint_is_refused():
     with pytest.raises(LedgerRefusal) as refused:
         store.hold("a/operating", 2**63, now=T0)
     assert refused.value.code == "amount_not_integer_minor"
+
+
+def test_an_unknown_balance_never_reads_as_a_missed_obligation():
+    store = lifecycle_world()
+    store.add_obligation("rent", "a/operating", 1000, h(1), kind="rent")
+    store.observe("a/operating", "unknown", h(1))
+    settle_due(store, h(1))
+    assert store.rows("obligations")[0]["state"] == "open"
+
+
+def test_an_obligation_whose_reservation_settled_is_met():
+    store = lifecycle_world()
+    store.hold("a/operating", 500, now=T0, reservation_id="r1")
+    store.commit("r1", due_at=h(1))
+    store.settle("r1", to_account="payroll/external", at=h(1))
+    store.add_obligation("ob", "a/operating", 500, h(1), kind="rent", reservation_id="r1")
+    settle_due(store, h(2))
+    assert store.rows("obligations")[0]["state"] == "met"
+    assert projected_cash(store.view("a/operating"), h(2)) == 7000000 - 500
+
+
+def test_a_duplicate_reservation_id_is_named():
+    store = lifecycle_world()
+    store.hold("a/operating", 1, now=T0, reservation_id="r1")
+    with pytest.raises(ValueError, match="taken"):
+        store.hold("a/operating", 1, now=T0, reservation_id="r1")
