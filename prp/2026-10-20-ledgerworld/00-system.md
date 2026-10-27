@@ -338,7 +338,7 @@ backend/app/connectors/airwallex/  client, transport, fake, live, errors, webhoo
 backend/app/api/v1/  backend/app/jobs/  backend/app/reports/  backend/app/demo/  backend/app/testing/
 packages/oasis-finance/     action, platform, observation, clock extensions of camel-oasis
 frontend/src/views/         Overview, Treasury, Lending, Simulation, Decisions, Execution
-contracts/  fixtures/  scenarios/  scripts/ (demo.sh, judge-path.sh)  checks/  deploy/  e2e/  docs/
+contracts/  fixtures/  scenarios/  scripts/ (demo.sh, judge-path.sh, walkthrough.sh)  checks/  deploy/  e2e/  docs/
 tests/{contracts,fixtures,finance,simulation,decisions,connectors,execution,api,reports,demo,hunt,testing}/
 UPSTREAM.md  ATTRIBUTION.md  NOTICE  LICENSE (AGPL-3.0)  README.md  CLAUDE.md  .env.example
 ```
