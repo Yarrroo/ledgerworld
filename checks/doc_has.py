@@ -1,7 +1,8 @@
 """Exit 0 when every given Markdown heading exists in FILE.
 
 Usage: python checks/doc_has.py FILE HEADING [HEADING ...]
-A heading matches a line `#… HEADING` exactly, ignoring the level and surrounding spaces.
+A heading matches a line `#… HEADING` exactly, ignoring the level, surrounding spaces and an
+optional closing `#` sequence. Lines inside fenced code blocks are not headings.
 """
 
 from __future__ import annotations
@@ -10,15 +11,26 @@ import re
 import sys
 from pathlib import Path
 
-HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
+HEADING = re.compile(r"^ {0,3}#{1,6}\s+(.*?)(?:\s+#+)?\s*$")
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
 
 def headings(path: Path) -> set[str]:
     found = set()
+    fence = None
     for line in path.read_text(encoding="utf-8").splitlines():
-        match = HEADING.match(line)
-        if match:
-            found.add(match.group(1).strip())
+        opened = FENCE.match(line)
+        if opened:
+            marker = opened.group(1)
+            if fence is None:
+                fence = marker
+            elif marker[0] == fence[0] and len(marker) >= len(fence):
+                fence = None
+            continue
+        if fence is None:
+            match = HEADING.match(line)
+            if match:
+                found.add(match.group(1).strip())
     return found
 
 

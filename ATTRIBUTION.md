@@ -18,7 +18,6 @@ an upstream path is modified or deleted and not listed in the second table.
 | `checks/` | the merge gate and its checks |
 | `tests/test_skeleton.py` | tests of the merge gate and its checks |
 | `.github/workflows/ci.yml` | CI: merge gate, PostgreSQL tests |
-| `.claude/` | local agent settings |
 | `prp/` | system brief, design and task briefs |
 
 ## Upstream files modified

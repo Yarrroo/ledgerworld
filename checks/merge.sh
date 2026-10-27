@@ -2,6 +2,8 @@
 # The merge gate: lint new code, secrets, attribution, offline tests, frontend build.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# A uv.lock that no longer matches pyproject.toml fails the gate instead of being re-locked.
+export UV_LOCKED=1
 
 # New-code paths (system brief §16); upstream code is not linted.
 candidates=(

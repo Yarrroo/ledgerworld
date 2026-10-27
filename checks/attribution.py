@@ -27,13 +27,24 @@ def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def tree_of(repo: Path, rev: str) -> str:
+    return git(repo, "rev-parse", f"{rev}^{{tree}}").stdout.strip()
+
+
 def find_base(repo: Path) -> str | None:
+    """The upstream import; a tag pointing anywhere else is refused, not trusted."""
     tagged = git(repo, "rev-parse", "-q", "--verify", f"{UPSTREAM_TAG}^{{commit}}")
     if tagged.returncode == 0:
-        return tagged.stdout.strip()
-    roots = git(repo, "rev-list", "--max-parents=0", "HEAD").stdout.split()
-    for root in roots:
-        if git(repo, "rev-parse", f"{root}^{{tree}}").stdout.strip() == UPSTREAM_TREE:
+        base = tagged.stdout.strip()
+        if tree_of(repo, base) != UPSTREAM_TREE:
+            print(
+                f"attribution: tag {UPSTREAM_TAG} does not point at tree {UPSTREAM_TREE}",
+                file=sys.stderr,
+            )
+            return None
+        return base
+    for root in git(repo, "rev-list", "--max-parents=0", "HEAD").stdout.split():
+        if tree_of(repo, root) == UPSTREAM_TREE:
             return root
     return None
 
@@ -52,12 +63,13 @@ def listed_modified(attribution: Path) -> set[str]:
 
 
 def changed_upstream(repo: Path, base: str) -> list[tuple[str, str]]:
-    diff = git(repo, "diff", "--name-status", "--no-renames", base)
+    # -z: paths arrive unquoted (non-ASCII, tabs), as status\0path\0 pairs.
+    diff = git(repo, "diff", "--name-status", "--no-renames", "-z", base)
     if diff.returncode != 0:
         raise RuntimeError(diff.stderr.strip())
+    fields = diff.stdout.split("\0")
     changes = []
-    for line in diff.stdout.splitlines():
-        status, _, path = line.partition("\t")
+    for status, path in zip(fields[0::2], fields[1::2], strict=False):
         if status[:1] in {"M", "D", "T"}:
             changes.append((status[:1], path))
     return changes
