@@ -313,6 +313,9 @@ function hold (runId, patch) {
   unresolved.set(runId, { ...unresolved.get(runId), ...patch })
 }
 
+/** Still showing the run a POST was sent for: its answer belongs on this screen, not another's. */
+const here = (runId) => state.body?.run_id === runId
+
 async function openReview () {
   if (reviewWhy.value) return
   flow.open = true
@@ -351,8 +354,8 @@ async function confirmApproval () {
     heading.value?.focus()
   } catch (error) {
     if (unanswered(error)) {
-      flow.blocked = APPROVAL_UNKNOWN
       hold(runId, { blocked: APPROVAL_UNKNOWN })
+      if (here(runId)) flow.blocked = APPROVAL_UNKNOWN
     } else flow.message = refusal(error)
   } finally {
     flow.submitting = false
@@ -370,18 +373,23 @@ async function executePlan () {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { approval_id: id }
     })
-    flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
     hold(runId, { followedId: answer.execution_id })
-    follow(answer.execution_id)
+    if (here(runId)) {
+      flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
+      follow(answer.execution_id)
+    }
   } catch (error) {
     if (!unanswered(error)) {
       flow.submitting = false
       flow.invalid = refusal(error)
       return
     }
-    flow.blocked = `Execution outcome unknown; reading its status by approval id ${id}. Do not send again.`
-    hold(runId, { blocked: flow.blocked, followedId: id })
-    follow(id)
+    const blocked = `Execution outcome unknown; reading its status by approval id ${id}. Do not send again.`
+    hold(runId, { blocked, followedId: id, readBy: id })
+    if (here(runId)) {
+      flow.blocked = blocked
+      follow(id)
+    }
   }
   flow.submitting = false
   await closeReview()
@@ -439,8 +447,8 @@ async function poll () {
 
 /** A held block, said truthfully: its lookup is claimed only while this screen is reading it. */
 function blockFor (held) {
-  if (!held.followedId || followedId.value === held.followedId) return held.blocked
-  return `Execution outcome unknown for approval ${held.followedId}; not read on this screen. Do not send again.`
+  if (!held.readBy || followedId.value === held.readBy) return held.blocked
+  return `Execution outcome unknown for approval ${held.readBy}; not read on this screen. Do not send again.`
 }
 
 function follow (id) {
@@ -455,13 +463,19 @@ function follow (id) {
 
 watch(() => state.body, (body) => {
   if (!body) return
-  // An unresolved operation on this run, from before this screen was last left: keep its block,
-  // and resume reading the execution this tab sent unless the address names another one.
+  // What this tab holds for the run now shown decides the block and the execution followed: a
+  // block or an execution sent for another run is not this screen's. Unresolved work from before
+  // the screen was last left is restored, and its execution read again unless the address names
+  // another one.
   const held = unresolved.get(body.run_id)
+  if (followed && held?.followedId !== followedId.value) {
+    followed = false
+    followedId.value = null
+  }
   const named = route.query.execution_id
   const resume = held?.followedId && !followed && (!named || named === held.followedId)
   if (resume) follow(held.followedId)
-  if (held?.blocked) flow.blocked = blockFor(held)
+  flow.blocked = held?.blocked ? blockFor(held) : ''
   if (resume) return
   if (followed) {
     poll() // Refresh re-reads the execution this tab sent
@@ -483,8 +497,7 @@ watch(() => state.body, (body) => {
 watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
   if (!flow.submitting) { // an in-flight POST keeps its review until it is answered
     flow.open = false
-    // a block belongs to its run: the new run's own, if any, is restored when it loads
-    Object.assign(flow, { approval: null, invalid: '', executed: false, message: '', blocked: '' })
+    Object.assign(flow, { approval: null, invalid: '', executed: false, message: '' })
     followed = false
     followedId.value = null
     activeId.value = null
