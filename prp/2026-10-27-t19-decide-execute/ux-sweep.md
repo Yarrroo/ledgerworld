@@ -32,3 +32,10 @@ colour pairs beyond the T17 tokens.
 Close disabled while a POST is in flight): at 390 px, Execution with receipts and with an
 execution the server has no record of. No horizontal scroll, no control under 44 px. The one
 console error is the browser's own log of the expected 404.
+
+**Re-sweep for an unreadable successful POST** (board item 94): the same mock, with the approval
+POST answering 201 with an HTML page, then the execution POST answering an empty 202. The approval
+shows the operator-resolution block with Confirm disabled, and no refusal text (phone,
+`ux/unreadable-approval-phone.png`). The execution shows "outcome unknown … Do not send again",
+reads `apr-1` by its approval id, and shows its receipt (`ux/unreadable-execution-{phone,tablet,desktop}.png`).
+At all three widths there is no horizontal scroll and no control under 44 px.
