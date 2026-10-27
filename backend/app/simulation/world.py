@@ -15,13 +15,15 @@ that branch. Graph memory is not in the round loop (HANDOFF); an actor's memory 
 
 ``capture()`` pins every component a round can change, before step 1; ``restore()`` puts them
 back and ``fingerprint()`` digests each, so a restoration is checked rather than trusted.
-Importing ``oasis`` writes ``./log`` in the working directory (oasis-seam.md S13), so it is
+Each world draws from its own ``random.Random``, OASIS's draws included, so a sibling world in
+the same process never moves its stream. Importing ``oasis`` writes ``./log`` in the working directory (oasis-seam.md S13), so it is
 imported on first use from a temporary directory.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import hashlib
 import json
@@ -64,6 +66,19 @@ class WorldUnusable(RuntimeError):
     """A failed round could not be shown to have stopped every writer; this world is spent."""
 
 
+# The RNG of the world whose OASIS code is running; unset, OASIS draws from the module RNG.
+_WORLD_RNG: contextvars.ContextVar[random.Random | None] = contextvars.ContextVar(
+    "world_rng", default=None)
+
+
+class _WorldRandom:
+    """``random`` as OASIS's platform and recommender see it: each draw goes to the RNG of the
+    world whose platform is running, so worlds sharing a process never share a stream."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_WORLD_RNG.get() or random, name)
+
+
 def import_oasis() -> SimpleNamespace:
     """The OASIS names the world uses, imported from a temporary directory the first time."""
     if "oasis.environment.env" not in sys.modules:
@@ -75,7 +90,12 @@ def import_oasis() -> SimpleNamespace:
             os.chdir(cwd)
     from oasis import AgentGraph, LLMAction, Platform
     from oasis.environment.env import OasisEnv
+    from oasis.social_platform import platform, recsys
     from oasis.social_platform.typing import ActionType
+
+    for module in (platform, recsys):  # every OASIS module that draws from ``random``
+        if not isinstance(module.random, _WorldRandom):
+            module.random = _WorldRandom()
 
     return SimpleNamespace(AgentGraph=AgentGraph, LLMAction=LLMAction, Platform=Platform,
                            OasisEnv=OasisEnv, ActionType=ActionType)
@@ -199,6 +219,7 @@ class World:
                              key=lambda e: e["round"])
         self.clock = Clock(epoch=epoch)
         self.seed = seed
+        self.rng = random.Random(seed)  # this world's own stream, OASIS's draws included
         self.store = store or LedgerStore("sqlite://")
         ledger.from_snapshot(self.store, self.snapshot)
         self.queue = IntentQueue(branch_id)
@@ -235,11 +256,27 @@ class World:
             graph.add_agent(agent)
         platform = self.oasis.Platform(db_path=str(self.db_path), recsys_type="random")
         self.env = self.oasis.OasisEnv(graph, platform, database_path=str(self.db_path))
-        await self.env.reset()
+        # OASIS draws from ``random``, which import_oasis routes to the running world's RNG: the
+        # platform's task inherits this world's at creation, and env.step's direct call to the
+        # recommender is given it here.
+        token = _WORLD_RNG.set(self.rng)
+        try:
+            await self.env.reset()
+        finally:
+            _WORLD_RNG.reset(token)
+        platform.update_rec_table = self._own_rng(platform.update_rec_table)
         platform.sandbox_clock.time_step = self.clock.round
-        # OASIS's random recommender draws from the module RNG: seed it, and capture it.
-        random.seed(self.seed)
         return self
+
+    def _own_rng(self, draw: Callable[[], Any]) -> Callable[[], Any]:
+        async def update_rec_table() -> Any:
+            token = _WORLD_RNG.set(self.rng)
+            try:
+                return await draw()
+            finally:
+                _WORLD_RNG.reset(token)
+
+        return update_rec_table
 
     async def close(self) -> None:
         if self.env is not None and not self.env.platform_task.done():
@@ -452,7 +489,7 @@ class World:
         return _fingerprint(
             ledger=_digest(self.store.dump()), sqlite_dump=self.sqlite_dump(),
             memory=self.memory_records(), round_=self.clock.round, time_step=self._time_step(),
-            rng=random.getstate(), state=self.state, queued=len(self.queue),
+            rng=self.rng.getstate(), state=self.state, queued=len(self.queue),
             transcript=self.transcript)
 
     def capture(self) -> Capture:
@@ -476,7 +513,7 @@ class World:
             models={a: [(set(m._used), set(m._pending)) for m in self._scripted(agent)]
                     for a, agent in self.agents.items()},
             oasis_time_step=self._time_step(),
-            rng=random.getstate(),
+            rng=self.rng.getstate(),
             state=copy.deepcopy(self.state),
             transcript=self.transcript.calls(),
         )
@@ -500,7 +537,7 @@ class World:
                 with model._lock:
                     model._used, model._pending = set(used), set(pending)
         self.clock.round = capture.round
-        random.setstate(capture.rng)
+        self.rng.setstate(capture.rng)
         self.state = copy.deepcopy(capture.state)
         self.queue.drain()
         self.transcript = Transcript(self.world_id, self.branch_id, calls=capture.transcript)

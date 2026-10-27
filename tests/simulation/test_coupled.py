@@ -109,13 +109,13 @@ def plan_model(plan: ScriptedPlan):
 
 
 def make_world(tmp_path, branch, *, plan, scenario=(), treasury=False, model=None, hooks=None,
-               quiesce_timeout_s=5.0, name=None) -> World:
+               quiesce_timeout_s=5.0, name=None, seed=0) -> World:
     workdir = tmp_path / (name or branch)
     workdir.mkdir()
     return World("coupled", branch, snapshot(treasury=treasury),
                  [ACTOR_SPECS[a] for a in MODEL_ACTORS + ["payroll", "market-maker"]],
                  model=model or plan_model(plan), workdir=workdir, scenario=scenario,
-                 coordinator=Coordinator(hooks, quiesce_timeout_s=quiesce_timeout_s))
+                 coordinator=Coordinator(hooks, quiesce_timeout_s=quiesce_timeout_s), seed=seed)
 
 
 def k_p(world: World) -> int:
@@ -766,6 +766,64 @@ def test_a_rejected_intent_is_not_a_failed_round(tmp_path, control):
                       if o["obligation_id"] == "payroll-1")
     assert obligation["state"] == "met"
     assert not world.failures
+
+
+# More posts than OASIS's random recommender keeps per user, so every env.step draws from it.
+DRAWING_SCENARIO = [{"round": 1, "kind": "public_post", "post_id": f"p-r1-{n}", "author": "feed",
+                     "text": f"Market note {n}."} for n in range(1, 5)]
+
+
+def drawing_world(tmp_path, name, seed) -> World:
+    return make_world(tmp_path, "shock", plan=ScriptedPlan(IDLE), scenario=DRAWING_SCENARIO,
+                      name=name, seed=seed)
+
+
+def draws(world: World) -> tuple:
+    """What the world's random stream decided: the recommendation table it drew, its RNG."""
+    rec = world.platform.db.execute("SELECT user_id, post_id FROM rec ORDER BY user_id, post_id")
+    return tuple(rec.fetchall()), world.fingerprint()["RNG state"]
+
+
+def test_a_sibling_world_leaves_this_worlds_random_stream_alone(tmp_path):
+    """Two worlds in one process: starting, running, failing and restoring one, and drawing
+    from the process's own RNG, never moves the other's random stream off its solo control."""
+
+    async def solo():
+        world = drawing_world(tmp_path, "solo", seed=1)
+        async with world:
+            return [(await world.run(1), draws(world))[1] for _ in range(3)]
+
+    async def beside_a_sibling():
+        world = drawing_world(tmp_path, "this", seed=1)
+        sibling = drawing_world(tmp_path, "sibling", seed=2)
+        seen = []
+        async with world:
+            await world.run(1)
+            seen.append(draws(world))
+            await sibling.start()  # sibling startup
+            try:
+                await sibling.run(2)  # sibling execution
+                random.seed(99), random.random()  # the process's own draws
+                await world.run(1)
+                seen.append(draws(world))
+                capture = sibling.capture()
+
+                def fault(world, ctx):
+                    raise InjectedFault("sibling round")
+
+                sibling.coordinator.hooks["settled"] = fault
+                with pytest.raises(InjectedFault):
+                    await sibling.run(1)  # sibling rollback
+                assert sibling.fingerprint() == capture.fingerprint
+                await world.run(1)
+                seen.append(draws(world))
+            finally:
+                await sibling.close()
+        return seen
+
+    control = run(solo())
+    assert len({rec for rec, _ in control}) > 1  # the recommender really drew each round
+    assert run(beside_a_sibling()) == control
 
 
 def test_capture_covers_every_component_the_fixture_names():
