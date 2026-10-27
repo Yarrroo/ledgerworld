@@ -29,10 +29,10 @@ DEFAULT_EPOCH = datetime(2026, 1, 1, tzinfo=timezone.utc)
 SCOPE_RULES = {
     "own_accounts": ({"account", "own_account"}, "owner"),
     "own_contracts": ({"contract", "own_contract"}, "owner"),
-    # A due scheduled event reaches an actor only when addressed to it; its public side
-    # effects arrive as posts and prices, so an unaddressed event is never observed raw.
+    # A due scheduled event addressed to one actor is private to it; an unaddressed one is
+    # public. visible() applies the split, since one kind sits in two scopes.
     "messages_to_me": ({"message", "scheduled_event"}, "to"),
-    "public_posts": ({"public_post"}, None),
+    "public_posts": ({"public_post", "scheduled_event"}, None),
     "public_prices": ({"public_price"}, None),
     "memory": ({"memory"}, "owner"),
 }
@@ -50,7 +50,7 @@ TOOL_SCHEMAS = {
     "pay": ({**MONEY_ARGS, "to": str}, {}),
     "pledge": (MONEY_ARGS, {"account": str}),
     "release": ({}, {"facility_id": str, "account": str}),
-    "defer": ({"obligation_id": str, "until_h": int}, {}),
+    "defer": ({"flow": str, "to_h": int}, {}),
     "create_post": ({"content": str}, {}),
     "no_action": ({}, {}),
 }
@@ -62,7 +62,12 @@ ONE_OF = {
 }
 
 CURRENCY_ARGS = {"currency", "to_currency"}
-ISO_CURRENCY = re.compile(r"[A-Z]{3}")
+# ISO 4217 codes plus stablecoin tickers such as USDC.
+CURRENCY_CODE = re.compile(r"[A-Z][A-Z0-9]{2,5}")
+
+# Item fields that are points in simulated time (hours); they enter the hash input as
+# ISO-8601 UTC under the name without "_h". Durations such as delay_h stay in hours.
+TIME_POINT_FIELDS = {"visible_from_h", "due_h", "expected_h", "to_h", "until_h"}
 
 
 class ToolRefusal(Exception):
@@ -92,7 +97,7 @@ def canonical_json(value) -> str:
                 check(x)
 
     check(value)
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def visible(item: dict, actor: dict, sim_time_h: int) -> bool:
@@ -103,24 +108,30 @@ def visible(item: dict, actor: dict, sim_time_h: int) -> bool:
         kinds, bound = SCOPE_RULES.get(scope, (set(), None))
         if item.get("kind") not in kinds:
             continue
+        if bound is None and "to" in item:
+            continue  # addressed to someone: only the messages_to_me scope may admit it
         if bound is None or item.get(bound) == actor["actor_id"]:
             return True
     return False
 
 
 def observed_item(item: dict, epoch: datetime = DEFAULT_EPOCH) -> dict:
-    """The item as it enters the hash input: its hour offset becomes an ISO-8601 UTC time."""
-    out = {k: v for k, v in item.items() if k != "visible_from_h"}
-    if "visible_from_h" in item:
-        out["visible_from"] = iso_utc(item["visible_from_h"], epoch)
-    return out
+    """The item as it enters the hash input: time points become ISO-8601 UTC times."""
+    return {(k[:-2] if k in TIME_POINT_FIELDS else k): (iso_utc(v, epoch) if k in TIME_POINT_FIELDS else v)
+            for k, v in item.items()}
 
 
 def build_observation(actor: dict, world_items: list, round_: int, sim_time_h: int,
                       epoch: datetime = DEFAULT_EPOCH):
-    """-> (observation, obs_hash, evidence_ids). Items are ordered by id, so input order is irrelevant."""
+    """-> (observation, obs_hash, evidence_ids). Items are ordered by id, so input order is irrelevant.
+
+    Two world items sharing an id are an inconsistent world, refused rather than hashed.
+    """
+    ids = [i["id"] for i in world_items]
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"duplicate world item ids: {sorted({i for i in ids if ids.count(i) > 1})}")
     items = sorted((observed_item(i, epoch) for i in world_items if visible(i, actor, sim_time_h)),
-                   key=lambda i: (i["id"], canonical_json(i)))
+                   key=lambda i: i["id"])
     observation = {
         "actor_id": actor["actor_id"],
         "round": round_,
@@ -150,8 +161,8 @@ def check_args(name: str, args) -> dict:
             errors.append(f"'{arg}' must be {typ.__name__}, got {type(value).__name__} {value!r}")
         elif arg == "amount_minor" and value <= 0:
             errors.append(f"'amount_minor' must be positive, got {value}")
-        elif arg in CURRENCY_ARGS and not ISO_CURRENCY.fullmatch(value):
-            errors.append(f"'{arg}' must be an ISO 4217 code like 'USD', got {value!r}")
+        elif arg in CURRENCY_ARGS and not CURRENCY_CODE.fullmatch(value):
+            errors.append(f"'{arg}' must be a currency code like 'USD' or 'USDC', got {value!r}")
         elif typ is str and not value.strip():
             errors.append(f"'{arg}' must not be empty")
     targets = ONE_OF.get(name, ())
@@ -204,14 +215,16 @@ def guard_model_output(actor: dict, first: dict, ask_repair, round_: int, obs_ha
                        evidence_ids: list, n: int = 1, branch_id: str = "main") -> dict:
     """One repair attempt, then no_action + alert. `ask_repair(prompt) -> call` is called at most once.
 
-    -> {intent, repair_attempts, alert, alert_reason, repair_prompt}. Never raises on model output.
+    -> {intent, repair_attempts, alert, alert_reason, alert_detail, repair_prompt}.
+    Never raises on model output; a failed repair call is named in alert_detail, so an
+    adapter bug reads as one rather than as flaky model output.
     """
     def accept(call, attempts, prompt):
         args = gate_tool_call(actor, call)
         intent = make_intent(actor["actor_id"], round_, n, call["name"], args, obs_hash,
                              evidence_ids, branch_id)
         return {"intent": intent, "repair_attempts": attempts, "alert": False,
-                "alert_reason": None, "repair_prompt": prompt}
+                "alert_reason": None, "alert_detail": None, "repair_prompt": prompt}
 
     try:
         return accept(first, 0, None)
@@ -219,13 +232,13 @@ def guard_model_output(actor: dict, first: dict, ask_repair, round_: int, obs_ha
         prompt = repair_prompt(refusal, actor)
     try:
         repaired = ask_repair(prompt)
-    except Exception:  # a failed repair call (timeout, exhausted plan) is still a malformed answer
-        reason = "repair_call_failed"
+    except Exception as exc:  # a failed repair call (timeout, exhausted plan) is still a malformed answer
+        reason, detail = "repair_call_failed", f"{type(exc).__name__}: {exc}"
     else:
         try:
             return accept(repaired, 1, prompt)
         except ToolRefusal as refusal:
-            reason = refusal.reason
+            reason, detail = refusal.reason, refusal.detail
     intent = make_intent(actor["actor_id"], round_, n, "no_action", {}, obs_hash, evidence_ids, branch_id)
     return {"intent": intent, "repair_attempts": 1, "alert": True,
-            "alert_reason": reason, "repair_prompt": prompt}
+            "alert_reason": reason, "alert_detail": detail, "repair_prompt": prompt}

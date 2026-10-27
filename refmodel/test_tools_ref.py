@@ -21,6 +21,7 @@ def load(name):
 
 
 ACTORS = load("actors")
+PINNED_OBS_HASH = "c8430aaeae01473fc5aacc9915b72fa40af720189ebcb8db5dd3236b4bcbb1f0"
 BY_ID = {a["actor_id"]: a for a in ACTORS["actors"]}
 
 
@@ -71,17 +72,36 @@ class ObservationScope(unittest.TestCase):
             self.assertNotIn("visible_from_h", item)
             self.assertRegex(item["visible_from"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 
-    def test_duplicate_ids_do_not_make_hash_order_dependent(self):
-        a = {"id": "acct:borrower-c/operating", "kind": "account", "owner": "borrower-c", "balance_minor": 1}
-        b = dict(a, balance_minor=2)
-        self.assertEqual(self.build([a, b])[1], self.build([b, a])[1])
+    def test_obs_hash_pinned(self):
+        # The value FINDINGS_tools.md publishes for T07 to match.
+        self.assertEqual(self.build(self.fx["world_items"])[1], PINNED_OBS_HASH)
 
-    def test_due_scheduled_event_only_reaches_its_addressee(self):
-        unaddressed = {"id": "sched:receipt-delay@16h", "kind": "scheduled_event", "visible_from_h": 16}
+    def test_duplicate_ids_refused(self):
+        a = {"id": "acct:borrower-c/operating", "kind": "account", "owner": "borrower-c", "balance_minor": 1}
+        with self.assertRaises(ValueError):
+            self.build([a, dict(a, balance_minor=2)])
+
+    def test_time_points_iso_durations_hours(self):
+        item = {"id": "contract:x", "kind": "contract", "owner": "borrower-c", "visible_from_h": 0,
+                "due_h": 40, "delay_h": 8}
+        obs, _, _ = self.build([item])
+        self.assertEqual(obs["items"][0], {"id": "contract:x", "kind": "contract", "owner": "borrower-c",
+                                           "visible_from": "2026-01-01T00:00:00Z",
+                                           "due": "2026-01-02T16:00:00Z", "delay_h": 8})
+
+    def test_due_scheduled_event_scope(self):
+        unaddressed = {"id": "sched:rumour@16h", "kind": "scheduled_event", "visible_from_h": 16}
         addressed = dict(unaddressed, id="sched:call@16h", to="borrower-c")
         other = dict(unaddressed, id="sched:treasury@16h", to="treasury")
-        _, _, evidence = self.build([unaddressed, addressed, other])
-        self.assertEqual(evidence, ["sched:call@16h"])
+        items = [unaddressed, addressed, other]
+        self.assertEqual(self.build(items)[2], ["sched:call@16h", "sched:rumour@16h"])
+        _, _, feed = ref.build_observation(BY_ID["feed"], items, 4, 16)
+        self.assertEqual(feed, ["sched:rumour@16h"])
+        _, _, treasury = ref.build_observation(BY_ID["treasury"], items, 4, 16)
+        self.assertEqual(treasury, ["sched:rumour@16h", "sched:treasury@16h"])
+
+    def test_non_ascii_hashed_as_utf8(self):
+        self.assertEqual(ref.canonical_json({"content": "café"}), '{"content":"café"}')
 
     def test_float_refused_in_canonical_json(self):
         with self.assertRaises(ValueError):
@@ -151,6 +171,7 @@ class MalformedOutput(unittest.TestCase):
         out = ref.guard_model_output(self.actor, self.fx["cases"][0]["first"], boom, 4, "h" * 64, [])
         self.assertEqual((out["intent"]["type"], out["alert"], out["alert_reason"]),
                          ("no_action", True, "repair_call_failed"))
+        self.assertEqual(out["alert_detail"], "TimeoutError: model timed out")
 
     def test_never_raises_on_garbage(self):
         for garbage in (None, "text", [], {"name": None}, {"name": "pay"}, {"name": "pay", "args": "x"}):
@@ -219,6 +240,12 @@ class ActorTools(unittest.TestCase):
                 with self.assertRaises(ref.ToolRefusal) as cm:
                     ref.gate_tool_call(BY_ID["borrower-c"], {"name": "pay", "args": args})
                 self.assertEqual(cm.exception.reason, "malformed_tool_args")
+
+    def test_stablecoin_and_policy_defer_accepted(self):
+        self.assertEqual(ref.gate_tool_call(BY_ID["treasury"], {"name": "convert", "args": {
+            "amount_minor": 1500000, "currency": "USDC", "to_currency": "USD"}})["currency"], "USDC")
+        self.assertEqual(ref.gate_tool_call(BY_ID["treasury"], {"name": "defer", "args": {
+            "flow": "vendor-1", "to_h": 60}}), {"flow": "vendor-1", "to_h": 60})
 
     def test_targetless_calls_refused(self):
         for actor, call in (("lender", {"name": "accept", "args": {}}),
