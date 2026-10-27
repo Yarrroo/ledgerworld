@@ -229,6 +229,8 @@ def _page(items: list[Any], limit: int | None, cursor: str | None) -> tuple[list
     """Cursor pagination over items in uuid order; the cursor is the last uuid returned."""
 
     _check_limit(limit)
+    # Sorted, not insertion order: the cursor filter compares uuids as strings.
+    items = sorted(items, key=lambda item: item.uuid_)
     if cursor is not None:
         items = [item for item in items if item.uuid_ > cursor]
     size = limit if limit is not None else len(items)

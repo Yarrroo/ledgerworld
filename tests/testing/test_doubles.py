@@ -433,3 +433,19 @@ def test_graph_paging_takes_the_sdk_arguments_and_rejects_a_zero_limit():
     ):
         with pytest.raises(BadRequestError):
             call()
+
+
+def test_cursor_paging_survives_ids_past_six_digits():
+    mem = FakeGraphMemory(namespace_for("w", "b"))
+    mem.graph.create(graph_id="g")
+    mem.store._counters["node"] = 999_998
+    names = [mem.add_node("g", name) for name in ("old", "new")]
+    assert names == ["node-999999", "node-1000000"]
+    seen, cursor = [], None
+    while True:
+        page = mem.graph.node.with_raw_response.get_by_graph_id("g", limit=1, cursor=cursor)
+        seen += [n.name for n in page.data]
+        cursor = page.headers.get("zep-next-cursor")
+        if cursor is None:
+            break
+    assert sorted(seen) == ["new", "old"]
