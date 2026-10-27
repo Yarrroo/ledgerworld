@@ -10,6 +10,10 @@ mapping through an in-process `httpx.MockTransport`.
 
 from __future__ import annotations
 
+from app.execution.boundary import require_execution
+
+require_execution()
+
 from collections.abc import Mapping
 from typing import Any
 
