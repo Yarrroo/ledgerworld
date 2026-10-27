@@ -416,7 +416,7 @@ class LedgerStore:
                        conn: Connection | None = None) -> None:
         """An obligation; its reservation, when named, is on its account for its amount."""
         amount = minor_amount(amount_minor, positive=True)
-        with self.transaction(conn) as c:
+        with self._one_backer(reservation_id, conn), self.transaction(conn) as c:
             account = self._account(c, account_id)
             if reservation_id and state in OPEN_OBLIGATION:
                 self._covers(self._reservation(c, reservation_id), account_id, amount)
@@ -428,7 +428,7 @@ class LedgerStore:
 
     def attach_reservation(self, obligation_id: str, reservation_id: str,
                            conn: Connection | None = None) -> None:
-        with self.transaction(conn) as c:
+        with self._one_backer(reservation_id, conn), self.transaction(conn) as c:
             ob = c.execute(select(obligations)
                            .where(obligations.c.obligation_id == obligation_id)).one()
             self._covers(self._reservation(c, reservation_id), ob.account_id, ob.amount_minor)
@@ -519,6 +519,29 @@ class LedgerStore:
             raise LedgerRefusal("reservation_not_held", reservation_id=reservation_id,
                                 state=res.state)
         return res
+
+    @contextmanager
+    def _one_backer(self, reservation_id: str | None,
+                    conn: Connection | None) -> Iterator[None]:
+        """A reservation backs one obligation, so one payment never meets two.
+
+        The unique index `obligations_one_per_reservation` refuses the second, a concurrent one
+        included; this names the obligation it already backs. It wraps the refused write's
+        transaction or savepoint, so the lookup runs after that rolled back.
+        """
+        try:
+            yield
+        except IntegrityError as exc:
+            # PostgreSQL names the index, SQLite the column; nothing else on the table does.
+            if reservation_id is None or not any(
+                    name in str(exc.orig)
+                    for name in ("obligations_one_per_reservation", "obligations.reservation_id")):
+                raise
+            with self.reading(conn) as c:
+                owner = c.execute(select(obligations.c.obligation_id).where(
+                    obligations.c.reservation_id == reservation_id)).scalar()
+            raise ValueError(
+                f"reservation {reservation_id} already backs obligation {owner}") from exc
 
     @staticmethod
     def _covers(res: Any, account_id: str, amount: int) -> None:

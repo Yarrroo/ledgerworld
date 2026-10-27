@@ -89,6 +89,8 @@ CREATE TABLE obligations (
     reservation_id  VARCHAR(64)
 );
 CREATE INDEX obligations_open ON obligations (account_id, state, due_at);
+-- One reservation backs at most one obligation, so one payment never meets two.
+CREATE UNIQUE INDEX obligations_one_per_reservation ON obligations (reservation_id);
 
 CREATE TABLE reservations (
     reservation_id  VARCHAR(64) PRIMARY KEY,
