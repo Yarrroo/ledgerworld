@@ -83,7 +83,8 @@ def test_concurrent_thread_puts_lose_nothing():
     drained = queue.drain()
     assert len(drained) == threads * per
     assert len({i.intent_id for i in drained}) == threads * per
-    keys = [(i.priority_class, i.sim_minute, i.actor_id) for i in drained]
+    keys = [(i.priority_class, i.sim_minute, i.actor_id, int(i.intent_id.rsplit("-", 1)[1]))
+            for i in drained]
     assert keys == sorted(keys)
 
 
@@ -158,4 +159,36 @@ def test_float_in_observation_refused():
     item = {"id": "acct:borrower-c/operating", "kind": "account", "owner": "borrower-c",
             "balance_minor": 1.5}
     with pytest.raises(ValueError, match="float"):
+        build([item])
+
+
+# ------------------------------------------------------------------------- vet round 1 guards
+
+
+@pytest.mark.parametrize("intent_id", ["i-r0-x-repair", "i-r0-x-2\n", "i-r1-x-2", "i-r0-y-2", "uuid-1"])
+def test_put_refuses_an_id_off_the_intent_id_scheme(intent_id):
+    # the call index orders same-actor intents, so an id it cannot be read from is refused
+    with pytest.raises(ValueError, match="i-r<round>-<actor_id>-<n>"):
+        IntentQueue().put(intent("x", 1) | {"intent_id": intent_id})
+
+
+def test_put_stores_a_copy_the_caller_cannot_reorder():
+    queue = IntentQueue()
+    first = ActionIntent.model_validate(intent("b", 1, priority_class=2))
+    queue.put(first)
+    queue.put(intent("a", 1, priority_class=1))
+    first.priority_class = 0
+    assert [i.actor_id for i in queue.drain()] == ["a", "b"]
+
+
+@pytest.mark.parametrize("value", [12.5, None, True, "12"])
+def test_non_integer_time_point_refused(value):
+    item = {"id": "p-1", "kind": "public_post", "owner": "feed", "visible_from_h": value}
+    with pytest.raises(ValueError, match="integer hour"):
+        build([item])
+
+
+def test_time_point_colliding_with_its_iso_name_refused():
+    item = {"id": "c-1", "kind": "contract", "owner": "borrower-c", "due_h": 40, "due": "z"}
+    with pytest.raises(ValueError, match="both due_h and due"):
         build([item])

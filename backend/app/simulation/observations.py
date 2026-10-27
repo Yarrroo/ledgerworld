@@ -10,11 +10,12 @@ float is refused) and every point in simulated time as ISO-8601 UTC.
 from __future__ import annotations
 
 import hashlib
-import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
+
+from app.decisions.nonanticipativity import canonical
 
 # The simulated clock has no calendar date in the brief; the epoch is an explicit input.
 DEFAULT_EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
@@ -39,21 +40,31 @@ def iso_utc(sim_time_h: int, epoch: datetime = DEFAULT_EPOCH) -> str:
     return (epoch + timedelta(hours=sim_time_h)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _refuse_floats(value: Any) -> None:
+    if isinstance(value, float):
+        raise ValueError(f"float in canonical payload: {value!r}")  # noqa: TRY004 — the oracle's error
+    if isinstance(value, Mapping):
+        for v in value.values():
+            _refuse_floats(v)
+    elif isinstance(value, list | tuple):
+        for v in value:
+            _refuse_floats(v)
+
+
 def canonical_json(value: Any) -> str:
-    """Sorted keys, no whitespace; a float anywhere is refused (money is integer minor units)."""
+    """The decisions guard's canonical JSON, with a float anywhere refused (money is minor units)."""
+    _refuse_floats(value)
+    return canonical(value)
 
-    def check(v: Any) -> None:
-        if isinstance(v, float):
-            raise ValueError(f"float in canonical payload: {v!r}")  # noqa: TRY004 — the oracle's error
-        if isinstance(v, Mapping):
-            for x in v.values():
-                check(x)
-        elif isinstance(v, list | tuple):
-            for x in v:
-                check(x)
 
-    check(value)
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+def check_item(item: Mapping[str, Any]) -> None:
+    """A time point is an integer hour and does not collide with the ISO name it is hashed under."""
+    for k in TIME_POINT_FIELDS & item.keys():
+        v = item[k]
+        if type(v) is not int:
+            raise ValueError(f"item {item.get('id')!r}: {k} must be an integer hour, got {v!r}")
+        if k[:-2] in item:
+            raise ValueError(f"item {item.get('id')!r} has both {k} and {k[:-2]}")
 
 
 def visible(item: Mapping[str, Any], actor: Mapping[str, Any], sim_time_h: int) -> bool:
@@ -73,8 +84,12 @@ def visible(item: Mapping[str, Any], actor: Mapping[str, Any], sim_time_h: int) 
 
 def observed_item(item: Mapping[str, Any], epoch: datetime = DEFAULT_EPOCH) -> dict[str, Any]:
     """The item as it enters the hash input: time points become ISO-8601 UTC times."""
-    return {(k[:-2] if k in TIME_POINT_FIELDS else k): (iso_utc(v, epoch) if k in TIME_POINT_FIELDS else v)
-            for k, v in item.items()}
+    out = {}
+    for k, v in item.items():
+        if k in TIME_POINT_FIELDS:
+            k, v = k[:-2], iso_utc(v, epoch)
+        out[k] = v
+    return out
 
 
 def build_observation(actor: Mapping[str, Any], world_items: Sequence[Mapping[str, Any]], round_: int,
@@ -82,11 +97,14 @@ def build_observation(actor: Mapping[str, Any], world_items: Sequence[Mapping[st
                       ) -> tuple[dict[str, Any], str, list[str]]:
     """-> (observation, obs_hash, evidence_ids). Items are ordered by id, so input order is irrelevant.
 
-    Two world items sharing an id are an inconsistent world, refused rather than hashed.
+    Two world items sharing an id, or an item failing `check_item`, are an inconsistent world,
+    refused rather than hashed.
     """
     dupes = sorted(i for i, n in Counter(item["id"] for item in world_items).items() if n > 1)
     if dupes:
         raise ValueError(f"duplicate world item ids: {dupes}")
+    for item in world_items:
+        check_item(item)
     items = sorted((observed_item(i, epoch) for i in world_items if visible(i, actor, sim_time_h)),
                    key=lambda i: i["id"])
     observation = {"actor_id": actor["actor_id"], "round": round_, "t": iso_utc(sim_time_h, epoch),
