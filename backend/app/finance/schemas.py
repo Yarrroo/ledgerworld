@@ -596,9 +596,22 @@ class Coverage(_Shape):
     headroom: Metric
 
 
+class NotCurrent(_Shape):
+    """A cash account whose balance is not current, and why: stale keeps its last observed
+    value (as of `as_of`), unknown has none."""
+
+    account_id: Id
+    status: Literal["stale", "unknown"]
+    as_of: Time
+
+
 class Completeness(_Shape):
+    """`missing` names every cash account that is not current; `accounts` says, for each of
+    them in the same order, whether it is stale or unknown."""
+
     status: Literal["complete", "partial"]
     missing: list[Id]
+    accounts: list[NotCurrent]
 
 
 class OverviewResponse(Response):

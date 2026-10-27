@@ -21,6 +21,8 @@ import overviewFreeze from '../../../contracts/examples/c6_api/valid-overview-lf
 import treasuryDelayed from '../../../contracts/examples/c6_api/valid-treasury-lf1-delayed.json'
 import lendingLf2 from '../../../contracts/examples/c6_api/valid-lending-lf2.json'
 import lendingFreeze from '../../../contracts/examples/c6_api/valid-lending-lf2-venue-freeze.json'
+import overviewStale from '../../../contracts/examples/c6_api/valid-overview-lf-stale.json'
+import lendingStale from '../../../contracts/examples/c6_api/valid-lending-lf-stale.json'
 
 const record = (view, kase) => moneyViews.records.find((r) => r.view === view && r.case === kase)
 const stateCase = (id) => dataStates.cases.find((c) => c.id === id)
@@ -198,8 +200,8 @@ describe('money-views fixture', () => {
     const w = await open(Lending, '/lending')
     const { expect: want } = record('Lending', 'lf2-venue-freeze')
     expect(text(w, 'capacity-value')).toBe(want.capacity)
-    expect(text(w, 'unobserved')).toContain(`lender/venue · ? ${want.venue}`)
-    expect(text(w, 'unobserved')).not.toMatch(/USD 0\.00/)
+    expect(text(w, 'not-current')).toContain(`lender/venue · ? ${want.venue}`)
+    expect(text(w, 'not-current')).not.toMatch(/USD 0\.00/)
     expect(disabled(w, 'fund')).toBe(!want.funding_enabled)
     expect(text(w, 'fund-why')).toBe(want.reason)
     expect(text(w, 'authority')).toContain('reduced')
@@ -210,6 +212,36 @@ describe('money-views fixture', () => {
     const w = await open(Lending, '/lending')
     expect(text(w, 'error')).toContain('different snapshots or modes')
     expect(w.find('[data-test="capacity"]').exists()).toBe(false)
+  })
+})
+
+// Recorded 7 h after the observation under the venue freeze: two accounts stale (observed, not
+// current), the venue unknown. completeness.missing names all three; each keeps its own reason.
+describe('a stale account is not current, and it is not unknown', () => {
+  it('Overview names each account with its own reason', async () => {
+    serve({ '/overview': overviewStale.instance })
+    const w = await open(Overview, '/overview')
+    const partial = text(w, 'partial')
+    expect(partial).toContain('borrower-a/operating · ◷ Stale, as of 2026-01-05 12:00 UTC')
+    expect(partial).toContain('lender/operating · ◷ Stale, as of 2026-01-05 12:00 UTC')
+    expect(partial).toContain('lender/venue · ? Unknown')
+    expect(partial).not.toMatch(/operating · \? Unknown/)
+    expect(partial).not.toContain('not observed')
+    expect(text(w, 'settled')).toContain('USD 70,000.00 · stale') // its last value, kept
+  })
+
+  it('Lending marks the stale pool account stale and only the venue unknown', async () => {
+    serve({ '/lending': lendingStale.instance, '/overview': overviewStale.instance })
+    const w = await open(Lending, '/lending')
+    const shown = text(w, 'not-current')
+    expect(shown).toContain('lender/operating · ◷ Stale')
+    const asOf = w.get('[data-test="not-current"]').findAll('.lw-time').map((t) => t.text())
+    expect(asOf).toEqual(['as of 2026-01-05 12:00 UTC']) // the stale one only; unknown has no time
+    expect(shown).toContain('lender/venue · ? Unknown')
+    expect(shown).not.toContain('lender/operating · ? Unknown')
+    expect(shown).not.toContain('borrower-a/operating') // not the pool's
+    expect(shown).not.toMatch(/not observed/i)
+    expect(disabled(w, 'fund')).toBe(true)
   })
 })
 

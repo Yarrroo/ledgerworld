@@ -71,9 +71,14 @@ def _primary(store: LedgerStore, snapshot: Snapshot) -> tuple[str, list[AccountV
 
 
 def _completeness(store: LedgerStore, now: datetime) -> Body:
-    missing = sorted(r["account_id"] for r in store.rows("accounts") if r["kind"] == "cash"
-                     and state_of(store.view(r["account_id"]), now) != "known")
-    return {"status": "partial" if missing else "complete", "missing": missing}
+    """The cash accounts that are not current, each with its reason: a stale account was
+    observed (and keeps its value), an unknown one was not."""
+    views = sorted((store.view(r["account_id"]) for r in store.rows("accounts")
+                    if r["kind"] == "cash"), key=lambda v: v.account_id)
+    accounts = [{"account_id": v.account_id, "status": state, "as_of": iso(v.as_of)}
+                for v in views if (state := state_of(v, now)) != "known"]
+    return {"status": "partial" if accounts else "complete",
+            "missing": [a["account_id"] for a in accounts], "accounts": accounts}
 
 
 def _pool(store: LedgerStore) -> str | None:

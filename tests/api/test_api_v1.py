@@ -174,7 +174,7 @@ def test_overview_on_lf1_lf2_after_the_delay():
         "amount": {"minor": 5_000_000, "currency": "USD"},
         "due_at": iso(T0 + timedelta(hours=40))}]
     assert body["lender_capacity"]["minor"] == 4_200_000  # LF-2: K_p = 42,000.00
-    assert body["completeness"] == {"status": "complete", "missing": []}
+    assert body["completeness"] == {"status": "complete", "missing": [], "accounts": []}
     assert body["demo"] == {"run_id": None, "execution_id": None}  # nothing prepared: null
 
 
@@ -183,7 +183,8 @@ def test_venue_freeze_is_partial_and_unknown_is_never_zero():
     http = client(services)
     body = check(http.get("/api/v1/overview"), "OverviewResponse")
     assert body["lender_capacity"]["minor"] == 2_700_000  # LF-2 stressed: K_p = 27,000.00
-    assert body["completeness"] == {"status": "partial", "missing": ["lender/venue"]}
+    assert body["completeness"] == {"status": "partial", "missing": ["lender/venue"], "accounts": [
+        {"account_id": "lender/venue", "status": "unknown", "as_of": iso(NOW)}]}
     lending = check(http.get("/api/v1/lending"), "LendingResponse")
     assert lending["capacity"]["authority"] == "reduced"
     assert lending["capacity"]["parts"]["settled_known"]["minor"] == 4_500_000
@@ -217,6 +218,10 @@ def test_treasury_shows_s_and_p_apart_and_a_stale_balance_keeps_its_value():
     over = check(client(later).get("/api/v1/overview"), "OverviewResponse")
     assert (over["cash"]["status"], over["cash"]["minor"]) == ("stale", 7_000_000)
     assert over["completeness"]["status"] == "partial"
+    # Stale is observed but not current, never unknown: each account says which it is.
+    assert {a["account_id"]: a["status"] for a in over["completeness"]["accounts"]} == {
+        "borrower-a/operating": "stale", "lender/operating": "stale", "lender/venue": "stale"}
+    assert over["completeness"]["missing"] == [a["account_id"] for a in over["completeness"]["accounts"]]
 
 
 def test_an_unknown_treasury_balance_has_no_value():

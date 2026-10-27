@@ -142,6 +142,14 @@ export const STATES = {
 
 export const stateOf = (status) => STATES[status] || STATES.unassessed
 
+/** A not-current account from completeness.accounts, with its own reason: stale was observed
+ * (as of a time), unknown was not ("lender/venue · ? Unknown"). */
+export function freshness (account) {
+  const s = stateOf(account.status)
+  const at = account.status === 'stale' ? `, as of ${formatTime(account.as_of).utc}` : ''
+  return `${account.account_id} · ${s.icon} ${s.word}${at}`
+}
+
 /** Floor kept or breached, read off an API headroom metric (P minimum − floor). */
 export function floorState (headroom) {
   if (!headroom || headroom.status === 'unknown' || headroom.minor == null) {

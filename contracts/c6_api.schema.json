@@ -844,6 +844,7 @@
     },
     "Completeness": {
       "additionalProperties": false,
+      "description": "`missing` names every cash account that is not current; `accounts` says, for each of\nthem in the same order, whether it is stale or unknown.",
       "properties": {
         "status": {
           "enum": [
@@ -861,11 +862,19 @@
           },
           "title": "Missing",
           "type": "array"
+        },
+        "accounts": {
+          "items": {
+            "$ref": "#/$defs/NotCurrent"
+          },
+          "title": "Accounts",
+          "type": "array"
         }
       },
       "required": [
         "status",
-        "missing"
+        "missing",
+        "accounts"
       ],
       "title": "Completeness",
       "type": "object"
@@ -2151,6 +2160,38 @@
         "currency"
       ],
       "title": "NonNegativeMoney",
+      "type": "object"
+    },
+    "NotCurrent": {
+      "additionalProperties": false,
+      "description": "A cash account whose balance is not current, and why: stale keeps its last observed\nvalue (as of `as_of`), unknown has none.",
+      "properties": {
+        "account_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Account Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "stale",
+            "unknown"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_id",
+        "status",
+        "as_of"
+      ],
+      "title": "NotCurrent",
       "type": "object"
     },
     "Obligation": {
