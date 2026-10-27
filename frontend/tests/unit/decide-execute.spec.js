@@ -558,3 +558,112 @@ describe('vet round 1', () => {
     expect(w.find('[data-test="confirm"]').exists()).toBe(true)
   })
 })
+
+describe('vet round 2', () => {
+  const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  const gets = (calls, path) => calls.filter((x) => x.method === 'GET' && x.path === path)
+  const tick = async () => { vi.advanceTimersByTime(5000); await flushPromises() }
+
+  it('a failed status read after an unanswered execution POST keeps reading', async () => {
+    fakeTimers()
+    let answer = timeout()
+    const { w, calls } = await reviewReady({
+      'POST /executions': timeout(), 'GET /executions/apr-1': () => answer
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    answer = executionBody({ legs: [paidPayout()] })
+    await tick()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
+    expect(text(w, 'leg-status')).toContain('PAID · reconciled as of')
+  })
+
+  it('an execution with no legs yet is not finished: it says so and keeps reading', async () => {
+    fakeTimers()
+    let body = executionBody({ legs: [] })
+    const { w, calls } = await reviewReady({
+      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'GET /executions/apr-1': () => body
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'no-legs')).toContain('No legs are recorded yet')
+    body = executionBody({ legs: [advance()] })
+    await tick()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
+    expect(w.find('[data-test="no-legs"]').exists()).toBe(false)
+  })
+
+  it('a settled leg not yet reconciled keeps being read until reconciled', async () => {
+    fakeTimers()
+    const settledOnly = { ...paidPayout(), reconciled: false }
+    let body = executionBody({ legs: [settledOnly] })
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': () => body
+    })
+    const w = await open(Execution, '/execution')
+    expect(text(w, 'leg-status')).toContain('not reconciled')
+    body = executionBody({ legs: [paidPayout()] })
+    await tick()
+    expect(text(w, 'leg-status')).toContain('PAID · reconciled as of')
+  })
+
+  it('Refresh re-reads an execution this tab sent', async () => {
+    let body = executionBody({ legs: [paidPayout()] })
+    const { w } = await reviewReady({
+      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'GET /executions/apr-1': () => body
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'leg-status')).toContain('reconciled as of')
+    const leg = paidPayout()
+    body = executionBody({ legs: [leg], incidents: [{ incident_id: 'inc-1', leg_id: leg.leg_id, kind: 'paid_then_failed', state: 'open', opened_at: '2026-11-05T10:05:00Z' }] })
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'incident')).toContain('paid then failed')
+  })
+
+  it('a query-only navigation reloads the screen for the new run', async () => {
+    const other = { ...decisionsBody(), run_id: 'run-2' }
+    serve({ 'GET /overview': overview(), 'GET /decisions/run-1': decisionsBody(), 'GET /decisions/run-2': other })
+    const w = await open(Decisions, '/decisions?run_id=run-1')
+    expect(text(w, 'cohort')).toContain('Run run-1')
+    await w.vm.$router.push('/decisions?run_id=run-2')
+    await flushPromises()
+    expect(text(w, 'cohort')).toContain('Run run-2')
+  })
+
+  it('the review cannot be closed while the execution POST is in flight', async () => {
+    let release
+    const { w } = await reviewReady({
+      'POST /executions': () => new Promise((resolve) => { release = resolve })
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.get('[data-test="review"]').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(w.find('[data-test="review"]').exists()).toBe(true)
+    release(refuse(409, 'snapshot_moved'))
+    await flushPromises()
+    expect(text(w, 'execute-why')).toBe(kase('snapshot-moved').expect.message)
+  })
+
+  it('an execution the server does not have is unavailable, not polled forever', async () => {
+    fakeTimers()
+    const calls = serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-9' }),
+      'GET /decisions/run-1': decisionsBody()
+    })
+    const w = await open(Execution, '/execution')
+    await tick()
+    await tick()
+    expect(gets(calls, '/executions/apr-9')).toHaveLength(1)
+    expect(text(w, 'not-found')).toContain('unavailable')
+  })
+})

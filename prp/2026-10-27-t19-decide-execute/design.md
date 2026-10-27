@@ -1,6 +1,6 @@
 # T19 · Decisions and Execution — build design
 
-> Design output (dev-build stage 2, Large, architect shape). Source: `briefs/T19.md` and
+> Build design (Large). Source: `briefs/T19.md` and
 > `design/modules/ui/HANDOFF.md` (the module design; this file records only the build decisions it
 > leaves open). Next: implement → vet → close. No design page was pushed: the module design is the
 > visual reference and this run has no reviewer to show one to.
@@ -71,10 +71,9 @@
   cost and labelled as such.
 - **No setup movements in `ExecutionResponse`**: setup funding (Mode B) is not on this screen.
 
-## Run footer
+## Design run
 
-ARCHITECT · tier=Brief · signals={reviewer: none, irreversible: no, unbackfillable: token and
-single-POST invariants (carried from the module design), contested: no, modules: 1} ·
-thresholds=v2. GROUND, FRAME and SHAPE are the module design's (`design/modules/ui/HANDOFF.md`,
-its consumers and rejected shapes); this note adds only build decisions. No reviewer pack; no
-publish (unattended run, no tap); PROVE is the fresh-eyes pass folded into the vet round.
+Size: one module, no named reviewer, nothing irreversible. The consumers, invariants and
+rejected shapes are the module design's (`design/modules/ui/HANDOFF.md`); this note adds only
+build decisions. No design page was published. The review pass is the vet round
+(`vet-report.md`).

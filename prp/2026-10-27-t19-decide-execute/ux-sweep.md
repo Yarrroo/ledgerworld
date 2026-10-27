@@ -1,6 +1,6 @@
 # UX sweep: Decisions and Execution
 
-> Evidence (dev-ux, standard depth). Source: design.md. Engine: Playwright MCP (Chromium) against
+> UX evidence. Source: design.md. Engine: Playwright MCP (Chromium) against
 > `vite` dev on :3193. A local mock answered the API: decisions were built from the T11
 > policy-comparison fixture, the approval from the C3 example with a 15-minute expiry from now,
 > and the execution from the C6 example plus a PAID payout. Screenshots are in `ux/`.
@@ -27,3 +27,8 @@ Fixed during the sweep:
 Not done here: there is no durable viewport test, because this repo has no Playwright harness
 (`e2e/` belongs to T26). Contrast was not measured on the rendered page; these views add no new
 colour pairs beyond the T17 tokens.
+
+**Re-sweep after vet round 2** (a "no legs yet" note, the wording for an unknown execution, and
+Close disabled while a POST is in flight): at 390 px, Execution with receipts and with an
+execution the server has no record of. No horizontal scroll, no control under 44 px. The one
+console error is the browser's own log of the expected 404.

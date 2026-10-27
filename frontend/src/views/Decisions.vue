@@ -71,7 +71,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
   ApiError, LABELS, STATES, ScreenShell, formatMoney, getOverview, metricText, money, request,
@@ -88,6 +88,8 @@ const { state, refresh } = useReading(async () => {
   if (!runId) throw new ApiError(404, 'no_demo_run', 'No demonstration run is prepared')
   return request(`/decisions/${encodeURIComponent(runId)}`)
 })
+// The view is reused across query-only navigation: another run is another reading.
+watch(() => route.query.run_id, () => refresh())
 
 /** A reverse-stress search finds a breaking path: not a forecast, and not a decision. */
 const search = computed(() => /reverse[_-]stress/.test(state.body?.cohort ?? ''))

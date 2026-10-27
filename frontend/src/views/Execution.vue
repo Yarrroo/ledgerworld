@@ -35,7 +35,10 @@
     <section aria-labelledby="receipts-heading" data-test="receipts">
       <h2 id="receipts-heading">Provider state and receipts</h2>
       <p v-if="notFound" class="lw-note" role="status" data-test="not-found">
-        No execution is recorded yet for {{ activeId }}; this does not mean it failed. Reading again.
+        <template v-if="followedId === activeId">
+          No execution is recorded yet for {{ activeId }}; this does not mean it failed. Reading again.
+        </template>
+        <template v-else>Execution {{ activeId }} is unavailable: the server has no record of it.</template>
       </p>
       <p v-if="pollError" class="lw-note" data-test="poll-error">
         {{ STATES.error.icon }} {{ STATES.error.word }}: {{ pollError }}
@@ -47,6 +50,9 @@
         <p class="lw-time">
           {{ LABELS[execution.mode] || execution.mode }} · approval {{ execution.approval_id }} ·
           observed snapshot {{ execution.snapshot_id }} · read {{ formatTime(execution.as_of).utc }}
+        </p>
+        <p v-if="!legs.length" class="lw-note" role="status" data-test="no-legs">
+          No legs are recorded yet for this execution; reading again.
         </p>
         <ol class="lw-legs">
           <li v-for="leg in legs" :key="leg.leg_id" class="lw-tile" :data-test="`leg-${leg.kind}`">
@@ -104,7 +110,7 @@
           <div class="lw-actions">
             <button type="button" class="lw-button" data-test="confirm" :disabled="!!confirmWhy"
                     aria-describedby="confirm-why" @click="confirmApproval">Confirm approval</button>
-            <button type="button" class="lw-button lw-button--quiet" @click="closeReview">Cancel</button>
+            <button type="button" class="lw-button lw-button--quiet" :disabled="flow.submitting" @click="closeReview">Cancel</button>
             <span id="confirm-why" class="lw-time" data-test="confirm-why">{{ confirmWhy }}</span>
           </div>
         </template>
@@ -141,7 +147,7 @@
           <div class="lw-actions">
             <button type="button" class="lw-button" data-test="execute" :disabled="!!executeWhy"
                     aria-describedby="execute-why" @click="executePlan">Execute approved plan</button>
-            <button type="button" class="lw-button lw-button--quiet" @click="closeReview">Close</button>
+            <button type="button" class="lw-button lw-button--quiet" :disabled="flow.submitting" @click="closeReview">Close</button>
             <span id="execute-why" class="lw-time" role="status" data-test="execute-why">{{ executeWhy }}</span>
           </div>
         </template>
@@ -298,6 +304,7 @@ async function openReview () {
 }
 
 async function closeReview () {
+  if (flow.submitting) return // the answer to an in-flight POST is shown where it was asked
   flow.open = false
   if (flow.invalid || flow.executed || (flow.approval && executeWhy.value && !authority.value)) {
     flow.approval = null
@@ -345,8 +352,8 @@ async function executePlan () {
     flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
     follow(answer.execution_id)
   } catch (error) {
-    flow.submitting = false
     if (!unanswered(error)) {
+      flow.submitting = false
       flow.invalid = refusal(error)
       return
     }
@@ -365,17 +372,27 @@ const notFound = shallowRef(false)
 const pollError = shallowRef('')
 const guard = latestOnly()
 let timer = null
-let followed = false
-let autoReviewed = false // review=1 opens the review once, not on every refresh // an execution this tab sent: a refresh never swaps it for another
+const followedId = shallowRef(null)
+let followed = false // an execution this tab sent: a refresh re-reads it, never swaps it for another
+let autoReviewed = false // review=1 opens the review once, not on every refresh
 
 const execution = computed(() =>
   live.value ?? (state.body?.execution?.execution_id === activeId.value ? state.body.execution : null))
 
-const unsettled = (body) => body && body.legs.some((l) => UNSETTLED.has(l.state))
+/** Still moving: no legs queued yet, or a leg neither final nor reconciled. */
+const moving = (body) => !body.legs.length ||
+  body.legs.some((l) => UNSETTLED.has(l.state) || (!l.reconciled && l.state !== 'failed'))
 
-function schedule (body) {
+/**
+ * Read again in 5 s while the outcome is open. An execution this tab sent is read until a read
+ * shows it finished, whatever the last read returned; one named by the context is read only
+ * while a loaded answer shows it moving, so an id the server does not have is not polled.
+ */
+function schedule () {
   clearTimeout(timer)
-  timer = (notFound.value || unsettled(body)) ? setTimeout(poll, POLL_MS) : null
+  const body = execution.value
+  const keep = followed ? (!body || moving(body)) : Boolean(body && moving(body))
+  timer = keep ? setTimeout(poll, POLL_MS) : null
 }
 
 /** Read an execution's state by id; out-of-order or other-execution answers are dropped. */
@@ -394,11 +411,12 @@ async function poll () {
     if (error.status === 404) notFound.value = true
     else pollError.value = error.message
   }
-  schedule(live.value)
+  schedule()
 }
 
 function follow (id) {
   followed = true
+  followedId.value = id
   activeId.value = id
   guard.select(id)
   live.value = null
@@ -407,17 +425,34 @@ function follow (id) {
 }
 
 watch(() => state.body, (body) => {
-  if (!body || followed) return
+  if (!body) return
+  if (followed) {
+    poll() // Refresh re-reads the execution this tab sent
+    return
+  }
   activeId.value = body.execution_id
   guard.select(body.execution_id)
   live.value = null
   notFound.value = Boolean(body.execution_id && !body.execution)
   pollError.value = ''
-  schedule(body.execution)
+  schedule()
   if (route.query.review === '1' && !autoReviewed && !reviewWhy.value) {
     autoReviewed = true
     openReview()
   }
+})
+
+// The view is reused across query-only navigation: a new run or execution is a new screen.
+watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
+  if (flow.submitting) return
+  flow.open = false
+  Object.assign(flow, { approval: null, invalid: '', executed: false, message: '' })
+  followed = false
+  followedId.value = null
+  activeId.value = null
+  live.value = null
+  clearTimeout(timer)
+  refresh()
 })
 
 onUnmounted(() => {
