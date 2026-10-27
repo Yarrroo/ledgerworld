@@ -4,6 +4,7 @@ Stdlib only. Downloads the pinned wheels into a temp dir, checks their sha256,
 parses the sources with ast and asserts every seam (S1..S13) still has the shape
 the research note claims. Also checks that the note's seam table names exactly
 the ids and file:symbol pairs checked here, and runs the Python 3.12 scan.
+Checks raise explicitly, so `python -O` cannot strip them.
 
 Run: python3 -I prp/2026-10-20-ledgerworld/research/oasis_seam_probe.py
 """
@@ -29,11 +30,25 @@ OASIS_WHL = (
     "camel_oasis-0.2.5-py3-none-any.whl"
 )
 OASIS_SHA = "9ebd6ba8e331495ee56b25cc63982188b94125dde499e5e9c00398a1d47e606d"
-CAMEL_JSON = "https://pypi.org/pypi/camel-ai/0.2.78/json"
+CAMEL_WHL = (
+    "https://files.pythonhosted.org/packages/01/81/"
+    "0cfb1c0d9da589665e2eb4471887967e70bba428638c37fb4f6a78baf300/"
+    "camel_ai-0.2.78-py3-none-any.whl"
+)
 CAMEL_SHA = "356624da13dfe0c55ef43dc509c18ce029f67fe3997966495a4ce9be931078d5"
 OASIS_JSON = "https://pypi.org/pypi/camel-oasis/0.2.5/json"
+CAMEL_JSON = "https://pypi.org/pypi/camel-ai/0.2.78/json"
 NOTE = pathlib.Path(__file__).with_name("oasis-seam.md")
 REMOVED_IN_312 = {"distutils", "imp", "asynchat", "asyncore", "smtpd"}
+
+
+class ProbeFailure(AssertionError):
+    pass
+
+
+def check(cond: object, msg: str) -> None:
+    if not cond:
+        raise ProbeFailure(msg)
 
 
 def fetch(url: str) -> bytes:
@@ -41,15 +56,14 @@ def fetch(url: str) -> bytes:
         return r.read()
 
 
-def wheel(url: str, sha: str, dest: pathlib.Path, members: str) -> pathlib.Path:
+def wheel(url: str, sha: str, dest: pathlib.Path, members: str) -> None:
     blob = fetch(url)
     got = hashlib.sha256(blob).hexdigest()
-    assert got == sha, f"sha256 mismatch for {url}: {got}"
+    check(got == sha, f"sha256 mismatch for {url}: {got}")
     with zipfile.ZipFile(io.BytesIO(blob)) as z:
         for name in z.namelist():
             if name.startswith(members) and name.endswith(".py"):
                 z.extract(name, dest)
-    return dest
 
 
 class Src:
@@ -71,20 +85,19 @@ class Src:
                 if isinstance(n, (ast.ClassDef, ast.FunctionDef,
                                   ast.AsyncFunctionDef)) and n.name == part
             ]
-            assert found, f"{rel}:{qual} — symbol {part!r} missing"
+            check(found, f"{rel}:{qual} — symbol {part!r} missing")
             node = found[0]
         return node
 
 
+def call_name(c: ast.Call) -> str | None:
+    f = c.func
+    return f.id if isinstance(f, ast.Name) else getattr(f, "attr", None)
+
+
 def calls(node: ast.AST, name: str) -> list[ast.Call]:
-    out = []
-    for n in ast.walk(node):
-        if isinstance(n, ast.Call):
-            f = n.func
-            fn = f.id if isinstance(f, ast.Name) else getattr(f, "attr", None)
-            if fn == name:
-                out.append(n)
-    return out
+    return [n for n in ast.walk(node)
+            if isinstance(n, ast.Call) and call_name(n) == name]
 
 
 def inside_try(fn: ast.AST, target: ast.AST) -> bool:
@@ -96,6 +109,10 @@ def inside_try(fn: ast.AST, target: ast.AST) -> bool:
     return False
 
 
+def handlers(fn: ast.AST) -> list[ast.ExceptHandler]:
+    return [h for t in ast.walk(fn) if isinstance(t, ast.Try) for h in t.handlers]
+
+
 def src_text(node: ast.AST) -> str:
     return ast.unparse(node)
 
@@ -105,96 +122,114 @@ def src_text(node: ast.AST) -> str:
 def s1(s, n):
     names = [t.id for st in n.body if isinstance(st, ast.Assign)
              for t in st.targets if isinstance(t, ast.Name)]
-    assert [b.id for b in n.bases] == ["Enum"] and names, "ActionType not an Enum with members"
-    assert "DISBURSE" not in names and "PAY" not in names
+    check([b.id for b in n.bases] == ["Enum"] and names, "ActionType not an Enum with members")
+    check("DISBURSE" not in names and "PAY" not in names, "ActionType grew finance members")
 
 
 def s2(s, n):
     coerce = calls(n, "ActionType")
-    assert coerce, "running() no longer coerces with ActionType(...)"
-    assert not any(isinstance(t, ast.Try) for t in ast.walk(n)), "running() now catches"
-    assert "co_argcount" in src_text(n), "running() no longer introspects __code__"
+    check(coerce, "running() no longer coerces with ActionType(...)")
+    check(not any(inside_try(n, c) for c in coerce), "ActionType(...) coercion is now guarded")
+    check("if len_param_names > 3:" in src_text(n), "handler arity limit is no longer 3")
 
 
 def s3(s, n):
     text = src_text(n)
-    for name in ("self.purchase_product", "self.interview", "self.do_nothing"):
-        assert name in text, f"{name} left the fixed tool list"
-    assert "self.sign_up" not in text
+    tools = re.findall(r"self\.(\w+)", text)
+    check(len(tools) == 29, f"social tool list is {len(tools)}, not 29")
+    for name in ("purchase_product", "interview", "do_nothing"):
+        check(name in tools, f"{name} left the fixed tool list")
+    check("sign_up" not in tools, "sign_up joined the tool list")
 
 
 def s4(s, n):
     text = src_text(n)
-    assert "self.env = SocialEnvironment(SocialAction(" in text, "env is now injectable"
-    assert "all_tools = (tools or []) + (self.action_tools or [])" in text
-    assert "if not available_actions:" in text, "empty available_actions no longer means all"
+    check("self.env = SocialEnvironment(SocialAction(" in text, "env is now injectable")
+    check("all_tools = (tools or []) + (self.action_tools or [])" in text, "tools= no longer concatenated")
+    check("if not available_actions:" in text, "empty available_actions no longer means all")
     body = [src_text(st) for st in n.body]
     sup = next((i for i, t in enumerate(body) if t.startswith("super().__init__(")), None)
     mi = next((i for i, t in enumerate(body) if t == "self.max_iteration = max_iteration"), None)
-    assert sup is not None and mi is not None and mi > sup, \
-        "max_iteration no longer set after ChatAgent.__init__"
-    assert "max_iteration" not in src_text(n.body[sup])
+    check(sup is not None and mi is not None and mi > sup,
+          "max_iteration no longer set after ChatAgent.__init__")
+    check("max_iteration" not in body[sup], "max_iteration now passed to ChatAgent")
 
 
 def s5(s, n):
-    assert calls(n, "to_text_prompt"), "prompt no longer from env.to_text_prompt"
-    handlers = [h for t in ast.walk(n) if isinstance(t, ast.Try) for h in t.handlers]
-    assert any(isinstance(st, ast.Return) and isinstance(st.value, ast.Name)
-               and st.value.id == h.name for h in handlers for st in h.body), \
-        "exceptions are no longer returned as values"
+    check(calls(n, "to_text_prompt"), "prompt no longer from env.to_text_prompt")
+    check(any(isinstance(st, ast.Return) and isinstance(st.value, ast.Name)
+              and st.value.id == h.name for h in handlers(n) for st in h.body),
+          "exceptions are no longer returned as values")
 
 
 def s6(s, n):
-    assert calls(n, "get_openai_function_list")
-    assert any(isinstance(t, ast.Raise) for t in ast.walk(n))
+    check(calls(n, "get_openai_function_list"), "ManualAction no longer searches SocialAction")
+    check(any(isinstance(t, ast.Raise) for t in ast.walk(n)), "unknown name no longer raises")
 
 
 def s7(s, n):
-    sub = [t for t in ast.walk(n) if isinstance(t, ast.Subscript)
-           and "_internal_tools" in src_text(t.value)]
-    assert sub and not inside_try(n, sub[0]), "unknown tool lookup is now guarded"
-    handlers = [h for t in ast.walk(n) if isinstance(t, ast.Try) for h in t.handlers]
-    assert any("Tool execution failed" in src_text(h) for h in handlers), \
-        "tool exceptions no longer become a string result"
+    subs = [t for t in ast.walk(n) if isinstance(t, ast.Subscript)
+            and "_internal_tools" in src_text(t.value)]
+    check(subs and not any(inside_try(n, t) for t in subs), "unknown tool lookup is now guarded")
+    check("_internal_tools.get(" not in src_text(n), "tool lookup now uses .get()")
+    check(any("Tool execution failed" in src_text(h) for h in handlers(n)),
+          "tool exceptions no longer become a string result")
 
 
 def s8(s, n):
-    assert "_internal_tools" in src_text(n)
+    check("_internal_tools" in src_text(n), "add_tool no longer registers an executable tool")
+    s.sym("camel/agents/chat_agent.py", "ChatAgent.add_external_tool")
 
 
 def s9(s, n):
-    text = src_text(n)
-    assert "clock" not in text and "time" not in text, "observation now time-scoped"
+    used = {call_name(c) for c in ast.walk(n) if isinstance(c, ast.Call)}
+    expected = {"get_followers_env", "get_follows_env", "get_posts_env",
+                "get_group_env", "substitute"}
+    check(used == expected, f"to_text_prompt now calls {sorted(used - expected)} — re-read for scoping")
 
 
 def s10(s, n):
     g = calls(n, "gather")
-    assert g and not any(k.arg == "return_exceptions" for k in g[0].keywords)
+    check(g and not any(k.arg == "return_exceptions" for k in g[0].keywords),
+          "gather now sets return_exceptions")
     incr = [t for t in ast.walk(n) if isinstance(t, ast.If)
             and "TWITTER" in src_text(t.test)
             and "time_step += 1" in src_text(t)]
-    assert incr, "clock advance no longer limited to TWITTER"
+    check(incr, "clock advance no longer limited to TWITTER")
 
 
 def s11(s, n):
     text = src_text(n)
-    assert "isinstance(platform, Platform)" in text
-    assert "platform.recsys_type == RecsysType.REDDIT" in text
+    check("isinstance(platform, Platform)" in text, "custom Platform instance no longer accepted")
+    check("platform.recsys_type == RecsysType.REDDIT" in text, "platform type no longer from recsys_type")
 
 
 def s12(s, n):
+    check("self.k" in src_text(n), "time_transfer no longer scales by k")
     init = s.sym("oasis/clock/clock.py", "Clock.__init__")
-    assert "datetime.now()" in src_text(init), "Clock no longer wall-clock based"
+    check("datetime.now()" in src_text(init), "Clock no longer wall-clock based")
 
 
 def s13(s, n):
     mod = s.tree("oasis/social_agent/agents_generator.py")
-    gens = [f for f in mod.body if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and f.name.startswith("generate_") and calls(f, "SocialAgent")]
-    assert len(gens) >= 3, "generators no longer hard-code SocialAgent(...)"
+    built = {call_name(c) for f in mod.body
+             if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
+             for c in ast.walk(f) if isinstance(c, ast.Call)
+             and (call_name(c) or "").endswith("Agent")}
+    check(built == {"SocialAgent"}, f"generators now build {built}")
+    check(calls(n, "SocialAgent"), "generate_twitter_agent_graph no longer builds SocialAgent")
     env = s.tree("oasis/environment/env.py")
-    top = [st for st in env.body if isinstance(st, ast.If)]
-    assert any(calls(st, "makedirs") for st in top), "./log side effect gone"
+    check(any(calls(st, "makedirs") for st in env.body if isinstance(st, ast.If)),
+          "env.py no longer creates ./log at import")
+    agent = s.tree("oasis/social_agent/agent.py")
+    check(any(calls(st, "FileHandler") for st in agent.body if isinstance(st, ast.If)),
+          "agent.py no longer opens a log file at import")
+    recsys = s.tree("oasis/social_platform/recsys.py")
+    check(any(isinstance(st, ast.Import) and st.names[0].name == "torch" for st in recsys.body),
+          "recsys no longer imports torch at module level")
+    plat = s.tree("oasis/social_platform/platform.py")
+    check(any(isinstance(st, ast.ImportFrom) and st.module == "oasis.social_platform.recsys"
+              for st in plat.body), "platform no longer imports recsys at module level")
 
 
 SEAMS = {
@@ -214,17 +249,26 @@ SEAMS = {
 }
 
 
-def check_note() -> None:
-    rows = re.findall(r"^\| (S\d+) \| `([^`]+):([^`]+)` \|", NOTE.read_text(encoding="utf-8"), re.M)
-    in_note = {i: (f, q) for i, f, q in rows}
-    in_probe = {i: (f, q) for i, (f, q, _) in SEAMS.items()}
-    assert in_note == in_probe, f"note table and probe disagree:\n{in_note}\n{in_probe}"
+def check_note(note: pathlib.Path = NOTE) -> None:
+    text = note.read_text(encoding="utf-8")
+    seam_lines = re.findall(r"^\|\s*\**S\d+\b.*$", text, re.M)
+    rows = re.findall(r"^\| (S\d+) \| `([^`]+):([^`]+)` \|", text, re.M)
+    check(len(rows) == len(seam_lines), "a seam row in the note is not in `| Sn | `file:sym` |` form")
+    ids = [i for i, _, _ in rows]
+    check(len(ids) == len(set(ids)), f"duplicate seam ids in the note: {ids}")
+    in_note = sorted(rows)
+    in_probe = sorted((i, f, q) for i, (f, q, _) in SEAMS.items())
+    check(in_note == in_probe, f"note table and probe disagree:\n{in_note}\n{in_probe}")
 
 
 def check_312(root: pathlib.Path) -> list[str]:
+    check(sys.version_info[:2] >= (3, 12), f"the 3.12 scan needs Python >= 3.12, got {sys.version.split()[0]}")
     report = []
-    meta = json.loads(fetch(OASIS_JSON))
-    report.append(f"camel-oasis 0.2.5 requires_python = {meta['info']['requires_python']!r}")
+    oasis_rp = json.loads(fetch(OASIS_JSON))["info"]["requires_python"]
+    check(oasis_rp == "<3.12,>=3.10.0", f"camel-oasis requires_python changed: {oasis_rp!r}")
+    camel_rp = json.loads(fetch(CAMEL_JSON))["info"]["requires_python"]
+    check(camel_rp == "<3.13,>=3.10", f"camel-ai requires_python changed: {camel_rp!r}")
+    report.append(f"requires_python: camel-oasis {oasis_rp!r}, camel-ai {camel_rp!r}")
     for p in sorted((root / "oasis").rglob("*.py")):
         text = p.read_text(encoding="utf-8")
         with warnings.catch_warnings():
@@ -237,9 +281,9 @@ def check_312(root: pathlib.Path) -> list[str]:
             elif isinstance(n, ast.ImportFrom) and n.module and n.level == 0:
                 mods = [n.module.split(".")[0]]
             bad = REMOVED_IN_312.intersection(mods)
-            assert not bad, f"{p.relative_to(root)} imports {bad} (removed in 3.12)"
-            assert "unstructured" not in mods, f"{p} imports unstructured (<3.12 only)"
-        assert "get_event_loop" not in text, f"{p} uses asyncio.get_event_loop"
+            check(not bad, f"{p.relative_to(root)} imports {bad} (removed in 3.12)")
+            check("unstructured" not in mods, f"{p} imports unstructured (<3.12 only)")
+        check("get_event_loop" not in text, f"{p} uses asyncio.get_event_loop")
     report.append(f"oasis sources compile clean on Python {sys.version.split()[0]} "
                   "(SyntaxWarning=error); no distutils/imp/asyncore/asynchat/smtpd, "
                   "no get_event_loop, no unstructured import")
@@ -250,12 +294,10 @@ def main() -> int:
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="oasis-seam-"))
     try:
         wheel(OASIS_WHL, OASIS_SHA, tmp, "oasis/")
-        camel = json.loads(fetch(CAMEL_JSON))
-        url = next(u["url"] for u in camel["urls"] if u["filename"].endswith(".whl"))
-        wheel(url, CAMEL_SHA, tmp, "camel/agents/chat_agent.py")
+        wheel(CAMEL_WHL, CAMEL_SHA, tmp, "camel/agents/chat_agent.py")
         src = Src(tmp)
-        for sid, (rel, qual, check) in SEAMS.items():
-            check(src, src.sym(rel, qual))
+        for sid, (rel, qual, fn) in SEAMS.items():
+            fn(src, src.sym(rel, qual))
             print(f"ok {sid} {rel}:{qual}")
         check_note()
         print(f"ok note table matches {len(SEAMS)} seams")

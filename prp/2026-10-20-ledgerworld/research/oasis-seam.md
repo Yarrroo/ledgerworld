@@ -59,7 +59,7 @@ ok S11 oasis/environment/env.py:OasisEnv.__init__
 ok S12 oasis/clock/clock.py:Clock.time_transfer
 ok S13 oasis/social_agent/agents_generator.py:generate_twitter_agent_graph
 ok note table matches 13 seams
-ok camel-oasis 0.2.5 requires_python = '<3.12,>=3.10.0'
+ok requires_python: camel-oasis '<3.12,>=3.10.0', camel-ai '<3.13,>=3.10'
 ok oasis sources compile clean on Python 3.12.3 (SyntaxWarning=error); no distutils/imp/asyncore/asynchat/smtpd, no get_event_loop, no unstructured import
 PASS
 rc=0
