@@ -1,0 +1,110 @@
+{
+ "about": "GET /api/v1/lending on LF-2 at t0 (ui money-views.json, lf2-before): K_p = 42,000.00 and its parts. Recorded from the API.",
+ "def": "LendingResponse",
+ "valid": true,
+ "instance": {
+  "as_of": "2026-01-05T00:00:00Z",
+  "capacity": {
+   "K_p": {
+    "as_of": "2026-01-05T00:00:00Z",
+    "currency": "USD",
+    "minor": 4200000,
+    "status": "known"
+   },
+   "authority": "full",
+   "parts": {
+    "committed_undrawn": {
+     "as_of": "2026-01-05T00:00:00Z",
+     "currency": "USD",
+     "minor": 1000000,
+     "status": "known"
+    },
+    "floor": {
+     "as_of": "2026-01-05T00:00:00Z",
+     "currency": "USD",
+     "minor": 800000,
+     "status": "known"
+    },
+    "obligations_due": {
+     "as_of": "2026-01-05T00:00:00Z",
+     "currency": "USD",
+     "minor": 0,
+     "status": "known"
+    },
+    "pledged": {
+     "as_of": "2026-01-05T00:00:00Z",
+     "currency": "USD",
+     "minor": 0,
+     "status": "known"
+    },
+    "settled_known": {
+     "as_of": "2026-01-05T00:00:00Z",
+     "currency": "USD",
+     "minor": 6000000,
+     "status": "known"
+    }
+   }
+  },
+  "facilities": [
+   {
+    "borrower": "borrower-a",
+    "facility_id": "adv-a",
+    "fee": {
+     "currency": "USD",
+     "minor": 80000
+    },
+    "kind": "revenue_advance",
+    "observed_revenue": {
+     "as_of": null,
+     "currency": "USD",
+     "minor": null,
+     "status": "unassessed"
+    },
+    "outstanding": {
+     "currency": "USD",
+     "minor": 0
+    },
+    "owed": {
+     "currency": "USD",
+     "minor": 1080000
+    },
+    "principal": {
+     "currency": "USD",
+     "minor": 1000000
+    },
+    "state": "offered"
+   },
+   {
+    "borrower": "borrower-b",
+    "facility_id": "line-b",
+    "fee": {
+     "currency": "USD",
+     "minor": 0
+    },
+    "kind": "committed_line",
+    "observed_revenue": {
+     "as_of": null,
+     "currency": "USD",
+     "minor": null,
+     "status": "unassessed"
+    },
+    "outstanding": {
+     "currency": "USD",
+     "minor": 0
+    },
+    "owed": {
+     "currency": "USD",
+     "minor": 0
+    },
+    "principal": {
+     "currency": "USD",
+     "minor": 1000000
+    },
+    "state": "active"
+   }
+  ],
+  "mode": "fake",
+  "pool": "lender",
+  "snapshot_id": "obs-lf"
+ }
+}

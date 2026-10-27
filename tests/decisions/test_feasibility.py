@@ -98,6 +98,111 @@ def test_the_escalation_says_the_binding_balance_was_unknown(obligation_minor, u
     assert result.escalation["binding"] == binding
 
 
+@pytest.mark.parametrize(("paid_h", "met"), [(12, True), (20, False)])
+def test_a_committed_obligation_is_met_only_when_its_flow_landed_by_its_due_round(paid_h, met):
+    """Paid through its committed reservation, an obligation has no journal of its own: the flow's
+    settlement journal dates the payment, so one that landed after its due round is unmet even
+    though the ledger marks it met."""
+    from app.decisions.objective import Evaluation, rank
+    from app.finance.ledger import settle_due
+
+    w = world()
+    res = w.store.hold(ACCOUNT, 300_000, now=T0, purpose="payroll")
+    w.store.add_obligation("ob-1", ACCOUNT, 300_000, T0 + timedelta(hours=12), kind="payroll",
+                           reservation_id=res)
+    w.store.commit(res, due_at=T0 + timedelta(hours=paid_h), kind="payroll")
+    for h in range(4, 24, 4):
+        settle_due(w.store, T0 + timedelta(hours=h), round=h // 4)
+    assert w.store.rows("obligations")[0]["state"] == "met"  # the ledger says met either way
+    f = assess(w, ACCOUNT, from_round=0, to_round=5, observability=seen(set()))
+    (ob,) = f.obligations
+    assert (ob.id, ob.due_h, ob.met) == ("ob-1", 12, met)
+    assert f.feasible is met
+    if not met:  # 1,000,000 settled at t=12, nothing else reserved: the cash was there, late
+        assert ob.short_minor == 0
+        result = rank([Evaluation("s1", "integrated", "b", f)], escalate_to="treasury operator")
+        assert result.escalation["binding"] == (
+            "ob-1 3,000.00 not paid by its deadline, though free cash covered it at t=12")
+
+
+def test_a_committed_payment_under_a_journal_of_its_own_naming_falls_back_to_the_state():
+    """A settlement whose journal id the caller named (the execution gateway's ``j-<leg>``) dates
+    nothing feasibility can find; the obligation is then judged by the state the ledger left."""
+    w = world()
+    res = w.store.hold(ACCOUNT, 300_000, now=T0, purpose="payroll")
+    w.store.add_obligation("ob-1", ACCOUNT, 300_000, T0 + timedelta(hours=12), kind="payroll",
+                           reservation_id=res)
+    w.store.commit(res, due_at=T0 + timedelta(hours=8), kind="payroll")
+    w.store.settle(res, to_account="a/opening", at=T0 + timedelta(hours=8), journal_id="j-leg-1",
+                   round=2)
+    f = assess(w, ACCOUNT, from_round=0, to_round=5, observability=seen(set()))
+    (ob,) = f.obligations
+    assert (ob.id, ob.met) == ("ob-1", True)
+
+
+def top_up(w: SimpleNamespace, minor: int, round_: int) -> None:
+    w.store.apply(Journal(f"top-up-{round_}", (Posting(ACCOUNT, minor),
+                                               Posting("a/opening", -minor)),
+                          round=round_, sim_time=T0 + timedelta(hours=4 * round_)))
+
+
+@pytest.mark.parametrize(("amount", "paid_round", "short", "unknown"), [
+    (1_500_000, None, 500_000, set()),  # never paid: 1,500,000 against 1,000,000 free at t=12
+    (900_000, 3, 0, set()),  # paid at its first chance: cash read before it went out
+    (1_500_000, 4, 500_000, set()),  # paid a round later, after a top-up: short at t=12
+    (900_000, 3, 900_000, {3}),  # paid there, but that round end was unknown: nothing usable
+    (300_000, 1, None, set()),  # paid by the checkpoint: history, not the branch's outcome
+])
+def test_an_obligation_outstanding_at_the_checkpoint_is_carried_with_its_deadline(
+        amount, paid_round, short, unknown):
+    """Due at t=4 (round 1), assessed after the checkpoint at round 2: an obligation still owed
+    there is unmet and overdue since its own deadline, short by what its first chance in the
+    branch (t=12) could not pay; one already settled is left out."""
+    from app.finance.ledger import settle_due
+
+    w = world()
+    w.store.add_obligation("ob-0", ACCOUNT, amount, T0 + timedelta(hours=4), kind="payroll")
+    if paid_round == 4:
+        top_up(w, 1_000_000, 4)
+    if paid_round is not None:
+        settle_due(w.store, T0 + timedelta(hours=4 * paid_round), round=paid_round)
+    f = assess(w, ACCOUNT, from_round=2, to_round=5, observability=seen(unknown, range(3, 6)))
+    if short is None:
+        assert f.obligations == () and f.feasible
+        return
+    (ob,) = f.obligations
+    assert (ob.id, ob.due_h, ob.met, ob.short_minor, ob.overdue_h) == ("ob-0", 4, False, short, 12)
+    assert (ob.checked_h, ob.as_dict()["overdue_h"]) == (12, 12)
+    assert not f.feasible
+
+
+@pytest.mark.parametrize(("unknown", "amount", "paid", "binding"), [
+    (set(), 1_500_000, False, ("free cash 10,000.00 at t=12 < ob-0 15,000.00 overdue since t=4; "
+                               "no reservation is touched")),
+    ({3}, 1_500_000, False, ("free cash 0.00 at t=12 (balance unknown) < ob-0 15,000.00 overdue "
+                             "since t=4; no reservation is touched")),
+    (set(), 1_500_000, True, ("ob-0 15,000.00 overdue since t=4 not paid by its deadline, though "
+                              "free cash covered it at t=12")),
+    (set(), 300_000, False, ("ob-0 3,000.00 overdue since t=4 not paid by its deadline, though "
+                             "free cash covered it at t=12")),  # covered, and still not paid
+])
+def test_the_escalation_names_an_obligation_overdue_at_the_checkpoint(
+        unknown, amount, paid, binding):
+    """It binds before anything due in the branch, by its original deadline."""
+    from app.decisions.objective import Evaluation, rank
+    from app.finance.ledger import settle_due
+
+    w = world(obligation_minor=1_500_000)  # ob-1, due at t=12 inside the branch
+    w.store.add_obligation("ob-0", ACCOUNT, amount, T0 + timedelta(hours=4), kind="payroll")
+    if paid:
+        top_up(w, 1_000_000, 2)
+        settle_due(w.store, T0 + timedelta(hours=12), round=3)
+    f = assess(w, ACCOUNT, from_round=2, to_round=5,
+               observability=seen(unknown, range(3, 6)))
+    result = rank([Evaluation("s1", "integrated", "b", f)], escalate_to="treasury operator")
+    assert result.escalation["binding"] == binding
+
+
 def test_a_round_with_no_recorded_observability_is_refused():
     with pytest.raises(ValueError, match=r"rounds \[4, 5\]"):
         assess(world(), ACCOUNT, from_round=0, to_round=5,

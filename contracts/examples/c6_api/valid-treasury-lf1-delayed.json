@@ -1,0 +1,116 @@
+{
+ "about": "GET /api/v1/treasury on LF-1 at t0 with the receivable delayed 240 h (ui money-views.json, receipt-delayed-240h): P(t=40) = 20,000.00 under the 30,000.00 floor. Recorded from the API.",
+ "def": "TreasuryResponse",
+ "valid": true,
+ "instance": {
+  "accounts": [
+   {
+    "as_of": "2026-01-05T00:00:00Z",
+    "authority": "full",
+    "buckets": {
+     "pending_in": [
+      {
+       "amount": {
+        "currency": "USD",
+        "minor": 1500000
+       },
+       "expected_at": "2026-01-07T00:00:00Z",
+       "flow_id": "wd-1",
+       "kind": "exchange withdrawal",
+       "reservation_id": null
+      },
+      {
+       "amount": {
+        "currency": "USD",
+        "minor": 2000000
+       },
+       "expected_at": "2026-01-15T12:00:00Z",
+       "flow_id": "rcv-1",
+       "kind": "receivable",
+       "reservation_id": null
+      }
+     ],
+     "pending_out": [],
+     "pledged": {
+      "currency": "USD",
+      "minor": 0
+     },
+     "reserved": {
+      "currency": "USD",
+      "minor": 5000000
+     },
+     "settled": {
+      "currency": "USD",
+      "minor": 7000000
+     }
+    },
+    "currency": "USD",
+    "entity": "borrower-a",
+    "floor": {
+     "as_of": null,
+     "currency": "USD",
+     "minor": 3000000,
+     "status": "known"
+    },
+    "id": "borrower-a/operating",
+    "kind": "cash",
+    "observability": "known",
+    "projected": [
+     {
+      "t": "2026-01-05T00:00:00Z",
+      "value": {
+       "as_of": null,
+       "currency": "USD",
+       "minor": 7000000,
+       "status": "known"
+      }
+     },
+     {
+      "t": "2026-01-06T16:00:00Z",
+      "value": {
+       "as_of": null,
+       "currency": "USD",
+       "minor": 2000000,
+       "status": "known"
+      }
+     },
+     {
+      "t": "2026-01-07T00:00:00Z",
+      "value": {
+       "as_of": null,
+       "currency": "USD",
+       "minor": 3500000,
+       "status": "known"
+      }
+     }
+    ],
+    "spendable": {
+     "as_of": "2026-01-05T00:00:00Z",
+     "currency": "USD",
+     "minor": 2000000,
+     "status": "known"
+    },
+    "venue": null
+   }
+  ],
+  "as_of": "2026-01-05T00:00:00Z",
+  "mode": "fake",
+  "obligations": [
+   {
+    "account": "borrower-a/operating",
+    "amount": {
+     "currency": "USD",
+     "minor": 5000000
+    },
+    "due_at": "2026-01-06T16:00:00Z",
+    "entity": "borrower-a",
+    "kind": "payroll",
+    "mandatory": true,
+    "obligation_id": "payroll-1",
+    "reservation_id": "res-payroll-1",
+    "state": "open"
+   }
+  ],
+  "snapshot_id": "obs-lf-delayed"
+ }
+}
