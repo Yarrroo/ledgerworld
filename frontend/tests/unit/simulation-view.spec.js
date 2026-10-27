@@ -27,7 +27,8 @@ const GraphStub = defineComponent({
   name: 'GraphPanel',
   props: { graphData: Object },
   emits: ['toggle-maximize', 'refresh'],
-  setup (props, { emit }) {
+  setup (props, { emit, expose }) {
+    expose({ closeDetailPanel: () => {} })
     watch(() => props.graphData, (g) => graphs.push(g), { immediate: true })
     return () => h('div', { 'data-test': 'graph-panel', 'data-nodes': props.graphData?.nodes.length ?? 0 }, [
       h('button', { type: 'button', 'data-test': 'expand', onClick: () => emit('toggle-maximize') }, 'Expand'),

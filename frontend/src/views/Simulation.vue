@@ -57,7 +57,7 @@
 
       <section class="lw-live-panel lw-live__graph" aria-label="Graph and actor inspector" data-test="graph">
         <div class="lw-live__graph-view">
-          <LiveGraph :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
+          <LiveGraph ref="graphPanel" :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
                      @refresh="reload" @toggle-maximize="graphExpanded = !graphExpanded" />
         </div>
         <div class="lw-live__inspector" data-test="inspector">
@@ -275,6 +275,12 @@ function same (graph) {
 
 const graphExpanded = ref(false)
 const actor = ref(null)
+
+// A node or edge picked in the graph belongs to the run and round it was picked in: moving the
+// cursor (an unloaded round included) or showing another run closes its details. A poll that
+// moves neither keeps them.
+const graphPanel = ref(null)
+watch([runId, () => body.value?.run_id, display], () => graphPanel.value?.closeDetailPanel())
 
 // ----------------------------------------------------------------------- local playback
 
