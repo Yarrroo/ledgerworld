@@ -56,16 +56,31 @@
     ]},
     {"id": "no_duplicate_movement", "name": "no duplicate movement", "tests": [
       "tests/execution/test_gateway.py::test_no_duplicate_movement",
-      "tests/execution/test_gateway.py::test_a_409_in_flight_is_adopted_never_resent_under_a_new_id"
+      "tests/execution/test_gateway.py::test_a_409_in_flight_is_adopted_never_resent_under_a_new_id",
+      "tests/execution/test_outbox_state.py::test_crash_and_retry",
+      "tests/execution/test_outbox_state.py::test_any_crash_any_restarts_moves_money_once",
+      "tests/execution/test_outbox_state.py::test_queue_is_idempotent_and_ids_never_change",
+      "tests/execution/test_outbox_state.py::test_a_live_worker_leaves_a_claimed_leg_alone",
+      "tests/execution/test_outbox_state.py::test_a_restart_after_the_send_never_resends_on_a_lookup_miss",
+      "tests/execution/test_outbox_state.py::test_an_earlier_unsent_claim_does_not_make_a_later_send_resendable"
     ]},
     {"id": "no_movement_from_unowned_funds", "name": "no movement from unowned funds", "tests": [
       "tests/execution/test_gateway.py::test_no_movement_from_unowned_funds"
     ]},
     {"id": "altered_approval_refused", "name": "altered approval refused", "tests": [
-      "tests/execution/test_gateway.py::test_altered_approval_refused"
+      "tests/execution/test_gateway.py::test_altered_approval_refused",
+      "tests/execution/test_approval_binding.py::test_altered_approval_refused",
+      "tests/execution/test_approval_binding.py::test_a_term_outside_the_hash_is_still_bound",
+      "tests/execution/test_approval_binding.py::test_a_tampered_stored_approval_is_refused"
     ]},
     {"id": "timeout_resolved_by_query", "name": "timeout resolved by query", "tests": [
-      "tests/execution/test_gateway.py::test_timeout_resolved_by_query"
+      "tests/execution/test_gateway.py::test_timeout_resolved_by_query",
+      "tests/execution/test_outbox_state.py::test_crash_and_retry[timeout-after-accept]",
+      "tests/execution/test_outbox_state.py::test_crash_and_retry[timeout-before-send]",
+      "tests/execution/test_outbox_state.py::test_crash_and_retry[lookup-errors]",
+      "tests/execution/test_outbox_state.py::test_lookup_errors_then_recovers",
+      "tests/execution/test_outbox_state.py::test_a_timeout_that_may_have_sent_is_never_resent_blind",
+      "tests/execution/test_outbox_state.py::test_a_lookup_never_adopts_another_request_ids_object"
     ]},
     {"id": "reconciliation_closes_advance", "name": "reconciliation closes the advance", "tests": [
       "tests/execution/test_reconcile.py::test_reconciliation_closes_the_advance"
@@ -209,7 +224,27 @@
       "tests/simulation/test_branches.py::test_a_replay_may_not_make_an_ancestor_its_child",
       "tests/simulation/test_branches.py::test_a_failed_replay_can_be_retried_in_the_same_workdir"
     ]},
-    {"id": "six_families_run", "name": "six families run", "tests": []},
+    {"id": "six_families_run", "name": "six families run", "tests": [
+      "tests/simulation/test_scenarios.py::test_the_world_validates_against_c5_and_so_does_every_family_snapshot",
+      "tests/simulation/test_scenarios.py::test_the_world_has_the_eight_fixture_actors_all_synthetic",
+      "tests/simulation/test_scenarios.py::test_the_world_ledger_is_lf1_and_lf2",
+      "tests/simulation/test_scenarios.py::test_the_six_families_are_the_fixtures",
+      "tests/simulation/test_scenarios.py::test_a_family_is_parameterised_and_refuses_what_it_cannot_run",
+      "tests/simulation/test_scenarios.py::test_an_override_the_family_cannot_run_is_refused_before_a_round",
+      "tests/simulation/test_scenarios.py::test_a_silent_borrower_never_acts_in_its_family",
+      "tests/simulation/test_scenarios.py::test_each_family_runs_three_rounds_and_clears_a_financial_action[delayed-receipt]",
+      "tests/simulation/test_scenarios.py::test_each_family_runs_three_rounds_and_clears_a_financial_action[confidence-rumour]",
+      "tests/simulation/test_scenarios.py::test_each_family_runs_three_rounds_and_clears_a_financial_action[stablecoin-depeg]",
+      "tests/simulation/test_scenarios.py::test_each_family_runs_three_rounds_and_clears_a_financial_action[borrower-silence]",
+      "tests/simulation/test_scenarios.py::test_each_family_runs_three_rounds_and_clears_a_financial_action[redemption-spike]",
+      "tests/simulation/test_scenarios.py::test_each_family_runs_three_rounds_and_clears_a_financial_action[fx-gap]",
+      "tests/simulation/test_scenarios.py::test_the_same_seed_gives_the_same_journals[delayed-receipt]",
+      "tests/simulation/test_scenarios.py::test_the_same_seed_gives_the_same_journals[confidence-rumour]",
+      "tests/simulation/test_scenarios.py::test_the_same_seed_gives_the_same_journals[stablecoin-depeg]",
+      "tests/simulation/test_scenarios.py::test_the_same_seed_gives_the_same_journals[borrower-silence]",
+      "tests/simulation/test_scenarios.py::test_the_same_seed_gives_the_same_journals[redemption-spike]",
+      "tests/simulation/test_scenarios.py::test_the_same_seed_gives_the_same_journals[fx-gap]"
+    ]},
     {"id": "report_numbers_grounded", "name": "report numbers grounded", "tests": [
       "tests/reports/test_provenance.py::test_an_invented_number_is_rejected[amount-and-percent]",
       "tests/reports/test_provenance.py::test_an_invented_number_is_rejected[percent]",
@@ -249,6 +284,15 @@
       "tests/reports/test_provenance.py::test_a_placeholder_in_extra_braces_is_rejected",
       "tests/reports/test_provenance.py::test_ground_refuses_two_results_under_one_evidence_id"
     ]},
-    {"id": "interview_read_only", "name": "interview read-only", "tests": []}
+    {"id": "interview_read_only", "name": "interview read-only", "tests": [
+      "tests/simulation/test_interview.py::test_an_interview_sees_only_the_actors_own_history",
+      "tests/simulation/test_interview.py::test_an_interview_never_sees_a_future_event",
+      "tests/simulation/test_interview.py::test_an_interview_offers_no_tool_and_submits_no_intent",
+      "tests/simulation/test_interview.py::test_an_interview_offers_no_tool_even_to_a_backend_configured_with_tools",
+      "tests/simulation/test_interview.py::test_an_interview_cannot_be_asked_past_the_committed_round",
+      "tests/simulation/test_interview.py::test_the_context_hash_covers_everything_the_model_was_shown",
+      "tests/simulation/test_interview.py::test_an_interview_leaves_the_world_state_hash_unchanged",
+      "tests/simulation/test_interview.py::test_an_interview_reads_only_its_own_branch"
+    ]}
   ]
 }

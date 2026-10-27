@@ -1,0 +1,94 @@
+{
+ "id": "redemption-spike",
+ "about": "Redemptions from the lender pool grow, an outflow obligation of the pool; K_p falls by the increase, so the lender withdraws its larger offer to borrower-c and offers a smaller one, which borrower-c draws.",
+ "seed": 105,
+ "starts_round": 5,
+ "rounds": 3,
+ "params": {
+  "grows_from_minor": 500000,
+  "grows_to_minor": 2000000,
+  "at_round": 5,
+  "due_h": 60
+ },
+ "expect_cleared": "lender reduces offers; K_p falls by the increase",
+ "cleared": [
+  [
+   "lender",
+   "release"
+  ],
+  [
+   "lender",
+   "offer"
+  ],
+  [
+   "borrower-c",
+   "request_advance"
+  ]
+ ],
+ "script": [
+  {
+   "actor_id": "lender",
+   "round": 4,
+   "tool_calls": [
+    {
+     "name": "offer",
+     "args": {
+      "to": "borrower-c",
+      "amount_minor": 1200000,
+      "currency": "USD",
+      "reason": "working capital"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "lender",
+   "round": 5,
+   "when_seen": [
+    "redemption-notice-r5"
+   ],
+   "tool_calls": [
+    {
+     "name": "release",
+     "args": {
+      "target": "adv:i-r4-lender-1",
+      "reason": "redemptions grew; capacity fell"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "lender",
+   "round": 6,
+   "tool_calls": [
+    {
+     "name": "offer",
+     "args": {
+      "to": "borrower-c",
+      "amount_minor": 500000,
+      "currency": "USD",
+      "reason": "a smaller advance within the reduced capacity"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "borrower-c",
+   "round": 7,
+   "when_seen": [
+    "offer:adv:i-r6-lender-1"
+   ],
+   "tool_calls": [
+    {
+     "name": "request_advance",
+     "args": {
+      "amount_minor": 500000,
+      "currency": "USD",
+      "facility_id": "adv:i-r6-lender-1",
+      "from": "lender"
+     }
+    }
+   ]
+  }
+ ]
+}

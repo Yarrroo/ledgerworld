@@ -1,0 +1,55 @@
+{
+ "id": "borrower-silence",
+ "about": "Borrower-b stops repaying and stops answering. The lender, which offered it a top-up before the silence, is told the repayment did not arrive and withdraws the offer.",
+ "seed": 104,
+ "starts_round": 6,
+ "rounds": 3,
+ "params": {
+  "borrower": "borrower-b",
+  "from_round": 6,
+  "stops": [
+   "repay",
+   "messages"
+  ]
+ },
+ "expect_cleared": "lender release or no new offer to borrower-b; a missed repayment is recorded as unpaid, never as zero",
+ "cleared": [
+  [
+   "lender",
+   "release"
+  ]
+ ],
+ "script": [
+  {
+   "actor_id": "lender",
+   "round": 5,
+   "tool_calls": [
+    {
+     "name": "offer",
+     "args": {
+      "to": "borrower-b",
+      "amount_minor": 500000,
+      "currency": "USD",
+      "reason": "a seasonal top-up"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "lender",
+   "round": 7,
+   "when_seen": [
+    "silence-borrower-b-r6"
+   ],
+   "tool_calls": [
+    {
+     "name": "release",
+     "args": {
+      "target": "adv:i-r5-lender-1",
+      "reason": "borrower-b missed its repayment and does not answer"
+     }
+    }
+   ]
+  }
+ ]
+}
