@@ -25,7 +25,8 @@
     <p v-for="[run, held] in waiting" :key="run" class="lw-actions">
       <RouterLink class="lw-button lw-button--quiet" data-test="elsewhere"
                   :to="{ path: route.path, query: { run_id: run, execution_id: held.followedId } }">
-        Read execution {{ held.followedId }} of run {{ run }}
+        <template v-if="held.followedId">Read execution {{ held.followedId }} of run {{ run }}</template>
+        <template v-else>Open run {{ run }}: approval outcome unknown</template>
       </RouterLink>
     </p>
 
@@ -277,6 +278,8 @@ const reviewWhy = computed(() => {
   if (d.status === 'all_infeasible') return 'No feasible plan: escalate on Decisions, nothing to approve'
   if (d.status !== 'selected') return 'Nothing is selected yet'
   if (flow.blocked) return flow.blocked
+  const held = unresolved.get(state.body.run_id)
+  if (held?.unseen) return `Execution ${held.followedId} of this run answered while you were away: read it first`
   return ''
 })
 
@@ -320,11 +323,7 @@ function hold (runId, patch) {
   unresolved.set(runId, { ...unresolved.get(runId), ...patch })
 }
 
-/** Still showing the run a POST was sent for: its answer belongs on this screen, not another's. */
-const here = (runId) => state.body?.run_id === runId
-
 let screen = 0 // bumped by every navigation to another run or execution, and on leaving the view
-let gone = false // unmounted: an answer arriving now belongs to whichever screen shows its run next
 
 /** Where a POST was sent from, fixed when it is sent: the run, and the screen it was asked on. */
 const origin = () => ({ run: state.body.run_id, screen })
@@ -380,9 +379,13 @@ async function confirmApproval () {
     heading.value?.focus()
   } catch (error) {
     if (unanswered(error)) {
-      hold(runId, { blocked: APPROVAL_UNKNOWN })
-      if (here(runId)) flow.blocked = APPROVAL_UNKNOWN
-      else flow.message = `Run ${runId}: ${APPROVAL_UNKNOWN}`
+      if (!moved(from)) {
+        hold(runId, { blocked: APPROVAL_UNKNOWN })
+        flow.blocked = APPROVAL_UNKNOWN
+      } else {
+        hold(runId, { blocked: APPROVAL_UNKNOWN, unseen: true })
+        flow.message = `Run ${runId}: ${APPROVAL_UNKNOWN}`
+      }
     } else flow.message = (moved(from) ? `Run ${runId}: ` : '') + refusal(error)
   } finally {
     flow.submitting = false
@@ -429,7 +432,6 @@ async function executePlan () {
   }
   flow.submitting = false
   if (!moved(from)) await closeReview()
-  else if (!gone && state.status === 'loaded' && here(runId)) restore(state.body) // moved on to the same run
 }
 
 // ----------------------------------------------------------------- provider state, polled
@@ -513,9 +515,9 @@ function restore (body) {
   const named = route.query.execution_id
   const resume = held?.followedId && !followed && (!named || named === held.followedId)
   if (resume) follow(held.followedId)
-  if (held?.unseen && followedId.value === held.followedId) {
+  if (held?.unseen && (!held.followedId || followedId.value === held.followedId)) {
     held.unseen = false // shown on its own run's screen at last
-    if (!held.readBy) flow.message = accepted(held.followedId)
+    if (held.followedId && !held.readBy) flow.message = accepted(held.followedId)
     if (!flow.submitting) dropReview() // a review opened meanwhile closes, as after one sent in place
   }
   flow.blocked = held?.blocked ? blockFor(held) : ''
@@ -541,10 +543,14 @@ watch(() => state.body, (body) => {
   }
 })
 
-// A block held for the run on screen shows as soon as it is held, even when its POST was sent from
-// a screen since left (an answer to an unmounted view), not only on the next load.
-watch(() => state.body && unresolved.get(state.body.run_id)?.blocked, (blocked) => {
-  if (blocked) flow.blocked = blockFor(unresolved.get(state.body.run_id))
+// What the tab holds for the run on screen is shown as soon as it changes, not only on the next
+// load: an answer that found its run already on screen (sent from a screen since left, or before
+// a navigation to the same run), or the quarantine forgotten. A load is the body watcher's.
+watch(() => {
+  const held = state.body && unresolved.get(state.body.run_id)
+  return [state.body?.run_id, held?.blocked, held?.followedId, held?.unseen].join('|')
+}, (now, before) => {
+  if (state.status === 'loaded' && now.split('|')[0] === before.split('|')[0]) restore(state.body)
 })
 
 // The view is reused across query-only navigation: a new run or execution is a new screen. A
@@ -563,7 +569,7 @@ watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
 
 onUnmounted(() => {
   screen += 1
-  gone = true
+  guard.select(null) // a read still in flight is dropped, so nothing reschedules on a dead view
   clearTimeout(timer)
   clearInterval(clock)
 })

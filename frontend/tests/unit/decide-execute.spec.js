@@ -807,11 +807,11 @@ describe('a POST answered after a query navigation stays with its own run', () =
     return open(Execution, path)
   }
 
-  it('an execution answered after the view was left is linked on the screen that came back, not read by the old one', async () => {
+  it('an execution answered after the view was left is linked on another run\'s screen, not read by the old view', async () => {
     const { w, calls, hold } = await heldOn('POST /executions')
     await approve(w)
     await w.get('[data-test="execute"]').trigger('click')
-    const back = await remount(w)
+    const back = await remount(w, '/execution?run_id=run-2')
     hold.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
     await flushPromises()
     expect(gets(calls, '/executions/apr-1')).toHaveLength(0)
@@ -840,18 +840,74 @@ describe('a POST answered after a query navigation stays with its own run', () =
     expect(text(w, 'message')).toBe(`Run run-1: ${kase('approval-post-timeout').expect.message}`)
   })
 
-  it('an execution answered in place is not linked as waiting, though an earlier one was', async () => {
-    const { w, hold } = await answeredOnRun2()
+  it('a run whose execution answered while away is not reviewed again until that one is read', async () => {
+    const { w, calls } = await answeredOnRun2()
     await w.vm.$router.push('/execution?run_id=run-1&execution_id=apr-7')
     await flushPromises()
-    await w.get('[data-test="review-plan"]').trigger('click')
+    expect(text(w, 'review-why')).toBe('Execution apr-1 of this run answered while you were away: read it first')
+    expect(disabled(w, 'review-plan')).toBe(true)
+    await w.get('[data-test="elsewhere"]').trigger('click')
     await flushPromises()
+    expect(text(w, 'context')).toContain('execution apr-1')
+    expect(disabled(w, 'review-plan')).toBe(false)
+    expect(posts(calls, '/executions')).toHaveLength(1)
+  })
+
+  it('an execution answered after leaving is shown at once on a returned screen of its run', async () => {
+    const { w, hold } = await heldOn('POST /executions')
     await approve(w)
     await w.get('[data-test="execute"]').trigger('click')
-    hold.release({ as_of: '2026-11-05T10:00:09Z', mode: 'fake', execution_id: 'apr-2' })
+    const back = await remount(w)
+    hold.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
     await flushPromises()
-    expect(text(w, 'context')).toContain('execution apr-2')
-    expect(w.findAll('[data-test="elsewhere"]').map((l) => l.text())).not.toContain('Read execution apr-2 of run run-1')
+    expect(text(back, 'context')).toContain('Run run-1 · execution apr-1')
+    expect(back.find('[data-test="elsewhere"]').exists()).toBe(false)
+    expect(text(back, 'message')).toBe('Execution apr-1 accepted; reading its provider state.')
+  })
+
+  it('a read in flight when the view is left does not keep polling from the dead view', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    let first
+    let reads = 0
+    const { w, calls } = await reviewReady({
+      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'GET /executions/apr-1': () => (++reads === 1 ? new Promise((resolve) => { first = resolve }) : refuse(404, 'not_found'))
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    await remount(w)
+    first(refuse(404, 'not_found'))
+    await flushPromises()
+    const before = gets(calls, '/executions/apr-1').length
+    vi.advanceTimersByTime(5000)
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1').length - before).toBe(1) // the live view's read only
+  })
+
+  it('an unknown approval for a run left behind keeps a link until that run is open', async () => {
+    const { w, hold } = await heldOn('POST /approvals')
+    await w.get('[data-test="confirm"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    hold.fail(timeout())
+    await flushPromises()
+    await w.vm.$router.push('/execution?run_id=run-3')
+    await flushPromises()
+    expect(text(w, 'elsewhere')).toBe('Open run run-1: approval outcome unknown')
+    await w.get('[data-test="elsewhere"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'blocked')).toBe(kase('approval-post-timeout').expect.message)
+    expect(w.find('[data-test="elsewhere"]').exists()).toBe(false)
+  })
+
+  it('forgetting the tab lifts a block shown on screen', async () => {
+    const { w } = await reviewReady({ 'POST /approvals': timeout() })
+    await approve(w)
+    expect(w.find('[data-test="blocked"]').exists()).toBe(true)
+    forgetTab()
+    await flushPromises()
+    expect(w.find('[data-test="blocked"]').exists()).toBe(false)
   })
 
   it('a refusal answered after leaving and returning is shown, and does not disable the next approval', async () => {
