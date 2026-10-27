@@ -19,7 +19,8 @@
 
 ## Verification
 - Tests: `npx vitest run` (frontend), 129 passed (104 before this item). Each of the 25 new cases
-  failed against the code before the fix that it covers (commits 487fc29, 4b3ef37, 24b9adf).
+  failed against the code before the fix that it covers (commits 487fc29, 4b3ef37, 24b9adf). After
+  merging main (item 95 holds an unresolved block against its run), 166 passed.
 - Build: `npm --prefix frontend run build` green. `checks/no_secrets.py` and `checks/attribution.py`
   exit 0. No Python changed.
 - Real server: answers from the API test fixture (201 approval, 202 accepted, 200 read) pass the
@@ -38,7 +39,5 @@
 - Simulation's fork reports a timeout or 5xx as "Fork not accepted", which is the same
   misclassification fixed here for money.
 - The approved-terms table does not show an fx leg's `to_currency`.
-- `flow.blocked` survives a query-only navigation: a deliberate guard, but the execution banner
-  then names an id that is no longer read.
 - The response checks are written by hand against `contracts/`; nothing in the frontend validates
   against the schema.
