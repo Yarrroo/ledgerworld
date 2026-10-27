@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 import json
 import re
 from datetime import timedelta
@@ -492,6 +493,44 @@ def test_a_policy_that_peeks_inside_a_branch_is_rejected_with_the_path(tmp_path)
     assert caught.value.path == "scenario.params"
     assert caught.value.available_at_h == "never"
     assert caught.value.read_at_h == 12
+
+
+class CallOrderPolicy(Integrated):
+    """Integrated in the first scenario it meets, idle in the next: it knows which branch it
+    is in from how often it has been called at t = 12, never from the view."""
+
+    id = "call-order"
+
+    def __init__(self) -> None:
+        self.at_t12 = 0
+
+    def propose(self, view: PolicyView):
+        proposal = super().propose(view)
+        if view.round == CP_ROUND + 1:
+            self.at_t12 += 1
+            if self.at_t12 > 1:
+                return dataclasses.replace(proposal, actions=[])
+        return proposal
+
+
+def lf1_s1_s2() -> dict:
+    return {s["id"]: scenario_events(s) for s in COMPARISON["scenarios"] if s["id"] in ("s1", "s2")}
+
+
+def test_a_side_channel_policy_is_caught_by_evaluate_before_any_ranking(tmp_path):
+    with pytest.raises(AnticipationViolation) as caught:
+        asyncio.run(compare(tmp_path, world_snapshot(), lf1_s1_s2(),
+                            policies=[CallOrderPolicy()]))
+    assert caught.value.path is None
+    assert caught.value.node == {"round": CP_ROUND + 1, "scenarios": ["s1", "s2"],
+                                 "policy": "call-order"}
+
+
+def test_an_honest_policy_on_the_same_pair_passes_evaluate(comparison):
+    _, evals, _ = comparison  # evaluate returned: every honest policy passed the paired check
+    assert len(evals) == 9
+    s1, s2 = evals["s1", "integrated"].decisions, evals["s2", "integrated"].decisions
+    assert s1[0]["obs_hash"] == s2[0]["obs_hash"] and s1[0]["actions"] == s2[0]["actions"] != []
 
 
 # ------------------------------------------------------------------------ vet round 1

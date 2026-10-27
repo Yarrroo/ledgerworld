@@ -21,6 +21,8 @@ imported on first use from a temporary directory.
 Each world has its own RNG, so one branch's draws never move another's: ``import_oasis`` routes
 OASIS's and camel's module-level draws (``oasis_finance.draws``) to the RNG of the world whose
 platform task or ``env.step`` is running.
+
+The world's agents share one ``SocialOrder``, which the coordinator begins for step 5.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from types import SimpleNamespace
 from typing import Any, Self
 
 from oasis_finance.actions import decode_args
+from oasis_finance.agent import SocialOrder
 from oasis_finance.draws import WORLD_RNG, route_draws
 from oasis_finance.observation import DEFAULT_EPOCH
 from sqlalchemy import Connection, select
@@ -224,6 +227,9 @@ class World:
         }
         self.agent_actor = {agent.social_agent_id: actor_id
                             for actor_id, agent in self.agents.items()}
+        self.social_order = SocialOrder()
+        for agent in self.agents.values():
+            agent.social_order = self.social_order
         self.db_path = Path(workdir) / f"{branch_id}.db"
         self.env: Any = None
         self.oasis: SimpleNamespace | None = None

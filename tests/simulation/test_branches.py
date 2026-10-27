@@ -35,7 +35,7 @@ from app.simulation.memory import BranchMemory, NamespaceViolation, namespace_fo
 from app.simulation.transcripts import ReplayMiss, Transcript
 from app.testing.fake_graph_memory import FakeGraphMemory, GraphMemoryStore
 from app.testing.scripted_model import ScriptedPlan
-from oasis_finance.agent import FinanceAgent
+from oasis_finance.agent import FinanceAgent, SocialOrder
 
 FIXTURE = json.loads((coupled.FIXTURES / "branch-isolation.json").read_text())
 EXPECT = FIXTURE["expect"]
@@ -75,13 +75,16 @@ def recs(records) -> list[tuple]:
     return [(r.actor_id, r.key, r.value, r.round) for r in records]
 
 
-def parent_world(tmp: Path, plan: ScriptedPlan, **kw):
-    """main on the coupled lender world, its model actors driven by ``plan``."""
+def parent_world(tmp: Path, plan: ScriptedPlan, *, model=None, posters=(), **kw):
+    """main on the coupled lender world, its model actors driven by ``plan`` (or ``model``);
+    each of ``posters`` may also post."""
     (tmp / PARENT).mkdir()
+    specs = [coupled.ACTOR_SPECS[a] for a in coupled.MODEL_ACTORS + ["payroll", "market-maker"]]
     return coupled.World(
         WORLD_ID, PARENT, coupled.snapshot(treasury=False),
-        [coupled.ACTOR_SPECS[a] for a in coupled.MODEL_ACTORS + ["payroll", "market-maker"]],
-        model=coupled.plan_model(plan), workdir=tmp / PARENT, **kw)
+        [{**s, "tools": [*s["tools"], "create_post"]} if s["actor_id"] in posters else s
+         for s in specs],
+        model=model or coupled.plan_model(plan), workdir=tmp / PARENT, **kw)
 
 
 def journal_bytes(world) -> bytes:
@@ -760,3 +763,100 @@ def test_a_failed_replay_on_the_originals_backend_removes_only_its_own_graph(tmp
     assert files == [] and graphs == {original_graph}
     assert records == PARENT_MEMORY
     assert original == [*PARENT_MEMORY, LATE_MEMORY]
+
+
+# --------------------------------------- correction: concurrent social writes replay identically
+
+POSTERS = ("borrower-b", "borrower-c")
+
+
+class GatedModel(coupled.ScriptedModel):
+    """A scripted model whose round-1 answer for borrower-b waits until borrower-c has answered;
+    every answer is logged as (round, actor) in the order given."""
+
+    def __init__(self, plan, actor_id, world, answered: dict, log: list) -> None:
+        super().__init__(plan, actor_id, lambda: world.clock.round)
+        self.answered, self.log = answered, log
+
+    async def _arun(self, messages, response_format=None, tools=None):
+        rnd = self.round_source()
+        if (self.actor_id, rnd) == ("borrower-b", 1):
+            await self.answered["borrower-c"].wait()
+        out = await super()._arun(messages, response_format, tools)
+        self.log.append((rnd, self.actor_id))
+        if self.actor_id in self.answered:
+            self.answered[self.actor_id].set()
+        return out
+
+
+def test_concurrent_posts_replay_through_the_following_round(tmp_path):
+    """Two actors post in round 1 and their models answer in the reverse of their order (a
+    barrier holds borrower-b's answer until borrower-c has answered); a replay answers at once,
+    in order. The posts still land in one order, so round 2's observations, which name each post
+    by its platform id, are the recorded ones and the replay runs on past them."""
+    plan = ScriptedPlan(copy.deepcopy(coupled.IDLE) + [
+        {"actor_id": a, "round": 1, "tool_calls": [
+            {"name": "create_post", "args": {"content": f"{a} posts"}}]} for a in POSTERS])
+    answered, log = {a: asyncio.Event() for a in POSTERS}, []
+
+    def model(actor_id, world):
+        return GatedModel(plan, actor_id, world, answered, log)
+
+    def posts(world) -> list[tuple]:
+        return world.platform.db.execute(
+            "SELECT post_id, user_id, content FROM post ORDER BY post_id").fetchall()
+
+    async def go():
+        world = parent_world(tmp_path, plan, model=model, posters=POSTERS)
+        await world.start()
+        cp = checkpoint(world)
+        await world.run(2)
+        (tmp_path / "again").mkdir()
+        replayed = await replay(cp, world.transcript, workdir=tmp_path / "again")
+        out = (posts(world), posts(replayed.world), world.transcript.calls(),
+               replayed.world.transcript.calls(), journal_bytes(world),
+               journal_bytes(replayed.world))
+        await world.close()
+        await replayed.world.close()
+        return out
+
+    original, again, calls, replay_calls, journals, replay_journals = asyncio.run(go())
+    first = [a for r, a in log if r == 1 and a in POSTERS]
+    assert first == ["borrower-c", "borrower-b"], "the barrier reversed the answers"
+    assert [c for _, _, c in original] == [f"{a} posts" for a in POSTERS]
+    assert again == original
+    assert {c.round for c in replay_calls} == {1, 2}
+    assert replay_calls == calls
+    assert replay_journals == journals
+
+
+def test_a_step_that_fails_before_any_turn_holds_no_later_turn(tmp_path):
+    """A step that fails before its agents' turns start leaves no order behind: an agent asked
+    to act afterwards, outside a step, is not held for agents that never ran."""
+    def refuse(agent):
+        raise coupled.InjectedFault("before any turn")
+
+    async def go():
+        async with parent_world(tmp_path, ScriptedPlan(copy.deepcopy(coupled.IDLE))) as world:
+            world.env._perform_llm_action = refuse
+            with pytest.raises(coupled.InjectedFault):
+                await world.run(1)
+            with world.store.reading() as conn:
+                world.observe_all(conn)
+            return await asyncio.wait_for(world.agents["borrower-c"].perform_action_by_llm(), 5)
+
+    assert [i.type for i in asyncio.run(go()).intents] == ["no_action"]
+
+
+def test_ending_a_step_releases_a_turn_still_waiting():
+    """A turn already waiting for an earlier agent when its step ends is let go, not left
+    waiting on an order nobody will finish."""
+    async def go():
+        order = SocialOrder()
+        order.begin([0, 1])
+        waiting = asyncio.create_task(order.wait(1))
+        await asyncio.sleep(0)
+        order.end()
+        await asyncio.wait_for(waiting, 5)
+
+    asyncio.run(go())

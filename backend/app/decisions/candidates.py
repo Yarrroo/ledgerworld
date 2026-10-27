@@ -19,7 +19,8 @@ rejected facility is never asked again in that branch.
 ``evaluate`` forks one fresh branch per (scenario, policy) from one checkpoint. In a policy
 branch the treasury's agent leaves the acting set, so its model is never called; the policy
 decides at step 4 (when the agents observe) on the treasury's own observation, and its C1
-intents carry ``params.source = "policy:<id>"``. Feasibility is ``assess``-ed from each
+intents carry ``params.source = "policy:<id>"``. Across scenarios the paired-history guard
+holds each policy to one decision per observable history. Feasibility is ``assess``-ed from each
 branch's realised ledger and ``rank`` orders the policies. ``plan_for_now`` has the selected
 policy decide again on the current observed snapshot, never on a branch, and returns the legs
 the execution module binds; a decision is never an approval.
@@ -51,7 +52,7 @@ from ..simulation.coordinator import Coordinator
 from ..simulation.world import World, _digest, due_hour, hours_of
 from ..testing.scripted_model import ScriptedPlan
 from .feasibility import assess
-from .nonanticipativity import HOURS_PER_ROUND, Leaf, PolicyView, guarded_decide
+from .nonanticipativity import HOURS_PER_ROUND, Leaf, PolicyView, check_pairs, guarded_decide
 from .objective import DecisionResult, Evaluation, rank
 
 __all__ = ["ALL", "FixedReserve", "Integrated", "NoAction", "Projection", "Proposal",
@@ -452,13 +453,16 @@ async def evaluate(run_id: str, cp: Checkpoint, scenarios: Mapping[str, Sequence
     never called in a policy branch. ``hooks`` are the coordinator's (a family's market, say);
     the policy's own two run after them. Raises ``BranchMismatch`` when the branches of one
     scenario differ in seed or schedule, and ``AnticipationViolation`` when a policy reads what
-    it could not yet observe.
+    it could not yet observe, or decides differently in two scenarios whose observable
+    histories (the ``obs_hash`` of each round, taken before it decides) are equal through that
+    round — a side channel the view alone cannot see. Nothing is ranked after either.
     """
     to_round = horizon_h // HOURS_PER_ROUND
     if to_round <= cp.round:
         raise ValueError(f"the horizon t={horizon_h} h is not after the checkpoint")
     hooks = dict(hooks or {})
     out = []
+    histories: dict[str, dict[str, list[dict]]] = {}  # policy → scenario → its decisions
     for sid, events in scenarios.items():
         schedule = None
         for policy in policies:
@@ -503,6 +507,9 @@ async def evaluate(run_id: str, cp: Checkpoint, scenarios: Mapping[str, Sequence
                     decisions=driver.decisions, capacity=capacity_by_round,
                     schedule_hash=digest, seed=world.seed,
                     treasury_model_calls=len(silent.calls), replay=branch.replay))
+            histories.setdefault(policy.id, {})[sid] = driver.decisions
+    for pid, by_scenario in histories.items():  # equal observable history → equal decision
+        check_pairs(by_scenario, policy=pid)
     return out
 
 
