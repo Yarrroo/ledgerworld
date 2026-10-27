@@ -8,8 +8,9 @@ later obligations, less pledged). Funding cost is the expense the entity booked 
 (an advance's fee is recognised at disbursal). Every number is an integer in minor units.
 
 Cash is usable only at the end of a round whose balance was known: an unknown balance adds
-nothing (HANDOFF), so the floor and an unmet obligation's shortfall count it as 0 whatever the
-ledger holds. The store keeps only the current observability, so the caller records it per round.
+nothing (HANDOFF), so the floor and an unmet obligation's shortfall count only what it owes
+(``min(settled, 0)``) whatever the ledger holds. The store keeps only the current
+observability, so the caller records it per round.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 
 from sqlalchemy import func, select
 
@@ -61,7 +62,7 @@ class Feasibility:
     obligations: tuple[ObligationResult, ...]
     floor: FloorResult
     funding_cost_minor: int
-    unknown_h: tuple[int, ...] = ()  # round ends at which the balance was unknown: usable 0
+    unknown_h: tuple[int, ...] = ()  # round ends whose balance was unknown: nothing usable
 
     @property
     def unmet(self) -> list[ObligationResult]:
@@ -127,7 +128,7 @@ def _paid_round(store: Any, obligation_id: str) -> int | None:
 
 
 def assess(world: Any, account: str, *, from_round: int, to_round: int,
-           observability: Mapping[int, Literal["known", "unknown"]]) -> Feasibility:
+           observability: Mapping[int, str]) -> Feasibility:
     """The branch's realised outcome on ``account`` over the rounds after ``from_round`` through
     ``to_round`` (the horizon). ``world`` is a branch's world, or the ``Branch`` holding it;
     ``observability`` is the account's at the end of each of those rounds."""
@@ -141,8 +142,9 @@ def assess(world: Any, account: str, *, from_round: int, to_round: int,
         raise ValueError(f"no observability of {account} recorded for rounds {missing}")
     view = store.view(account)
     settled = settled_by_round(store, account, rounds)
-    unknown_h = tuple(r * ROUND_HOURS for r in rounds if observability[r] != "known")
-    usable = {h: 0 if h in unknown_h else v for h, v in settled.items()}
+    known = {r * ROUND_HOURS: observability[r] == "known" for r in rounds}
+    usable = {h: v if known[h] else min(v, 0) for h, v in settled.items()}
+    unknown_h = tuple(h for h, k in known.items() if not k)
 
     obligations = []
     rows = [r for r in store.rows("obligations") if r["account_id"] == account]

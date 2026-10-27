@@ -485,7 +485,7 @@ async def evaluate(run_id: str, cp: Checkpoint, scenarios: Mapping[str, Sequence
                     raise BranchMismatch(f"{world.branch_id}: its schedule or seed differs from "
                                          f"the other branches of {sid}")
                 capacity_by_round: dict[str, dict[int, int]] = {}
-                observability: dict[int, Any] = {}
+                observability: dict[int, str] = {}
                 c2: list[dict] = []
                 for _ in range(to_round - cp.round):
                     result = await world.coordinator.run_round(world)

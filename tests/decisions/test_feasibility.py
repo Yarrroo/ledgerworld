@@ -68,6 +68,36 @@ def test_an_unmet_obligations_shortfall_counts_no_unknown_cash(unknown, short):
     assert (ob.id, ob.due_h, ob.met, ob.short_minor) == ("ob-1", 12, False, short)
 
 
+def test_an_unknown_balance_still_counts_what_it_owes():
+    """A debit posted while the balance is unknown (the store checks no promise against it) can
+    take it below zero; masking it hides nothing usable, so the debt is still counted."""
+    w = world()
+    w.store.observe(ACCOUNT, "unknown", T0)
+    w.store.apply(Journal("fee", (Posting(ACCOUNT, -1_200_000), Posting("a/opening", 1_200_000)),
+                          round=2, sim_time=T0 + timedelta(hours=8)))
+    f = assess(w, ACCOUNT, from_round=0, to_round=5, observability=seen({2, 3, 4, 5}))
+    assert f.settled[8] == -200_000
+    assert (f.floor.min_cash, f.floor.at_h, f.floor.short_minor) == (-200_000, 8, 700_000)
+    assert f.floor.breach_h == (8, 20)
+
+
+@pytest.mark.parametrize(("obligation_minor", "unknown", "binding"), [
+    (None, {2, 3, 4, 5},
+     "min cash 0.00 at t=8 (balance unknown) < floor 5,000.00; no remedy closed it"),
+    (1_500_000, {3},  # the obligation due at t=12 binds before the floor breach there
+     "free cash 0.00 at t=12 (balance unknown) < ob-1 15,000.00; no reservation is touched"),
+    (1_500_000, set(),
+     "free cash 10,000.00 at t=12 < ob-1 15,000.00; no reservation is touched"),
+])
+def test_the_escalation_says_the_binding_balance_was_unknown(obligation_minor, unknown, binding):
+    from app.decisions.objective import Evaluation, rank
+
+    f = assess(world(obligation_minor=obligation_minor), ACCOUNT, from_round=0, to_round=5,
+               observability=seen(unknown))
+    result = rank([Evaluation("s1", "integrated", "b", f)], escalate_to="treasury operator")
+    assert result.escalation["binding"] == binding
+
+
 def test_a_round_with_no_recorded_observability_is_refused():
     with pytest.raises(ValueError, match=r"rounds \[4, 5\]"):
         assess(world(), ACCOUNT, from_round=0, to_round=5,
