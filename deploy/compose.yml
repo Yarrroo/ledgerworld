@@ -2,9 +2,10 @@
 # (the ledger of record) and Redis 7 (the job queue).
 #   docker compose -f deploy/compose.yml --env-file .env up -d --build
 # Every value comes from the environment by name (.env.example): a name with no value is passed
-# through when it is set and left unset otherwise. With none set it starts in fake provider mode on a
-# scripted model. Only the app is published, on the host's loopback; postgres and redis stay on
-# the compose network, so they need no password of their own.
+# through when it is set and left unset otherwise. One is required to build the image:
+# VITE_SOURCE_URL, the public source link every page footer carries (AGPL-3.0 §13). With only that
+# set it starts in fake provider mode on a scripted model. Only the app is published, on the host's
+# loopback; postgres and redis stay on the compose network, so they need no password of their own.
 
 name: ledgerworld
 
@@ -12,6 +13,8 @@ x-image: &image
   build:
     context: ..
     dockerfile: deploy/Dockerfile
+    args:
+      VITE_SOURCE_URL: ${VITE_SOURCE_URL:-}
   image: ledgerworld:local
   restart: unless-stopped
   deploy:

@@ -43,7 +43,11 @@
         <p v-if="forkWhy" id="fork-why" class="lw-live__note" data-test="fork-why">{{ forkWhy }}</p>
         <p v-if="!compareTarget" id="compare-why" class="lw-live__note" data-test="compare-why">{{ compareWhy }}</p>
         <p v-if="forked" class="lw-live__note" role="status" data-test="forked">
-          Fork accepted at round {{ forked.round }}: {{ forked.branch_ids.join(', ') }}
+          Fork accepted at round {{ forked.round }}: {{ forked.branch_ids.join(', ') }} ·
+          {{ forked.done ? 'branches and cash paths loaded' : 'running; its branches appear here when it finishes' }}
+        </p>
+        <p v-if="forked?.lag" class="lw-live__note" role="status" data-test="fork-lag">
+          Fork progress not read: {{ forked.lag }}; still checking
         </p>
         <p v-if="forkError" class="lw-alert" role="alert" data-test="fork-error">{{ forkError }}</p>
       </section>
@@ -57,7 +61,7 @@
 
       <section class="lw-live-panel lw-live__graph" aria-label="Graph and actor inspector" data-test="graph">
         <div class="lw-live__graph-view">
-          <LiveGraph :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
+          <LiveGraph ref="graphPanel" :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
                      @refresh="reload" @toggle-maximize="graphExpanded = !graphExpanded" />
         </div>
         <div class="lw-live__inspector" data-test="inspector">
@@ -106,7 +110,8 @@
  * branch's first cash point plus its `t_hours`, and a cash point matches only at that instant.
  * Pause stops local playback; the job keeps running and keeps being polled. Fork and the
  * read-only interview carry the selected round and need the demo token, which lives in this
- * component's memory only — never storage, the URL, the export or a log. No POST is retried.
+ * component's memory only — never storage, the URL, the export or a log. An accepted fork is
+ * followed until its branches arrive or it fails. No POST is retried.
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
@@ -276,6 +281,12 @@ function same (graph) {
 const graphExpanded = ref(false)
 const actor = ref(null)
 
+// A node or edge picked in the graph belongs to the run and round it was picked in: moving the
+// cursor (an unloaded round included) or showing another run closes its details. A poll that
+// moves neither keeps them.
+const graphPanel = ref(null)
+watch([runId, () => body.value?.run_id, display], () => graphPanel.value?.closeDetailPanel())
+
 // ----------------------------------------------------------------------- local playback
 
 const playing = ref(false)
@@ -313,21 +324,23 @@ function scrub (round) {
 
 // ------------------------------------------------------------- polling a running job
 
-/** A reload someone asked for (or a run or fork changed): shown as loading, never as a poll. */
+/** A reload someone asked for (or the run changed): shown as loading, never as a poll. */
 function reload () {
   polling.value = false
   return refresh()
 }
 
 let poller = null
+/** A quiet re-read; false when a load already in flight meant nothing was read. */
 async function poll () {
-  if (state.status === 'loading') return
+  if (state.status === 'loading') return false
   polling.value = true
   try {
     await refresh()
   } finally {
     polling.value = false
   }
+  return true
 }
 watch(() => phase.value.running, (running) => {
   clearInterval(poller)
@@ -337,6 +350,8 @@ watch(() => phase.value.running, (running) => {
 onBeforeUnmount(() => {
   clearInterval(player)
   clearInterval(poller)
+  forked.value = null // a fork check still in flight finds no fork to follow on
+  clearTimeout(forkTimer)
 })
 
 // --------------------------------------------------------------------- fork, interview
@@ -355,6 +370,7 @@ watch(runId, () => {
   actor.value = null
   forked.value = answer.value = null
   forkError.value = interviewError.value = ''
+  follow()
   pause()
   paused.value = false
   reload()
@@ -366,6 +382,7 @@ const forkWhy = computed(() => {
   if (body.value?.status !== 'done') return 'A fork needs a finished run'
   if (!current.value) return 'Round not loaded: nothing to fork from'
   if (display.value >= HORIZON_ROUNDS) return `Fork before the horizon round ${HORIZON_ROUNDS}`
+  if (forked.value && !forked.value.done) return 'A fork is running: fork again once its branches arrive'
   if (!token.value) return 'Enter the demo token to fork'
   if (forking.value) return 'Submitting the fork'
   return ''
@@ -382,13 +399,67 @@ async function fork () {
       method: 'POST', token: token.value, body: { checkpoint_round: round, policies: POLICIES }
     })
     if (run !== runId.value) return // answered for a run no longer on screen
-    forked.value = { round, branch_ids: accepted?.branch_ids ?? [] }
-    reload() // the new branches and their cash paths
+    forked.value = { round, branch_ids: accepted?.branch_ids ?? [], decided: false, done: false, lag: '', reads: 0 }
+    follow() // the job was only queued: its branches are read once it has decided
   } catch (error) {
     if (run === runId.value) forkError.value = `Fork not accepted: ${error.message}`
   } finally {
     forking.value = false
   }
+}
+
+// An accepted fork is its own job, run after the run is done: the run's status never moves, so
+// the fork is followed on its own. Its decisions are read until they leave `pending` (a failed or
+// lost worker answers 409 fork_failed), then the run until every accepted branch is there from
+// this fork's checkpoint — a re-fork reuses the branch ids — with its cash path. The worker writes
+// the run right after the decisions, so a run that still lacks them after FORK_RUN_READS reads is
+// reported, not polled forever. Only reads repeat; a read that fails otherwise is said and retried.
+const FORK_RUN_READS = 5
+let forkTimer = null
+
+function follow () {
+  clearTimeout(forkTimer)
+  forkTimer = forked.value && !forked.value.done ? setTimeout(checkFork, POLL_MS) : null
+}
+
+function arrived (id, round) {
+  return body.value.branches.some((b) => b.branch_id === id && b.checkpoint_round === round) &&
+    body.value.cash_paths.some((p) => p.branch_id === id)
+}
+
+async function checkFork () {
+  const f = forked.value
+  if (!f) return
+  try {
+    if (!f.decided) {
+      const decided = await request(`/decisions/${encodeURIComponent(runId.value)}`)
+      if (forked.value !== f) return // another fork or run took the screen
+      f.decided = decided.status !== 'pending'
+      f.lag = ''
+    }
+    if (f.decided && await poll()) { // false: a load in flight, so nothing was read this time
+      if (forked.value !== f) return
+      if (!currentRun.value) {
+        f.lag = state.error?.message ?? 'the run was not re-read'
+      } else {
+        f.lag = ''
+        f.done = f.branch_ids.every((id) => arrived(id, f.round))
+        if (!f.done && ++f.reads >= FORK_RUN_READS) {
+          forked.value = null
+          forkError.value = 'Fork decided, but its branches have not reached the run: Refresh, or fork again'
+        }
+      }
+    }
+  } catch (error) {
+    if (forked.value !== f) return
+    if (error.code === 'fork_failed') {
+      forked.value = null
+      forkError.value = `Fork failed: ${error.message}`
+    } else {
+      f.lag = error.message
+    }
+  }
+  follow()
 }
 
 const interviewWhy = computed(() => {

@@ -7,6 +7,7 @@
 #
 # Apply:
 #   docker compose -f deploy/compose.yml --env-file <host env file> up -d --build
+#   (the host env file sets VITE_SOURCE_URL, or the image does not build)
 #   then GET $LEDGERWORLD_URL/api/v1/health answers {"ok": true, ...}
 
 [host]
@@ -22,6 +23,11 @@ health_path = "/api/v1/health"
 [roles]
 app = "api"
 sim = "sim"
+
+# Build arguments the image needs: the public source link every page footer carries (AGPL-3.0
+# §13). Not a secret; the build refuses to run without it.
+[build]
+required = ["VITE_SOURCE_URL"]
 
 [secrets]
 # Needed from the first deploy: the write routes admit nobody without it.

@@ -162,6 +162,18 @@ import { ref } from 'vue'
 // The operator token: this tab's memory only. Module scope survives moving between screens and
 // dies with the page; it is never written to storage, a URL, markup or a log.
 const token = ref('')
+
+// An operation whose outcome this tab does not know, kept in the same tab memory as the token:
+// run id -> { blocked, followedId }. Leaving the screen and coming back restores the block and
+// resumes reading the execution, so the token never outlives its quarantine. Forget token does
+// not lift it: only a reload does.
+const unresolved = new Map()
+
+/** The tab reloaded, as far as this screen can tell: token and quarantine both forgotten. */
+export function forgetTab () {
+  token.value = ''
+  unresolved.clear()
+}
 </script>
 
 <script setup>
@@ -301,6 +313,14 @@ function refusal (error) {
   return REFUSALS[error.code] || `Refused: ${error.message}`
 }
 
+/** Remember, against the run it was sent for, what this tab still has to resolve or read. */
+function hold (runId, patch) {
+  unresolved.set(runId, { ...unresolved.get(runId), ...patch })
+}
+
+/** Still showing the run a POST was sent for: its answer belongs on this screen, not another's. */
+const here = (runId) => state.body?.run_id === runId
+
 async function openReview () {
   if (reviewWhy.value) return
   flow.open = true
@@ -322,6 +342,7 @@ async function closeReview () {
 
 async function confirmApproval () {
   if (confirmWhy.value || flow.approval) return
+  const runId = state.body.run_id
   flow.submitting = true
   flow.message = ''
   try {
@@ -337,8 +358,10 @@ async function confirmApproval () {
     await nextTick()
     heading.value?.focus()
   } catch (error) {
-    if (unanswered(error)) flow.blocked = APPROVAL_UNKNOWN
-    else flow.message = refusal(error)
+    if (unanswered(error)) {
+      hold(runId, { blocked: APPROVAL_UNKNOWN })
+      if (here(runId)) flow.blocked = APPROVAL_UNKNOWN
+    } else flow.message = refusal(error)
   } finally {
     flow.submitting = false
   }
@@ -347,6 +370,7 @@ async function confirmApproval () {
 async function executePlan () {
   if (executeWhy.value) return
   const id = flow.approval.approval_id
+  const runId = state.body.run_id
   flow.submitting = true
   flow.executed = true
   try {
@@ -354,16 +378,23 @@ async function executePlan () {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { approval_id: id }
     })
-    flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
-    follow(answer.execution_id)
+    hold(runId, { followedId: answer.execution_id })
+    if (here(runId)) {
+      flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
+      follow(answer.execution_id)
+    }
   } catch (error) {
     if (!unanswered(error)) {
       flow.submitting = false
       flow.invalid = refusal(error)
       return
     }
-    flow.blocked = `Execution outcome unknown; reading its status by approval id ${id}. Do not send again.`
-    follow(id)
+    const blocked = `Execution outcome unknown; reading its status by approval id ${id}. Do not send again.`
+    hold(runId, { blocked, followedId: id, readBy: id })
+    if (here(runId)) {
+      flow.blocked = blocked
+      follow(id)
+    }
   }
   flow.submitting = false
   await closeReview()
@@ -430,6 +461,12 @@ async function poll () {
   schedule()
 }
 
+/** A held block, said truthfully: its lookup is claimed only while this screen is reading it. */
+function blockFor (held) {
+  if (!held.readBy || followedId.value === held.readBy) return held.blocked
+  return `Execution outcome unknown for approval ${held.readBy}; not read on this screen. Do not send again.`
+}
+
 function follow (id) {
   followed = true
   followedId.value = id
@@ -442,6 +479,20 @@ function follow (id) {
 
 watch(() => state.body, (body) => {
   if (!body) return
+  // What this tab holds for the run now shown decides the block and the execution followed: a
+  // block or an execution sent for another run is not this screen's. Unresolved work from before
+  // the screen was last left is restored, and its execution read again unless the address names
+  // another one.
+  const held = unresolved.get(body.run_id)
+  if (followed && held?.followedId !== followedId.value) {
+    followed = false
+    followedId.value = null
+  }
+  const named = route.query.execution_id
+  const resume = held?.followedId && !followed && (!named || named === held.followedId)
+  if (resume) follow(held.followedId)
+  flow.blocked = held?.blocked ? blockFor(held) : ''
+  if (resume) return
   if (followed) {
     poll() // Refresh re-reads the execution this tab sent
     return

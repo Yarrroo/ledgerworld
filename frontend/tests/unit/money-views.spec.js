@@ -207,6 +207,22 @@ describe('money-views fixture', () => {
     expect(text(w, 'authority')).toContain('reduced')
   })
 
+  it('Lending shows one moment across the six-hour freshness boundary, not two', async () => {
+    // Lending read at t0 + 6 h (pool fresh, full authority); the overview of the same snapshot
+    // read later, past the boundary, already lists the pool accounts as not current.
+    serveLending(lendingLf2.instance, overviewStale.instance)
+    let w = await open(Lending, '/lending')
+    expect(text(w, 'authority')).toContain('full')
+    expect(w.find('[data-test="not-current"]').exists()).toBe(false)
+    // and the other way: Lending past the boundary, the overview still before it (complete)
+    serveLending(lendingStale.instance)
+    w = await open(Lending, '/lending')
+    expect(text(w, 'authority')).toContain('reduced')
+    expect(text(w, 'not-current')).toContain('lender/operating · ◷ Stale')
+    expect(text(w, 'not-current')).toContain('lender/venue · ? Unknown')
+    expect(disabled(w, 'fund')).toBe(true)
+  })
+
   it('Lending refuses to merge two snapshots into one apparent state', async () => {
     serve({ '/lending': lendingFreeze.instance, '/overview': overviewLf1.instance })
     const w = await open(Lending, '/lending')
