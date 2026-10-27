@@ -70,13 +70,18 @@ def _primary(store: LedgerStore, snapshot: Snapshot) -> tuple[str, list[AccountV
     return entity, [v for v in views if v.currency == currency]
 
 
+def not_current(account_id: str, state: str, as_of: datetime | None) -> Body:
+    """One C6 NotCurrent: only a stale account carries the time it was last observed."""
+    return {"account_id": account_id, "status": state,
+            "as_of": iso(as_of) if state == "stale" else None}
+
+
 def _completeness(store: LedgerStore, now: datetime) -> Body:
     """The cash accounts that are not current, each with its reason: a stale account was
     observed (and keeps its value), an unknown one was not."""
     views = sorted((store.view(r["account_id"]) for r in store.rows("accounts")
                     if r["kind"] == "cash"), key=lambda v: v.account_id)
-    accounts = [{"account_id": v.account_id, "status": state,
-                 "as_of": iso(v.as_of) if state == "stale" else None}
+    accounts = [not_current(v.account_id, state, v.as_of)
                 for v in views if (state := state_of(v, now)) != "known"]
     return {"status": "partial" if accounts else "complete",
             "missing": [a["account_id"] for a in accounts], "accounts": accounts}
@@ -227,6 +232,6 @@ def lending(store: LedgerStore, snapshot: Snapshot, now: datetime) -> Body | Non
     return {"snapshot_id": snapshot.snapshot_id, "pool": pool,
             "capacity": {"K_p": metric(cap.K_p, c, status, now), "authority": cap.authority,
                          "parts": parts,
-                         "unobserved": [{"account_id": u.account_id, "status": u.state,
-                                         "as_of": iso(u.as_of)} for u in cap.unobserved]},
+                         "unobserved": [not_current(u.account_id, u.state, u.as_of)
+                                        for u in cap.unobserved]},
             "facilities": facilities}

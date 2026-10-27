@@ -665,7 +665,7 @@
           }
         }
       ],
-      "description": "K_p, the parts it is computed from, and the pool's cash accounts it could not count (each\nstale or unknown), all read at one moment: authority is full exactly when nothing is\nunobserved.",
+      "description": "K_p, the parts it is computed from, and the pool's cash accounts in its currency that it\ncould not count (each stale or unknown), all read at one moment: authority is full exactly\nwhen nothing is unobserved. Accounts in other currencies are never counted in K_p and are\nlisted by the overview's completeness, not here.",
       "properties": {
         "K_p": {
           "$ref": "#/$defs/Metric"

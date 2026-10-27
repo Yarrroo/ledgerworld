@@ -82,7 +82,7 @@ class PoolCapacity:
     currency: str
     K_p: int  # the system brief's name for it
     parts: CapacityParts
-    unobserved: tuple[Uncounted, ...] = ()  # the pool's cash accounts not known at `now`
+    unobserved: tuple[Uncounted, ...] = ()  # pool cash in its currency not known at `now`
 
     @property
     def authority(self) -> Authority:

@@ -693,9 +693,10 @@ class CapacityParts(_Shape):
 
 
 class Capacity(_Shape):
-    """K_p, the parts it is computed from, and the pool's cash accounts it could not count (each
-    stale or unknown), all read at one moment: authority is full exactly when nothing is
-    unobserved."""
+    """K_p, the parts it is computed from, and the pool's cash accounts in its currency that it
+    could not count (each stale or unknown), all read at one moment: authority is full exactly
+    when nothing is unobserved. Accounts in other currencies are never counted in K_p and are
+    listed by the overview's completeness, not here."""
 
     model_config = _rules(_when("authority", "full", _props(unobserved={"maxItems": 0}),
                                 _props(unobserved={"minItems": 1})))
