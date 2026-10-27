@@ -194,7 +194,8 @@ class Outbox:
         transaction: Transaction | None = None,
     ) -> None:
         conn.isolation_level = None
-        conn.execute("PRAGMA foreign_keys = ON")
+        if isinstance(conn, sqlite3.Connection):  # a server enforces foreign keys already
+            conn.execute("PRAGMA foreign_keys = ON")
         self.conn = conn
         self.post_journal = post_journal
         self.clock = clock

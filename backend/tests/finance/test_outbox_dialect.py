@@ -65,6 +65,13 @@ def test_install_on_another_connection_creates_nothing_when_the_tables_exist():
     assert conn.commits == 1
 
 
+def test_the_outbox_issues_no_sqlite_only_statement_on_another_connection():
+    conn = RecordingConnection(tables={"execution_legs"})
+    ob.install(conn)
+    ob.Outbox(conn, lambda _conn, _leg: "journal")
+    assert not [s for s in conn.statements if any(w in s.lower() for w in SQLITE_ONLY)]
+
+
 def test_install_on_sqlite_creates_the_tables_once():
     conn = sqlite3.connect(":memory:")
     ob.install(conn)
