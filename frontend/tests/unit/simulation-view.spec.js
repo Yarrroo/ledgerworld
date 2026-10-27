@@ -4,12 +4,13 @@
 //
 // C6 RunResponse carries cash paths, not a per-round lender capacity: the fixture's K_p is
 // projected onto a lender-account cash path, which is how the screen shows any account's path.
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { defineComponent, h, watch } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import Simulation from '../../src/views/Simulation.vue'
+import i18n from '../../src/i18n/index.js'
 
 import scrubber from '../../../prp/2026-10-20-ledgerworld/design/modules/ui/fixtures/scrubber.json'
 
@@ -101,7 +102,7 @@ function held () {
   return { promise, resolve }
 }
 
-async function open (body, posts) {
+async function open (body, posts, { realGraph = false } = {}) {
   const calls = serve(body, posts)
   const r = createRouter({
     history: createMemoryHistory(),
@@ -113,7 +114,8 @@ async function open (body, posts) {
   })
   await r.push(`/simulation?run_id=${ctx.run_id}`)
   await r.isReady()
-  const wrapper = mount(Simulation, { attachTo: document.body, global: { plugins: [r], stubs: { GraphPanel: GraphStub } } })
+  const global = realGraph ? { plugins: [r, i18n] } : { plugins: [r], stubs: { GraphPanel: GraphStub } }
+  const wrapper = mount(Simulation, { attachTo: document.body, global })
   await flushPromises()
   mounted.push(wrapper)
   return { wrapper, calls, router: r }
@@ -419,5 +421,23 @@ describe('review findings, each pinned', () => {
     reload.resolve(body)
     await flushPromises()
     expect(disabled(w, 'refresh')).toBe(false)
+  })
+})
+
+describe('the real graph view', () => {
+  // happy-dom lays out no text: the edge labels' boxes are the one geometry the graph asks for.
+  const circles = (w) => w.findAll('[data-test="graph"] svg.graph-svg circle').length
+
+  it('draws a completed run on first load, with no scrub or resize, and keeps it after an unchanged refresh', async () => {
+    const had = 'getBBox' in SVGElement.prototype
+    if (!had) SVGElement.prototype.getBBox = () => ({ x: 0, y: 0, width: 40, height: 12 })
+    onTestFinished(() => { if (!had) delete SVGElement.prototype.getBBox })
+    const { wrapper: w, calls } = await open(run(), undefined, { realGraph: true })
+    const drawn = circles(w)
+    expect(drawn).toBeGreaterThan(0)
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(calls.filter((c) => c.method === 'GET').length).toBe(2)
+    expect(circles(w)).toBe(drawn)
   })
 })

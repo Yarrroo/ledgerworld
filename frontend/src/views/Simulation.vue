@@ -57,8 +57,8 @@
 
       <section class="lw-live-panel lw-live__graph" aria-label="Graph and actor inspector" data-test="graph">
         <div class="lw-live__graph-view">
-          <GraphPanel :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
-                      @refresh="reload" @toggle-maximize="graphExpanded = !graphExpanded" />
+          <LiveGraph :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
+                     @refresh="reload" @toggle-maximize="graphExpanded = !graphExpanded" />
         </div>
         <div class="lw-live__inspector" data-test="inspector">
           <h2>Actors up to round {{ display ?? '–' }}</h2>
@@ -110,7 +110,7 @@
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import GraphPanel from '../components/GraphPanel.vue'
+import LiveGraph from '../components/LiveGraph.vue'
 import Scrubber from '../components/Scrubber.vue'
 import ActionFeed from '../components/ActionFeed.vue'
 import CashPaths from '../components/CashPaths.vue'
