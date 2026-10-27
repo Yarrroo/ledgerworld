@@ -1,4 +1,6 @@
-"""Every number in a report traces to a signed result (g2 `report_numbers_grounded`, T35).
+"""Every number in a report traces to a signed result (g2 `report_numbers_grounded`).
+
+Brief T20's validator half, built before T11 and T13 produce real results; T20 binds it to them.
 
 The results are synthetic, signed in the test with a key drawn per run; their figures are the
 LF-1 and LF-2 fixture numbers (system brief §6). The model is a ``ScriptedModel`` whose plan
@@ -7,6 +9,7 @@ answers the draft at round 0 and the redraft at round 1.
 
 from __future__ import annotations
 
+import copy
 import os
 
 import pytest
@@ -15,6 +18,7 @@ from app.reports.grounded import (
     GroundedReportAgent,
     UnverifiedResult,
     ground,
+    placeholder,
     sign_result,
     template_draft,
 )
@@ -46,14 +50,10 @@ def results():
     ]
 
 
-def ph(evidence_id: str, figure: str) -> str:
-    return "{{" + evidence_id + "#" + figure + "}}"
-
-
 CLEAN = (
-    f"Without a plan the floor is breached by {ph(FEAS, 'breach_without_plan')}. Drawing "
-    f"{ph(FEAS, 'advance_drawn')} leaves {ph(FEAS, 'cash_after_payroll')} after payroll, while "
-    f"the lender's capacity under stress is {ph(KP, 'capacity_under_stress')}."
+    f"Without a plan the floor is breached by {placeholder(FEAS, 'breach_without_plan')}. Drawing "
+    f"{placeholder(FEAS, 'advance_drawn')} leaves {placeholder(FEAS, 'cash_after_payroll')} after payroll, while "
+    f"the lender's capacity under stress is {placeholder(KP, 'capacity_under_stress')}."
 )
 INVENTED = "Without a plan the floor is breached by 12,345.00 and recovery is 87% likely."
 
@@ -73,7 +73,7 @@ def assert_every_number_links_to_evidence(report, given):
     ids = {r.evidence_id for r in given}
     assert report.links
     for link in report.links:
-        assert link.evidence_ids and set(link.evidence_ids) <= ids
+        assert link.ref.evidence_id in ids
         assert report.text[link.start:link.end] == link.text
 
 
@@ -89,19 +89,28 @@ def test_an_invented_number_is_rejected(draft, number):
 
 
 def test_a_placeholder_naming_no_figure_is_rejected():
-    _, _, problems = ground(f"Cash is {ph(FEAS, 'cash_tomorrow')}.", results())
+    _, _, problems = ground(f"Cash is {placeholder(FEAS, 'cash_tomorrow')}.", results())
     assert problems == [
-        f"the placeholder {ph(FEAS, 'cash_tomorrow')} names no figure of a signed result"]
-    _, _, problems = ground(f"Cash is {ph(FEAS, 'cash_after_payroll')[:-1]}.", results())
+        f"the placeholder {placeholder(FEAS, 'cash_tomorrow')} names no figure of a signed result"]
+    _, _, problems = ground(f"Cash is {placeholder(FEAS, 'cash_after_payroll')[:-1]}.", results())
     assert any("malformed placeholder" in p for p in problems)
 
 
-def test_a_literal_number_from_the_set_is_linked_to_its_evidence():
-    _, links, problems = ground("The floor is breached by 10,000.00 and 3 borrowers react.",
-                                   results())
-    assert problems == []
-    assert [(ln.text, ln.evidence_ids) for ln in links] == [("10,000.00", (FEAS,)), ("3", (KP,))]
-    assert {r.figure for r in links[0].refs} == {"breach_without_plan", "advance_drawn"}
+@pytest.mark.parametrize("draft, number", [
+    ("The floor is breached by 10,000.00.", "10,000.00"),
+    ("EUR 10,000.00 was lost.", "10,000.00"),
+    ("Recovery is 3% likely.", "3"),
+    ("The pool lost 10 000.", "000"),
+], ids=["same-value", "other-currency", "count-as-percent", "space-grouped"])
+def test_a_written_number_is_rejected_even_when_a_figure_carries_its_value(draft, number):
+    _, links, problems = ground(draft, results())
+    assert any(p.startswith(f"the number {number} is ") for p in problems)
+    assert links == ()
+
+
+def test_a_fill_read_as_a_percentage_is_rejected():
+    _, _, problems = ground(f"Recovery is {placeholder(KP, 'borrowers_reacting')} % likely.", results())
+    assert problems == [f"the figure {placeholder(KP, 'borrowers_reacting')} is followed by a percent sign"]
 
 
 def test_a_grounded_draft_is_filled_from_the_signed_results():
@@ -117,7 +126,7 @@ def test_a_grounded_draft_is_filled_from_the_signed_results():
         "USD 10,000.00", "USD 10,000.00", "USD 30,000.00", "USD 27,000.00"]
     assert_every_number_links_to_evidence(report, given)
     prompt = model.calls[0].messages[-1]["content"]
-    assert ph(KP, "capacity_under_stress") in prompt and "USD 27,000.00" in prompt
+    assert placeholder(KP, "capacity_under_stress") in prompt and "USD 27,000.00" in prompt
 
 
 def test_a_rejected_draft_gets_one_redraft():
@@ -148,7 +157,7 @@ def test_a_rejected_redraft_falls_back_to_the_template():
         "borrowers reacting 3."
     )
     assert_every_number_links_to_evidence(report, given)
-    assert {(r.evidence_id, r.figure) for ln in report.links for r in ln.refs} == {
+    assert {(ln.ref.evidence_id, ln.ref.figure) for ln in report.links} == {
         (r.evidence_id, k) for r in given for k in r.figures}
 
 
@@ -171,8 +180,8 @@ def test_a_tampered_result_is_refused_before_the_model_is_asked():
 
 
 @pytest.mark.parametrize(
-    "figure", [100.0, True, "10000", {"minor": 1.5, "currency": "USD"}],
-    ids=["float", "bool", "string", "float-minor"])
+    "figure", [100.0, True, "10000", {"minor": 1.5, "currency": "USD"}, -1],
+    ids=["float", "bool", "string", "float-minor", "negative-count"])
 def test_a_figure_is_money_or_a_count_never_a_float(figure):
     with pytest.raises(ValidationError):
         sign_result(FEAS, "feasibility", {"cash": figure}, key=SIGNING_KEY)
@@ -182,6 +191,11 @@ def test_a_section_never_reads_graph_memory():
     writer, _ = agent(CLEAN)
     with pytest.raises(RuntimeError, match="never graph memory"):
         writer.zep_tools.quick_search(graph_id="g-1", query="cash")
+    assert not hasattr(writer.zep_tools, "__setstate__")
+    copy.deepcopy(writer.zep_tools)
+    with pytest.raises(TypeError):
+        GroundedReportAgent("g-1", "r-1", "LF-1", key=SIGNING_KEY, llm_client=writer.llm,
+                            zep_tools=object())
 
 
 def test_the_template_alone_is_grounded():
@@ -194,3 +208,25 @@ def test_an_unplanned_model_call_is_not_swallowed():
     writer, _ = agent(INVENTED)
     with pytest.raises(UnexpectedModelCall):
         writer.write_section("Integrated plan", results())
+
+
+@pytest.mark.parametrize("draft", [
+    placeholder(KP, "borrowers_reacting") + placeholder(KP, "borrowers_reacting"),
+    placeholder(KP, "borrowers_reacting") + "3 borrowers",
+    "3" + placeholder(KP, "borrowers_reacting"),
+    placeholder(KP, "borrowers_reacting") + ".3",
+    "-" + placeholder(KP, "borrowers_reacting"),
+], ids=["two-fills", "fill-then-literal", "literal-then-fill", "fraction", "minus"])
+def test_a_fill_never_merges_with_a_neighbouring_number(draft):
+    text, _, problems = ground(draft, results())
+    merged = next(n for n in ("33", "3.3", "-3") if text.startswith(n))
+    assert f"the number {merged} in the filled text is not one figure" in problems
+
+
+def test_two_results_under_one_evidence_id_are_refused():
+    given = results()
+    twin = sign_result(FEAS, "feasibility", {"cash_after_payroll": usd(1)}, key=SIGNING_KEY)
+    writer, model = agent(CLEAN)
+    with pytest.raises(ValueError, match="evidence id"):
+        writer.write_section("Integrated plan", [*given, twin])
+    assert model.calls == []

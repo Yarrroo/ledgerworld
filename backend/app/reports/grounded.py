@@ -5,15 +5,17 @@ A structured result is a set of named figures (Money or an integer count) under 
 signed with HMAC-SHA256 by whoever produced it; the key is the caller's, never the model's.
 
 The model writes each figure as a placeholder ``{{<evidence_id>#<figure>}}`` and the placeholder
-is filled with the figure's rendered value. Any other number in the prose must equal a figure's
-value, and is then linked to every figure carrying that value; a number in no result, or a
-placeholder naming no figure, rejects the draft. A rejected draft gets one redraft with the
-reasons; a rejected redraft gives way to a template written from the results alone. Every number
-in the returned text lies inside a link to an evidence id, on all three paths.
+is filled with the figure's rendered value, currency included. A number the model writes itself
+rejects the draft, even one a figure carries: its unit would be the model's (``EUR 10,000.00``
+against a USD figure, a count read as ``3%``). So do a placeholder naming no figure, a fill
+followed by a percent sign, and a fill that runs into a neighbouring digit, sign or point
+(``3`` beside ``3`` reads 33). A rejected draft gets one redraft with the reasons; a rejected
+redraft gives way to a template written from the results alone. Every number in the returned text
+is one fill, linked to its evidence id, on all three paths.
 
-A number is any run of digits, so an identifier like ``LF-1`` or ``round 4`` in the prose counts
-and fails unless a result carries it. Figure and kind names hold no digit for the same reason: the
-template prints them. Numbers spelt as words are not detected.
+A number is any run of decimal digits, so an identifier like ``LF-1`` or ``round 4`` counts.
+Figure and kind names hold no digit for the same reason: the template prints them. Numbers spelt
+as words and numerals outside the decimal digits (superscripts, Roman numerals) are not detected.
 
 ``GroundedReportAgent`` extends the upstream ``ReportAgent`` with ``write_section``; it reads
 signed results, never graph memory, and refuses a result whose signature does not verify.
@@ -30,17 +32,18 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-from app.finance.schemas import Money, Sha256, to_decimal
+from app.finance.schemas import Count, Money, Sha256, to_decimal
 from app.services.report_agent import ReportAgent
 
 EvidenceId = Annotated[str, StringConstraints(pattern=r"^[^\s{}#]{1,128}$")]
 # Printed by the template, so a digit here would be a number no result carries.
 Label = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z_]{0,63}$")]
-Figure = Money | StrictInt
+Figure = Money | Count
 
 PLACEHOLDER = re.compile(r"\{\{\s*([^\s{}#]+)#([^\s{}#]+)\s*\}\}")
+PERCENT_AFTER = re.compile(r"\s*[%‰]")
 # Grouped thousands or plain digits with an optional fraction; a minus only where it is not a
 # hyphen inside a word (in "LF-1" the number is 1).
 NUMBER = re.compile(r"(?:(?<!\w)-)?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
@@ -51,6 +54,10 @@ SYSTEM_PROMPT = (
     "below; it is replaced with the figure's value. Write no other digits: no dates, rounds, "
     "identifiers, percentages or estimates. Never invent a comparison, receipt or probability."
 )
+
+
+def placeholder(evidence_id: str, figure: str) -> str:
+    return "{{" + evidence_id + "#" + figure + "}}"
 
 
 class UnverifiedResult(ValueError):
@@ -68,38 +75,27 @@ class SignedResult(BaseModel):
     signature: Sha256
 
 
-def _payload(evidence_id: str, kind: str, figures: dict[str, Figure]) -> bytes:
-    body = {
-        "evidence_id": evidence_id,
-        "kind": kind,
-        "figures": {
-            k: v.model_dump() if isinstance(v, Money) else v for k, v in figures.items()
-        },
-    }
-    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
-
-
-def _mac(key: bytes, payload: bytes) -> str:
+def _mac(key: bytes, result: SignedResult) -> str:
     if not isinstance(key, bytes) or not key:
         raise ValueError("a signing key is non-empty bytes")
+    body = result.model_dump(exclude={"signature"})
+    payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 
 def sign_result(
     evidence_id: str, kind: str, figures: dict[str, Any], *, key: bytes
 ) -> SignedResult:
-    """Validate the figures (Money or int, never a float) and sign them under ``evidence_id``."""
+    """Validate the figures (Money or a count, never a float) and sign them."""
     unsigned = SignedResult(
         evidence_id=evidence_id, kind=kind, figures=figures, signature="0" * 64
     )
-    mac = _mac(key, _payload(unsigned.evidence_id, unsigned.kind, unsigned.figures))
-    return unsigned.model_copy(update={"signature": mac})
+    return unsigned.model_copy(update={"signature": _mac(key, unsigned)})
 
 
 def verify_result(result: SignedResult, *, key: bytes) -> SignedResult:
     """The result itself, or ``UnverifiedResult`` when its content is not what was signed."""
-    expected = _mac(key, _payload(result.evidence_id, result.kind, result.figures))
-    if not hmac.compare_digest(expected, result.signature):
+    if not hmac.compare_digest(_mac(key, result), result.signature):
         raise UnverifiedResult(f"result {result.evidence_id!r}: signature does not verify")
     return result
 
@@ -126,16 +122,16 @@ class FigureRef:
 
 @dataclass(frozen=True)
 class NumberLink:
-    """A span of the report text and the figures it was filled from or matches."""
+    """A span of the report text and the figure it was filled from."""
 
     start: int
     end: int
     text: str
-    refs: tuple[FigureRef, ...]
+    ref: FigureRef
 
-    @property
-    def evidence_ids(self) -> tuple[str, ...]:
-        return tuple(dict.fromkeys(r.evidence_id for r in self.refs))
+
+def _within(m: re.Match, spans) -> bool:
+    return any(s.start <= m.start() and m.end() <= s.end for s in spans)
 
 
 @dataclass(frozen=True)
@@ -148,11 +144,13 @@ class GroundedReport:
 
     def unlinked(self) -> list[str]:
         """Numbers in the text that no link covers; empty for every report this module returns."""
-        return [
-            m.group()
-            for m in NUMBER.finditer(self.text)
-            if not any(ln.start <= m.start() and m.end() <= ln.end for ln in self.links)
-        ]
+        return [m.group() for m in NUMBER.finditer(self.text) if not _within(m, self.links)]
+
+
+@dataclass(frozen=True)
+class _Span:
+    start: int
+    end: int
 
 
 def ground(
@@ -160,54 +158,55 @@ def ground(
 ) -> tuple[str, tuple[NumberLink, ...], list[str]]:
     """Fill the draft's placeholders and link its numbers: (text, links, problems).
 
-    The text is usable only when ``problems`` is empty.
+    The text is usable only when ``problems`` is empty: then every number in it is one fill.
     """
     table = {
         FigureRef(r.evidence_id, k): v for r in results for k, v in r.figures.items()
     }
-    by_amount: dict[Decimal, list[FigureRef]] = {}
-    for ref, value in table.items():
-        by_amount.setdefault(_amount(value), []).append(ref)
-
     out: list[str] = []
     links: list[NumberLink] = []
+    unknown: list[_Span] = []  # placeholders naming no figure, already a problem
     problems: list[str] = []
     length = 0
-
-    def emit(text: str, refs: tuple[FigureRef, ...] | None) -> None:
-        nonlocal length
-        if refs is not None:
-            links.append(NumberLink(length, length + len(text), text, refs))
-        out.append(text)
-        length += len(text)
-
-    def prose(segment: str) -> None:
-        if "{{" in segment or "}}" in segment:
-            problems.append(f"a malformed placeholder in {segment.strip()[:80]!r}")
-        pos = 0
-        for m in NUMBER.finditer(segment):
-            emit(segment[pos:m.start()], None)
-            refs = by_amount.get(Decimal(m.group().replace(",", "")))
-            if refs is None:
-                problems.append(f"the number {m.group()} is in no signed result")
-            emit(m.group(), tuple(refs or ()))
-            pos = m.end()
-        emit(segment[pos:], None)
-
     if not draft.strip():
         problems.append("the draft is empty")
+
+    def emit(text: str) -> _Span:
+        nonlocal length
+        out.append(text)
+        length += len(text)
+        return _Span(length - len(text), length)
+
     pos = 0
     for m in PLACEHOLDER.finditer(draft):
-        prose(draft[pos:m.start()])
+        emit(draft[pos:m.start()])
         ref = FigureRef(m.group(1), m.group(2))
         if ref in table:
-            emit(render(table[ref]), (ref,))
+            span = emit(render(table[ref]))
+            links.append(NumberLink(span.start, span.end, out[-1], ref))
+            if PERCENT_AFTER.match(draft, m.end()):
+                problems.append(f"the figure {m.group()} is followed by a percent sign")
         else:
             problems.append(f"the placeholder {m.group()} names no figure of a signed result")
-            emit(m.group(), ())
+            unknown.append(emit(m.group()))
         pos = m.end()
-    prose(draft[pos:])
-    return "".join(out), tuple(ln for ln in links if ln.refs), problems
+    emit(draft[pos:])
+    text = "".join(out)
+
+    if "{{" in PLACEHOLDER.sub("", draft) or "}}" in PLACEHOLDER.sub("", draft):
+        problems.append("a malformed placeholder")
+    amounts = {_amount(v) for v in table.values()}
+    for m in NUMBER.finditer(text):
+        if _within(m, links) or _within(m, unknown):
+            continue
+        if any(ln.start < m.end() and m.start() < ln.end for ln in links):
+            # A fill beside a digit reads as one number neither side carries ("3" + "3" is 33).
+            problems.append(f"the number {m.group()} in the filled text is not one figure")
+        elif Decimal(m.group().replace(",", "")) in amounts:
+            problems.append(f"the number {m.group()} is written out, not a placeholder")
+        else:
+            problems.append(f"the number {m.group()} is in no signed result")
+    return text, tuple(links), problems
 
 
 def template_draft(results: Sequence[SignedResult]) -> str:
@@ -215,7 +214,7 @@ def template_draft(results: Sequence[SignedResult]) -> str:
     lines = []
     for r in results:
         parts = "; ".join(
-            f"{k.replace('_', ' ')} {{{{{r.evidence_id}#{k}}}}}" for k in r.figures
+            f"{k.replace('_', ' ')} {placeholder(r.evidence_id, k)}" for k in r.figures
         )
         lines.append(f"{r.kind.replace('_', ' ').capitalize()}: {parts}.")
     return "\n".join(lines)
@@ -225,6 +224,8 @@ class _NoGraphMemory:
     """Stands in for the upstream graph tools: a grounded section never reads graph memory."""
 
     def __getattr__(self, name: str) -> Any:
+        if name.startswith("__"):  # copy, pickle and hasattr probe these; they do not exist
+            raise AttributeError(name)
         raise RuntimeError(f"a grounded report reads signed results, never graph memory ({name})")
 
 
@@ -239,14 +240,13 @@ class GroundedReportAgent(ReportAgent):
         *,
         key: bytes,
         llm_client=None,
-        zep_tools=None,
     ) -> None:
         super().__init__(
             graph_id,
             simulation_id,
             simulation_requirement,
             llm_client=llm_client,
-            zep_tools=zep_tools or _NoGraphMemory(),
+            zep_tools=_NoGraphMemory(),
         )
         self._key = key
 
@@ -254,6 +254,9 @@ class GroundedReportAgent(ReportAgent):
         """Draft, then at most one redraft, then the template; every result must verify first."""
         if not results:
             raise ValueError("a grounded section needs at least one signed result")
+        ids = [r.evidence_id for r in results]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"two results share an evidence id: {sorted(ids)}")
         for r in results:
             verify_result(r, key=self._key)
         listing = [
@@ -261,7 +264,7 @@ class GroundedReportAgent(ReportAgent):
                 "evidence_id": r.evidence_id,
                 "kind": r.kind,
                 "figures": {
-                    k: {"placeholder": f"{{{{{r.evidence_id}#{k}}}}}", "value": render(v)}
+                    k: {"placeholder": placeholder(r.evidence_id, k), "value": render(v)}
                     for k, v in r.figures.items()
                 },
             }
@@ -281,7 +284,7 @@ class GroundedReportAgent(ReportAgent):
             text, links, problems = ground(draft, results)
             if not problems:
                 return GroundedReport(title, text, links, path, tuple(rejected))
-            rejected.extend(f"{path}: {p}" for p in problems)
+            rejected += [f"{path}: {p}" for p in problems]
             messages += [
                 {"role": "assistant", "content": draft},
                 {
