@@ -1,6 +1,7 @@
 """g5 The entry is complete and honest: `submission_items`, from `checks/submission.py --count`.
 
-0 until checks/submission.py exists. Its output is `n/8` or `n`; the first number is the count.
+0 until checks/submission.py exists. Its last line is `n/8` or `n`; anything else (a crash after a
+progress line) is an error, so the runner prints the baseline.
 """
 
 from __future__ import annotations
@@ -10,18 +11,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-KPI = "submission_items"
 BASELINE = 0
 SCRIPT_TIMEOUT_S = 600
-COUNT = re.compile(r"\d+")
+COUNT = re.compile(r"\s*(\d+)\s*(?:/\s*\d+)?\s*")
 
 
 def items(stdout: str) -> int:
     lines = [line for line in stdout.splitlines() if line.strip()]
-    found = COUNT.search(lines[-1]) if lines else None
+    found = COUNT.fullmatch(lines[-1]) if lines else None
     if not found:
-        raise ValueError("submission.py printed no count")
-    return int(found.group())
+        raise ValueError("submission.py did not end with its count")
+    return int(found.group(1))
 
 
 def measure(root: Path) -> int:

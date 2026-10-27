@@ -15,7 +15,15 @@ import sys
 from pathlib import Path
 
 CHECKS = Path(__file__).resolve().parent
-GOALS = ("g1", "g2", "g3", "g4", "g5")
+# goal -> (KPI name, baseline). The baseline is also what prints when a goal cannot be measured,
+# even when its module cannot be loaded.
+GOALS = {
+    "g1": ("money_checks_pct", 0),
+    "g2": ("coupling_checks_pct", 0),
+    "g3": ("demo_checkpoints_live", 0),
+    "g4": ("judge_path_s", 999),
+    "g5": ("submission_items", 0),
+}
 
 
 def fmt(value: float) -> str:
@@ -29,15 +37,15 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--root", type=Path, default=CHECKS.parent, help="repository to measure")
     args = parser.parse_args(argv)
 
+    name, baseline = GOALS[args.goal]
     sys.path.insert(0, str(CHECKS))
-    goal = importlib.import_module(f"goals.{args.goal}")
     try:
-        value = goal.measure(args.root.resolve())
+        value = importlib.import_module(f"goals.{args.goal}").measure(args.root.resolve())
     except Exception as exc:  # noqa: BLE001 — any failure reads as the baseline
         print(f"kpi {args.goal}: baseline ({type(exc).__name__}: {exc})", file=sys.stderr)
-        value = goal.BASELINE
+        value = baseline
     shown = fmt(value)
-    print(shown if args.bare else f"{args.goal} {goal.KPI} {shown}")
+    print(shown if args.bare else f"{args.goal} {name} {shown}")
     return 0
 
 

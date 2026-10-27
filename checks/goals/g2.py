@@ -6,7 +6,6 @@ from pathlib import Path
 
 from goals.g1 import group_share
 
-KPI = "coupling_checks_pct"
 BASELINE = 0
 
 

@@ -12,9 +12,10 @@ import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-KPI = "money_checks_pct"
 BASELINE = 0
 PYTEST_TIMEOUT_S = 1800
+# --locked as the merge gate runs it: measuring never re-locks or re-syncs the environment.
+PYTEST = ["uv", "run", "--locked", "pytest"]
 
 
 def junit_outcomes(xml_path: Path) -> dict[tuple[str, str], bool]:
@@ -56,7 +57,8 @@ def share(checks: list[dict], outcomes: dict[tuple[str, str], bool]) -> int:
 def group_share(root: Path, group: str) -> int:
     checks = json.loads((root / "checks" / "required.json").read_text(encoding="utf-8"))[group]
     ids = [t for check in checks for t in check.get("tests", [])]
-    # Whole files run, not node ids: one id that does not exist would make pytest refuse them all.
+    # Whole files run, not node ids: one id that does not exist would make pytest refuse them all,
+    # and a file that cannot be collected yet fails only its own ids.
     files = sorted({t.split("::")[0] for t in ids if (root / t.split("::")[0]).is_file()})
     if not files:
         return share(checks, {})
@@ -64,7 +66,7 @@ def group_share(root: Path, group: str) -> int:
     xml_path.parent.mkdir(parents=True, exist_ok=True)
     xml_path.unlink(missing_ok=True)
     subprocess.run(
-        ["uv", "run", "pytest", "-q", "--junitxml", str(xml_path), *files],
+        [*PYTEST, "-q", "--continue-on-collection-errors", "--junitxml", str(xml_path), *files],
         cwd=root,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

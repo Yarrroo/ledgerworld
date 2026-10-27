@@ -133,6 +133,28 @@ def broken(patch) -> dict:
             2,
         ),
         ("mode-a-advance", lambda r, c: r.update(connected=True), 3),
+        (
+            "sub-second-created-at",
+            lambda r, c: c["fresh_branch"].update(created_at="2026-11-01T10:00:00.250Z"),
+            3,
+        ),
+        (
+            "offset-created-at",
+            lambda r, c: c["fresh_branch"].update(created_at="2026-11-01T11:00:00+02:00"),
+            2,
+        ),
+        ("no-created-at", lambda r, c: c["fresh_branch"].pop("created_at"), 2),
+        ("no-started-at", lambda r, c: r.pop("started_at"), 2),
+        ("no-rounds", lambda r, c: c["fresh_branch"].update(rounds=0), 2),
+        ("advance-pending", lambda r, c: c["advance_reconciled"].update(status="PENDING"), 2),
+        (
+            "connected-missing-mislabelled",
+            lambda r, c: (
+                r.pop("connected"),
+                c["advance_reconciled"].update(label="advance (connected-account transfer)"),
+            ),
+            2,
+        ),
     ],
 )
 def test_g3_counts_only_checkpoints_that_hold_live(case: str, patch, expected: int) -> None:
@@ -185,3 +207,61 @@ def test_g5_reads_the_submission_count(bare: Path) -> None:
     script = bare / "checks" / "submission.py"
     script.write_text('import sys\nprint("5/8")\nsys.exit(1)\n', encoding="utf-8")
     assert kpi(bare, "g5").stdout == "5\n"
+
+
+def test_g4_reads_the_seconds_off_the_last_line() -> None:
+    from goals import g4
+
+    assert g4.seconds("navigating\njudge path: 42.5 s (max over 1440 px)\n") == 42.5
+    assert g4.seconds("390 px: 30.1\n1440 px: 41\n41.0\n") == 41.0
+
+
+def test_g1_a_file_that_cannot_be_collected_fails_only_its_own_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "checks").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "pytest.ini").write_text("[pytest]\n")  # pins the rootdir to the checkout
+    (tmp_path / "tests" / "test_kpi_ok.py").write_text("def test_ok():\n    pass\n")
+    (tmp_path / "tests" / "test_kpi_unbuilt.py").write_text(
+        "import a_module_not_built_yet\n\n\ndef test_x():\n    pass\n"
+    )
+    required = {
+        "g1": [
+            {"id": "ok", "tests": ["tests/test_kpi_ok.py::test_ok"]},
+            {"id": "unbuilt", "tests": ["tests/test_kpi_unbuilt.py::test_x"]},
+        ]
+    }
+    (tmp_path / "checks" / "required.json").write_text(json.dumps(required))
+    monkeypatch.setattr(g1, "PYTEST", [sys.executable, "-m", "pytest", "-p", "no:cacheprovider"])
+    assert g1.group_share(tmp_path, "g1") == 50
+
+
+def test_g1_measures_against_the_lockfile_as_the_merge_gate_does() -> None:
+    assert g1.PYTEST[:3] == ["uv", "run", "--locked"]
+
+
+def test_g5_a_progress_line_is_not_a_count() -> None:
+    from goals import g5
+
+    assert g5.items("checking\n5/8\n") == 5
+    assert g5.items("6\n") == 6
+    with pytest.raises(ValueError):
+        g5.items("checked 5/8\nchecking item 6 of 8\n")
+
+
+def test_a_goal_that_cannot_load_prints_its_baseline(bare: Path) -> None:
+    (bare / "checks" / "goals" / "g4.py").write_text("import a_module_not_built_yet\n")
+    done = kpi(bare, "g4")
+    assert (done.returncode, done.stdout) == (0, "999\n")
+    assert "a_module_not_built_yet" in done.stderr
+
+
+def test_the_runner_baselines_match_the_goal_modules() -> None:
+    import importlib
+
+    import kpi as runner
+
+    for goal, (name, baseline) in runner.GOALS.items():
+        module = importlib.import_module(f"goals.{goal}")
+        assert getattr(module, "BASELINE", baseline) == baseline, goal

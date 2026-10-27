@@ -10,26 +10,25 @@ import re
 import subprocess
 from pathlib import Path
 
-KPI = "judge_path_s"
-BASELINE = 999
-FAILED = 999
+BASELINE = 999  # also the reading of any failed or unrunnable path
 SCRIPT_TIMEOUT_S = 1800
 NUMBER = re.compile(r"\d+(?:\.\d+)?")
 
 
 def seconds(stdout: str) -> float:
-    """The last number the script printed."""
-    found = NUMBER.findall(stdout)
+    """The first number on the last line the script printed."""
+    lines = [line for line in stdout.splitlines() if line.strip()]
+    found = NUMBER.search(lines[-1]) if lines else None
     if not found:
-        raise ValueError("judge-path printed no number")
-    return float(found[-1])
+        raise ValueError("judge-path printed no seconds on its last line")
+    return float(found.group())
 
 
 def measure(root: Path) -> float:
     url = os.environ.get("LEDGERWORLD_URL", "").strip()
     script = root / "scripts" / "judge-path.sh"
     if not url or not script.is_file():
-        return FAILED
+        return BASELINE
     done = subprocess.run(
         ["bash", str(script), url],
         cwd=root,
@@ -39,5 +38,5 @@ def measure(root: Path) -> float:
         check=False,
     )
     if done.returncode != 0:
-        return FAILED
+        return BASELINE
     return seconds(done.stdout)
