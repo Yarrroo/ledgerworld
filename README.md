@@ -117,8 +117,10 @@ are in [docs/schema.md](docs/schema.md).
   money moves. When connected accounts are not enabled (Mode B), the advance is a sandbox deposit
   simulation labelled "advance inflow (sandbox simulation)", and it is never described as a
   lender disbursement through Airwallex. The repayment is ledger-only and labelled simulated. The
-  connector has no deposit lookup, so a Mode B deposit whose outcome is unknown stays unknown for
-  the operator rather than being resolved by a `GET`. The receipt says which mode ran. No sandbox
+  connector finds a Mode B deposit by its exact reference (`find_deposit`) and waits on it
+  (`wait_for_deposit`, at most ten reads one second apart) until it shows a terminal status; one
+  still pending or unreadable after that wait stays unknown for the operator and is never resent.
+  The receipt says which mode ran. No sandbox
   receipt is committed in this repository yet.
 - **Scripted vs live model:** in fake mode, the actors' choices come from a `ScriptedModel` plan.
   That proves the wiring, not an independent model's judgement. The demo receipt records

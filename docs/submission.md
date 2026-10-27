@@ -48,8 +48,10 @@ with an uncertain outcome are queried before any retry, then reconciled into the
   and repayment uses a charge on the connected account.
 - **Mode B:** otherwise the advance is labelled **advance inflow (sandbox simulation)** and uses
   a sandbox deposit simulation. It is not a lender disbursement through Airwallex. Repayment is
-  ledger-only, labelled **simulated**. An unknown deposit remains an operator incident because
-  the connector has no deposit lookup. Wallet funding is setup, not a plan leg.
+  ledger-only, labelled **simulated**. The connector finds the deposit by its exact reference
+  (`find_deposit`) and waits on it (`wait_for_deposit`, at most ten reads one second apart); only
+  an observed terminal status settles it. A deposit still pending or unreadable after that wait
+  stays an operator incident and is never guessed or resent. Wallet funding is setup, not a plan leg.
 - **Fake provider:** local tests use FakeTransport. Its receipts are not Airwallex sandbox receipts.
   A sandbox receipt does not prove that any actor used a live model. No production money moves.
 

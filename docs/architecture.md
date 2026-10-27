@@ -102,9 +102,12 @@ clocks, RNG, event cursor and queues. A rejected intent becomes `no_action` and 
    success in the leg's own amount and currency. A webhook is a verified hint that triggers that
    `GET`.
 
-The exception is the Mode B deposit. It carries no `request_id` (its reference carries the leg id)
-and the connector has no deposit lookup, so an unknown deposit stays unknown for the operator.
-The orphan sweep skips deposits for the same reason.
+The exception is the Mode B deposit. It carries no `request_id`; its reference carries the leg id.
+The gateway finds it by that exact reference (`find_deposit`, every page read so a duplicate stays
+ambiguous) and reads it by provider id through `wait_for_deposit`: at most ten reads one second
+apart, settling only on an observed terminal status. A deposit still pending or unreadable after
+that wait stays unknown for the operator and is never resent. The orphan sweep skips deposits,
+because without a `request_id` it cannot tell ours from anyone else's.
 
 | Leg | Mode A · connected accounts | Mode B · fallback |
 |---|---|---|
