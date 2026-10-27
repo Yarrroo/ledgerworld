@@ -28,6 +28,7 @@ from app.connectors.airwallex.client import CONVERSIONS_PATH
 from app.connectors.airwallex.errors import AirwallexError
 from app.connectors.airwallex.errors import ProviderError as ProviderRefusal
 from app.connectors.airwallex.webhooks import ReconciliationHint, WebhookEvent, WebhookVerifier
+from app.execution import outbox as ob
 from app.execution.gateway import Gateway, collection
 from app.finance.models import obligations
 from sqlalchemy import update
@@ -112,7 +113,7 @@ def flag_orphan(gateway: Gateway, provider_id: str, detail: str) -> bool:
             "INSERT INTO incidents (incident_id, kind, leg_id, provider_id, detail, opened_at)"
             " VALUES (?, 'unknown_provider_object', NULL, ?, ?, ?)",
             (f"unknown_provider_object-{provider_id}-{_count(gateway, provider_id) + 1}",
-             provider_id, detail, gateway.clock().isoformat()))
+             provider_id, detail, ob.stamp(gateway.clock())))
     return True
 
 

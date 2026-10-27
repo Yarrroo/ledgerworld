@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 
 from ...connectors.airwallex.webhooks import WebhookVerifier
 from ...decisions.candidates import plan_for_now
+from ...execution import outbox as ob
 from ...execution import reconcile
 from ...execution.approval import Refusal, bind
 from ...finance import schemas as c6
@@ -311,7 +312,7 @@ def _leg(gateway: Any, leg: Any, mode: str) -> dict:
             "amount": to_provider_decimal(Money(minor=leg.amount_minor, currency=leg.currency)),
             "currency": leg.currency, "label": leg.receipt_label, "mode": mode,
             "raw_keys": json.loads(event[0]) if event and event[0] else [],
-            "observed_at": event[1] if event else None,
+            "observed_at": ob.utc(event[1]) if event else None,
         }
     return {"leg_id": leg.leg_id, "request_id": leg.request_id, "kind": leg.kind,
             "provider_id": leg.provider_id, "state": leg.state, "receipt": receipt,

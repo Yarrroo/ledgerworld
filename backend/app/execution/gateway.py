@@ -338,7 +338,7 @@ class Gateway:
         self._sa: Connection | None = None
         self.conn = _StoreConnection(self)
         self.outbox = ob.Outbox(self.conn, self._post_journal,
-                                clock=lambda: self.clock().isoformat(), on_point=on_point,
+                                clock=lambda: ob.stamp(self.clock()), on_point=on_point,
                                 transaction=self.transaction)
 
     # -------------------------------------------------------------------- transactions
@@ -372,8 +372,8 @@ class Gateway:
                 " plan_hash, mode, approver, created_at, expires_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (approval.approval_id, approval.entity, approval.account, approval.snapshot_id,
-                 approval.plan_hash, approval.mode, approval.approver, self.clock().isoformat(),
-                 approval.expires_at.isoformat()))
+                 approval.plan_hash, approval.mode, approval.approver, ob.stamp(self.clock()),
+                 ob.stamp(approval.expires_at)))
             self.conn.execute("INSERT INTO approval_terms VALUES (?, ?)",
                               (approval.approval_id, approval.model_dump_json()))
 
@@ -429,7 +429,9 @@ class Gateway:
             "SELECT * FROM incidents" + (" WHERE closed_at IS NULL" if open_only else "")
             + " ORDER BY opened_at, incident_id")
         names = [d[0] for d in cursor.description]
-        return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+        rows = [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+        return [{**r, "opened_at": ob.utc(r["opened_at"]), "closed_at": ob.utc(r["closed_at"])}
+                for r in rows]
 
     # ------------------------------------------------------------------------- preflight
 

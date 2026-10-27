@@ -189,8 +189,23 @@ def install(conn: Any) -> None:
     conn.commit()
 
 
+def utc(value: str | datetime | None) -> datetime | None:
+    """A time read back from the store, as aware UTC. The columns are `TIMESTAMP`: SQLite
+    returns the ISO text written, zone included; PostgreSQL drops the zone and returns a naive
+    datetime holding the UTC wall time `stamp` wrote."""
+    if value is None:
+        return None
+    when = datetime.fromisoformat(value) if isinstance(value, str) else value
+    return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
+
+
+def stamp(when: datetime) -> str:
+    """A time to store: its UTC wall time, which a zone-dropping `TIMESTAMP` keeps intact."""
+    return utc(when).isoformat()
+
+
 def _now() -> str:
-    return datetime.now(UTC).isoformat()
+    return stamp(datetime.now(UTC))
 
 
 class Outbox:
