@@ -21,8 +21,18 @@ answers 503 once, `pending` twice, then `selected` with three child branches (`r
 | Token never in DOM or storage | — | — | pass |
 
 Findings: none. The banner overlapping the controls' element screenshot on phone is the shell's
-sticky header, unchanged by this fix. Durable proof: four cases in
-`frontend/tests/unit/simulation-view.spec.js` (`an accepted fork is followed …`); three fail
-before the fix. No Playwright harness exists in the repo.
+sticky header, unchanged by this fix.
+
+After the sweep, the vet tightened the follow loop. Fork is disabled while a fork is followed
+(`fork-why`: "A fork is running: fork again once its branches arrive"). Only `fork_failed` ends a
+fork as failed. A branch counts only from this fork's checkpoint round, because a re-fork reuses
+branch ids. A failed run read shows as `fork-lag`. Five run reads without the branches end the fork
+with an alert. Accepting a fork no longer re-reads the run at once, and a check in flight at unmount
+no longer restarts polling. These are text changes inside existing note paragraphs. They are
+covered by unit tests and were not re-swept in the browser.
+
+Durable proof: eleven cases in `frontend/tests/unit/simulation-view.spec.js`
+(`an accepted fork is followed …`), every one but "leaving the run" failing before its fix. No
+Playwright harness exists in the repo.
 
 Deferred, out of this item's scope: `Decisions.vue` shows `pending` but does not re-read it either.
