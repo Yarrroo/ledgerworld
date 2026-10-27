@@ -157,6 +157,31 @@ def test_a_broken_checkpoint_does_not_hide_the_others():
     assert "branch not fresh" in reasons
 
 
+def test_checkpoints_not_an_object_is_refused_once():
+    receipt = valid_fake()
+    receipt["checkpoints"] = None
+    assert demo_receipt.assess(receipt, require_live=True) == (
+        ["shape: receipt.checkpoints is not dict"],
+        0,
+    )
+
+
+def test_both_legs_reusing_the_setup_id_is_one_reason():
+    receipt = live_sandbox()
+    setup_id = with_setup_funding(receipt)
+    for leg in ("advance_reconciled", "payout_reconciled"):
+        receipt["checkpoints"][leg]["provider_id"] = setup_id
+    assert demo_receipt.check(receipt) == ["a setup movement is not a checkpoint"]
+    assert demo_receipt.live_checkpoints(receipt) == 1
+
+
+def test_require_live_counts_every_fake_checkpoint_even_a_broken_one():
+    receipt = valid_fake()
+    del receipt["checkpoints"]["payout_reconciled"]["journal_id"]
+    reasons = demo_receipt.check(receipt, require_live=True)
+    assert "mode fake on 3 checkpoints" in reasons
+
+
 def test_missing_field_is_a_shape_refusal():
     receipt = valid_fake()
     del receipt["checkpoints"]["payout_reconciled"]["journal_id"]

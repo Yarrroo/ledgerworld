@@ -168,10 +168,13 @@ RULES = {
 
 
 def _checkpoint_refusals(receipt: dict) -> dict[str, list[str]]:
-    """Each checkpoint's own refusals. Its rules run only once its own shape holds."""
+    """Each checkpoint's own refusals. Its rules run only once its own shape holds.
+
+    Empty when `checkpoints` is not an object: the run-level shape check already refuses it.
+    """
     checkpoints = receipt.get("checkpoints")
     if not isinstance(checkpoints, dict):
-        return {name: ["shape: receipt.checkpoints is not an object"] for name in CHECKPOINTS}
+        return {}
     setup_ids = {
         move["provider_id"]
         for move in _setup_moves(receipt)
@@ -197,8 +200,8 @@ def assess(receipt: object, require_live: bool = False) -> tuple[list[str], int]
         return ["shape: receipt is not an object"], 0
     run = _run_refusals(receipt)
     per_checkpoint = _checkpoint_refusals(receipt)
-    reasons = run + [reason for name in CHECKPOINTS for reason in per_checkpoint[name]]
-    clean = [name for name in CHECKPOINTS if not per_checkpoint[name]]
+    reasons = run + [reason for refusals in per_checkpoint.values() for reason in refusals]
+    clean = [name for name in CHECKPOINTS if per_checkpoint.get(name) == []]
     # A clean checkpoint shares the run's mode; a clean payout already has a provider id.
     advance_without_id = (
         "advance_reconciled" in clean
@@ -207,12 +210,19 @@ def assess(receipt: object, require_live: bool = False) -> tuple[list[str], int]
     sandbox = receipt.get("mode") == "sandbox"
     live = 0 if run or not sandbox else len(clean) - advance_without_id
     if require_live:
-        if not sandbox and clean:
-            plural = "s" if len(clean) != 1 else ""
-            reasons.append(f"mode {receipt.get('mode')} on {len(clean)} checkpoint{plural}")
+        checkpoints = receipt.get("checkpoints")
+        present = [
+            name
+            for name in CHECKPOINTS
+            if isinstance(checkpoints, dict) and isinstance(checkpoints.get(name), dict)
+        ]
+        if not sandbox and present:
+            plural = "s" if len(present) != 1 else ""
+            reasons.append(f"mode {receipt.get('mode')} on {len(present)} checkpoint{plural}")
         elif advance_without_id:
             reasons.append("advance without provider id")
-    return reasons, live
+    # Two legs can share one reason (both reusing the setup funding's id); list it once.
+    return list(dict.fromkeys(reasons)), live
 
 
 def check(receipt: object, require_live: bool = False) -> list[str]:
