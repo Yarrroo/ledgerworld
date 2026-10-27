@@ -89,11 +89,13 @@ def bounded_id(column: Column, text: str, *, room: int = 0) -> str:
     One that fits is kept as written; a longer one keeps its head and a hash of the whole, so
     the same source always gives the same id and two sources never share one.
     """
-    width = (column.type.length or 0) - room
-    if width < 32:  # room for a readable head, `~` and the 16-hex digest
-        raise ValueError(f"{column} leaves {width} characters for a bounded id")
+    if column.type.length is None:  # an unbounded column holds any id
+        return text
+    width = column.type.length - room
     if len(text) <= width:
         return text
+    if width < 32:  # room for a readable head, `~` and the 16-hex digest
+        raise ValueError(f"{column} leaves {width} characters for a bounded id")
     digest = hashlib.sha256(text.encode()).hexdigest()[:16]
     return f"{text[:width - len(digest) - 1]}~{digest}"
 

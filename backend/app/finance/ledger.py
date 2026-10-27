@@ -217,23 +217,20 @@ def _source_ids_fit(snap: Snapshot) -> None:
     ids: list[tuple[Column, str | None]] = []
     ids += [(entities.c.entity_id, e.entity_id) for e in snap.entities]
     ids += [(lending_pools.c.pool_entity_id, p.entity) for p in snap.pools]
-    for a in snap.accounts:
-        ids += [(accounts.c.account_id, a.id), (accounts.c.entity_id, a.entity),
-                (accounts.c.venue, a.venue)]
-        for f in a.buckets.pending_in + a.buckets.pending_out:
+    for a in snap.accounts:  # account ids are as wide as C5's, 128
+        ids += [(accounts.c.entity_id, a.entity), (accounts.c.venue, a.venue)]
+        ids += [(expected_flows.c.flow_id, f.flow_id) for f in a.buckets.pending_in]
+        for f in a.buckets.pending_out:  # a pending_in's reservation is not stored
             ids += [(expected_flows.c.flow_id, f.flow_id),
                     (reservations.c.reservation_id, f.reservation_id)]
-    for ob in snap.obligations:
+    for ob in snap.obligations:  # its entity is taken from its account, not stored
         ids += [(obligations.c.obligation_id, ob.obligation_id),
-                (obligations.c.entity_id, ob.entity), (obligations.c.account_id, ob.account),
                 (obligations.c.reservation_id, ob.reservation_id)]
     for k in snap.contracts:
         ids += [(facilities.c.facility_id, k.contract_id),
                 (facilities.c.pool_entity_id, k.lender),
                 (facilities.c.borrower_entity_id, k.borrower),
-                (facilities.c.reservation_id, getattr(k, "reservation_id", None)),
-                (accounts.c.account_id, getattr(k, "reserved_on", None)),
-                (pledges.c.collateral_ref, getattr(k, "collateral_ref", None))]
+                (facilities.c.reservation_id, getattr(k, "reservation_id", None))]
     for column, value in ids:
         if value is not None and len(value) > column.type.length:
             raise ValueError(f"snapshot id {value!r} is longer than {column} allows "

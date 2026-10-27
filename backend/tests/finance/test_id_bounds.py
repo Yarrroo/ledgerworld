@@ -203,3 +203,14 @@ def test_a_source_id_wider_than_its_column_is_refused_on_sqlite_as_on_postgres(p
 def test_a_column_too_narrow_for_a_bounded_id_is_refused_not_overflowed():
     with pytest.raises(ValueError, match="leaves"):
         bounded_id(Column("narrow", String(16)), "x" * 40)
+
+
+def test_a_short_id_fits_a_narrow_column_and_an_unbounded_one_holds_anything():
+    assert bounded_id(Column("narrow", String(16)), "abc") == "abc"
+    assert bounded_id(Column("free", String()), "x" * 500) == "x" * 500
+
+
+def test_a_wide_reservation_on_an_arrival_is_not_refused_since_it_is_never_stored():
+    snap = snapshot()
+    snap["accounts"][0]["buckets"]["pending_in"][0]["reservation_id"] = "w" * 100
+    from_snapshot(LedgerStore("sqlite://"), snap)

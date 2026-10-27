@@ -38,3 +38,9 @@
   (128) in VARCHAR(64). These need their own decision (widen, or bound both halves together).
 - A CLAUDE.md gotcha ("a generated ledger id goes through `models.bounded_id`") is worth
   recording; this order leaves CLAUDE.md alone.
+- Non-id widths: C5 `Kind` is 64 but `expected_flows.kind`, `obligations.kind` and
+  `reservations.purpose` are VARCHAR(32), the same SQLite-passes/PostgreSQL-refuses gap for
+  kinds. Not ids, so outside this item.
+- The root of the source-id gap is C5's `Id` (128) against 64-wide columns. Narrowing the
+  per-field types in `schemas.py`, or widening the columns with a migration, would retire
+  `_source_ids_fit`; both change a contract other modules read, so they are a separate decision.
