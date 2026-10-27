@@ -1,0 +1,71 @@
+{
+ "about": "GET /api/v1/overview under the venue freeze: completeness partial, the venue account named missing. Recorded from the API.",
+ "def": "OverviewResponse",
+ "valid": true,
+ "instance": {
+  "as_of": "2026-01-05T00:00:00Z",
+  "cash": {
+   "as_of": "2026-01-05T00:00:00Z",
+   "currency": "USD",
+   "minor": 7000000,
+   "status": "known"
+  },
+  "completeness": {
+   "missing": [
+    "lender/venue"
+   ],
+   "status": "partial"
+  },
+  "coverage": {
+   "at": "2026-01-06T16:00:00Z",
+   "floor": {
+    "as_of": null,
+    "currency": "USD",
+    "minor": 3000000,
+    "status": "known"
+   },
+   "headroom": {
+    "as_of": null,
+    "currency": "USD",
+    "minor": 1000000,
+    "status": "known"
+   },
+   "min_projected": {
+    "as_of": "2026-01-05T00:00:00Z",
+    "currency": "USD",
+    "minor": 4000000,
+    "status": "known"
+   }
+  },
+  "demo": {
+   "execution_id": null,
+   "run_id": null
+  },
+  "lender_capacity": {
+   "as_of": "2026-01-05T00:00:00Z",
+   "currency": "USD",
+   "minor": 2700000,
+   "status": "known"
+  },
+  "mode": "fake",
+  "snapshot_id": "obs-lf-venue-freeze",
+  "spendable": {
+   "as_of": "2026-01-05T00:00:00Z",
+   "currency": "USD",
+   "minor": 2000000,
+   "status": "known"
+  },
+  "upcoming_outflows": [
+   {
+    "amount": {
+     "currency": "USD",
+     "minor": 5000000
+    },
+    "due_at": "2026-01-06T16:00:00Z",
+    "kind": "payroll",
+    "obligation_id": "payroll-1",
+    "reserved": true
+   }
+  ]
+ }
+}
