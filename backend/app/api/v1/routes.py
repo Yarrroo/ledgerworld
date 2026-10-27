@@ -199,6 +199,8 @@ def fork_run(run_id: str):
         raise Refused(409, "fork_in_progress", f"run {run_id} is being forked; wait for its "
                       "decisions")
     spec = s.jobs.get("run_spec", run_id)
+    if spec.get("prepared_demo"):
+        raise Refused(409, "prepared_demo_read_only", "start a new run to compare other policies")
     family = family_of(spec["scenario"])
     if not family.scripted:
         raise Refused(422, "not_replayable", f"run {run_id} ran on a live model: its rounds "
