@@ -2,13 +2,14 @@
 
 The fixture is loaded unchanged. Its invalid cases are patches on the valid fake receipt; two
 patch values are descriptions rather than values ("before started_at", "<the setup funding's
-provider id>"), and `materialise` turns each into the concrete receipt it describes.
+provider id>"), and `DESCRIBED` resolves each, once per patch, into the receipt it describes.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -20,8 +21,12 @@ FIXTURE = ROOT / "prp/2026-10-20-ledgerworld/design/modules/execution/fixtures/d
 CASES = json.loads(FIXTURE.read_text(encoding="utf-8"))
 INVALID = {case["id"]: case for case in CASES["invalid"]}
 
-STARTED_AT = "2026-11-06T10:00:00Z"
-SETUP_PROVIDER_ID = "sbx-dep-setup-1"
+SETUP_FUNDING = {
+    "kind": "wallet_funding",
+    "label": "sandbox wallet funding (setup, not part of the plan)",
+    "provider_id": "sbx-dep-setup-1",
+    "amount": "60000.00",
+}
 
 
 def valid_fake() -> dict:
@@ -30,26 +35,32 @@ def valid_fake() -> dict:
     return receipt
 
 
-def materialise(receipt: dict, value: object) -> object:
-    if value == "before started_at":
-        receipt["started_at"] = STARTED_AT
-        return "2026-11-06T09:59:00Z"
-    if value == "<the setup funding's provider id>":
-        receipt["setup"].append(
-            {
-                "kind": "wallet_funding",
-                "label": "sandbox wallet funding (setup, not part of the plan)",
-                "provider_id": SETUP_PROVIDER_ID,
-                "amount": "60000.00",
-            }
-        )
-        return SETUP_PROVIDER_ID
-    return value
+def with_setup_funding(receipt: dict) -> str:
+    """Lists the setup funding once and returns its provider id."""
+    if SETUP_FUNDING not in receipt["setup"]:
+        receipt["setup"].append(dict(SETUP_FUNDING))
+    return SETUP_FUNDING["provider_id"]
+
+
+def before_started_at(receipt: dict) -> str:
+    """A run start (kept when the receipt has one) and a moment one minute before it."""
+    receipt.setdefault("started_at", "2026-11-06T10:00:00Z")
+    started = datetime.fromisoformat(receipt["started_at"])
+    return (started - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+
+
+# The fixture's patch values that describe a receipt instead of being a value.
+DESCRIBED = {
+    "before started_at": before_started_at,
+    "<the setup funding's provider id>": with_setup_funding,
+}
 
 
 def patched(case: dict, receipt: dict | None = None) -> dict:
     receipt = valid_fake() if receipt is None else receipt
     for path, value in case["patch"].items():
+        if isinstance(value, str) and value in DESCRIBED:
+            value = DESCRIBED[value](receipt)
         *parents, leaf = path.split(".")
         targets = [receipt]
         for part in parents:
@@ -58,7 +69,7 @@ def patched(case: dict, receipt: dict | None = None) -> dict:
             else:
                 targets = [target[part] for target in targets]
         for target in targets:
-            target[leaf] = materialise(receipt, value)
+            target[leaf] = value
     return receipt
 
 
@@ -115,9 +126,35 @@ def test_setup_movement_is_listed_apart_and_never_counts():
 
 def test_setup_with_its_own_id_is_fine():
     receipt = live_sandbox()
-    materialise(receipt, "<the setup funding's provider id>")
+    with_setup_funding(receipt)
     assert demo_receipt.check(receipt, require_live=True) == []
     assert demo_receipt.live_checkpoints(receipt) == 3
+
+
+def test_unhashable_provider_id_is_a_shape_refusal_not_a_crash():
+    receipt = live_sandbox()
+    receipt["checkpoints"]["advance_reconciled"]["provider_id"] = ["x"]
+    with_setup_funding(receipt)
+    receipt["setup"][0]["provider_id"] = {"a": 1}
+    reasons, live = demo_receipt.assess(receipt, require_live=True)
+    assert "shape: checkpoints.advance_reconciled.provider_id is not str?" in reasons
+    assert "shape: setup[0].provider_id is not str?" in reasons
+    assert live == 0
+
+
+def test_run_level_refusal_leaves_no_live_checkpoint():
+    receipt = live_sandbox()
+    receipt["incidents_open"] = 1
+    assert demo_receipt.check(receipt, require_live=True) == ["open incident"]
+    assert demo_receipt.live_checkpoints(receipt) == 0
+
+
+def test_a_broken_checkpoint_does_not_hide_the_others():
+    receipt = patched(INVALID["cached-branch"])
+    del receipt["checkpoints"]["payout_reconciled"]
+    reasons = demo_receipt.check(receipt)
+    assert "shape: checkpoints.payout_reconciled is not an object" in reasons
+    assert "branch not fresh" in reasons
 
 
 def test_missing_field_is_a_shape_refusal():
@@ -148,6 +185,13 @@ def test_cli_missing_receipt_counts_zero(tmp_path, capsys):
     assert demo_receipt.main([str(tmp_path / "live.json"), "--require-live", "--json"]) == 1
     result = json.loads(capsys.readouterr().out)
     assert result["ok"] is False and result["live_checkpoints"] == 0
+
+
+def test_cli_null_receipt_is_not_an_object(tmp_path, capsys):
+    path = tmp_path / "null.json"
+    path.write_text("null", encoding="utf-8")
+    assert demo_receipt.main([str(path), "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["refused"] == ["shape: receipt is not an object"]
 
 
 def test_cli_bad_usage():
