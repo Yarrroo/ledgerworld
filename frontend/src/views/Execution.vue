@@ -372,16 +372,14 @@ async function executePlan () {
 // ----------------------------------------------------------------- provider state, polled
 
 const activeId = shallowRef(null)
-const live = shallowRef(null)
+// the execution on screen: only an accepted reading, the screen's own read or a poll
+const execution = shallowRef(null)
 const notFound = shallowRef(false)
 const pollError = shallowRef('')
 let timer = null
 const followedId = shallowRef(null)
 let followed = false // an execution this tab sent: a refresh re-reads it, never swaps it for another
 let autoReviewed = false // review=1 opens the review once, not on every refresh
-
-const execution = computed(() =>
-  live.value ?? (state.body?.execution?.execution_id === activeId.value ? state.body.execution : null))
 
 /** Still moving: no legs queued yet, or a leg neither final nor reconciled. */
 const moving = (body) => !body.legs.length ||
@@ -407,13 +405,18 @@ async function poll () {
   try {
     const body = await request(`/executions/${enc(id)}`)
     if (!guard.accept(ticket, id)) return
-    live.value = body
+    execution.value = body
     notFound.value = false
     pollError.value = ''
   } catch (error) {
-    if (!guard.accept(ticket, id)) return
-    if (error.status === 404) notFound.value = true
-    else pollError.value = error.message
+    if (error.status === 404) {
+      if (!guard.accept(ticket, id)) return
+      notFound.value = true
+    } else {
+      // a failed read is no answer: it never discards a reading issued before it
+      if (!guard.current(ticket, id)) return
+      pollError.value = error.message
+    }
   }
   schedule()
 }
@@ -423,7 +426,7 @@ function follow (id) {
   followedId.value = id
   activeId.value = id
   guard.select(id)
-  live.value = null
+  execution.value = null
   notFound.value = false
   poll()
 }
@@ -439,7 +442,7 @@ watch(() => state.body, (body) => {
   // this read replaces any poll answered before it and invalidates every poll issued before it;
   // a poll issued after it and already answered is newer, and stays
   if (guard.accept({ generation: body.generation, context: body.execution_id })) {
-    live.value = null
+    execution.value = body.execution
     notFound.value = Boolean(body.execution_id && !body.execution)
     pollError.value = ''
   }
@@ -458,7 +461,7 @@ watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
     followed = false
     followedId.value = null
     activeId.value = null
-    live.value = null
+    execution.value = null
     clearTimeout(timer)
   }
   refresh()

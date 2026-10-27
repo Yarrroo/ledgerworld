@@ -138,6 +138,9 @@ const mounted = []
 const text = (w, test) => w.get(`[data-test="${test}"]`).text().replace(/\s+/g, ' ')
 const disabled = (w, test) => w.get(`[data-test="${test}"]`).attributes('disabled') !== undefined
 const focused = () => document.activeElement
+/** Fake only the timers, so promises and fetch still settle; tick() is one poll interval. */
+const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+const tick = async () => { vi.advanceTimersByTime(5000); await flushPromises() }
 
 async function enterToken (w) {
   await w.get('[data-test="token"]').setValue(TOKEN)
@@ -437,7 +440,7 @@ describe('Execution: provider state, receipts and reconciliation', () => {
   })
 
   it('polling updates the state in place and never moves focus', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    fakeTimers()
     let body = executionBody({ legs: [sentPayout()] })
     serve({
       'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
@@ -560,9 +563,7 @@ describe('vet round 1', () => {
 })
 
 describe('vet round 2', () => {
-  const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
   const gets = (calls, path) => calls.filter((x) => x.method === 'GET' && x.path === path)
-  const tick = async () => { vi.advanceTimersByTime(5000); await flushPromises() }
 
   it('a failed status read after an unanswered execution POST keeps reading', async () => {
     fakeTimers()
@@ -687,8 +688,6 @@ describe('vet round 2, re-read', () => {
 })
 
 describe('correction: a status read never overwrites a newer one', () => {
-  const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
-  const tick = async () => { vi.advanceTimersByTime(5000); await flushPromises() }
   const settledOnly = () => ({ ...paidPayout(), reconciled: false })
   const withIncident = () => {
     const leg = paidPayout()
@@ -697,18 +696,23 @@ describe('correction: a status read never overwrites a newer one', () => {
       incidents: [{ incident_id: 'inc-1', leg_id: leg.leg_id, kind: 'paid_then_failed', state: 'open', opened_at: '2026-11-05T10:05:00Z' }]
     })
   }
-  /** GET /executions/apr-1 answered from a queue: a function entry is a held answer. */
+  const HOLD = Symbol('hold')
+  /**
+   * GET /executions/apr-1 answered from a queue, the last entry repeating. holdThen(next) makes
+   * the next read wait for release(body), and every read after it answer `next`.
+   */
   function queued (first) {
     const queue = [first]
     let held
     const answer = () => {
       const next = queue.length > 1 ? queue.shift() : queue[0]
-      return next === 'hold' ? new Promise((resolve) => { held = resolve }) : next
+      return next === HOLD ? new Promise((resolve) => { held = resolve }) : next
     }
-    return { queue, answer, release: (body) => held(body) }
+    return { answer, holdThen: (next) => queue.splice(0, queue.length, HOLD, next), release: (body) => held(body) }
   }
 
-  it('a poll started before Refresh cannot overwrite the reconciled receipt Refresh read', async () => {
+  /** Execution linked by the overview, its first read moving (settled, not reconciled). */
+  async function openLinked () {
     fakeTimers()
     const reads = queued(executionBody({ legs: [settledOnly()] }))
     serve({
@@ -716,9 +720,13 @@ describe('correction: a status read never overwrites a newer one', () => {
       'GET /decisions/run-1': decisionsBody(),
       'GET /executions/apr-1': reads.answer
     })
-    const w = await open(Execution, '/execution')
+    return { w: await open(Execution, '/execution'), reads }
+  }
+
+  it('a poll started before Refresh cannot overwrite the reconciled receipt Refresh read', async () => {
+    const { w, reads } = await openLinked()
     expect(text(w, 'leg-status')).toContain('not reconciled')
-    reads.queue.splice(0, 1, 'hold', executionBody({ legs: [paidPayout()] }))
+    reads.holdThen(executionBody({ legs: [paidPayout()] }))
     await tick() // the poll is now in flight, holding the older state
     await w.get('[data-test="refresh"]').trigger('click')
     await flushPromises()
@@ -729,15 +737,8 @@ describe('correction: a status read never overwrites a newer one', () => {
   })
 
   it('a poll started before Refresh cannot clear the incident Refresh read', async () => {
-    fakeTimers()
-    const reads = queued(executionBody({ legs: [settledOnly()] }))
-    serve({
-      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
-      'GET /decisions/run-1': decisionsBody(),
-      'GET /executions/apr-1': reads.answer
-    })
-    const w = await open(Execution, '/execution')
-    reads.queue.splice(0, 1, 'hold', withIncident())
+    const { w, reads } = await openLinked()
+    reads.holdThen(withIncident())
     await tick()
     await w.get('[data-test="refresh"]').trigger('click')
     await flushPromises()
@@ -748,15 +749,8 @@ describe('correction: a status read never overwrites a newer one', () => {
   })
 
   it('a poll answered after Refresh began reading stays: the older Refresh read does not replace it', async () => {
-    fakeTimers()
-    const reads = queued(executionBody({ legs: [settledOnly()] }))
-    serve({
-      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
-      'GET /decisions/run-1': decisionsBody(),
-      'GET /executions/apr-1': reads.answer
-    })
-    const w = await open(Execution, '/execution')
-    reads.queue.splice(0, 1, 'hold', withIncident())
+    const { w, reads } = await openLinked()
+    reads.holdThen(withIncident())
     await w.get('[data-test="refresh"]').trigger('click') // Refresh's read is now in flight
     await flushPromises()
     await tick() // a later poll answers with the newer state first
@@ -776,7 +770,7 @@ describe('correction: a status read never overwrites a newer one', () => {
     await approve(w)
     await w.get('[data-test="execute"]').trigger('click')
     await flushPromises()
-    reads.queue.splice(0, 1, 'hold', withIncident())
+    reads.holdThen(withIncident())
     await tick()
     await w.get('[data-test="refresh"]').trigger('click')
     await flushPromises()
@@ -784,5 +778,30 @@ describe('correction: a status read never overwrites a newer one', () => {
     reads.release(executionBody({ legs: [sentPayout()] }))
     await flushPromises()
     expect(text(w, 'incident')).toContain('paid then failed')
+  })
+
+  it('a poll that fails after Refresh began is no answer: the Refresh read still shows, the error goes', async () => {
+    const { w, reads } = await openLinked()
+    reads.holdThen(timeout())
+    await w.get('[data-test="refresh"]').trigger('click') // Refresh's read is now in flight
+    await flushPromises()
+    await tick() // a later poll fails
+    expect(w.find('[data-test="poll-error"]').exists()).toBe(true)
+    reads.release(executionBody({ legs: [paidPayout()] }))
+    await flushPromises()
+    expect(text(w, 'leg-status')).toContain('PAID · reconciled as of')
+    expect(w.find('[data-test="poll-error"]').exists()).toBe(false)
+  })
+
+  it('a Refresh read older than an applied answer never reaches the screen', async () => {
+    const { w, reads } = await openLinked()
+    reads.holdThen(refuse(404, 'not_found'))
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    await tick() // a later poll answers: the server has no record
+    reads.release(executionBody({ legs: [paidPayout()] }))
+    await flushPromises()
+    expect(w.find('[data-test="not-found"]').exists()).toBe(true)
+    expect(text(w, 'leg-status')).not.toContain('PAID · reconciled')
   })
 })
