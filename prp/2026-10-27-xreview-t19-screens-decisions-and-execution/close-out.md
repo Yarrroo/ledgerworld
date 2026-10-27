@@ -29,8 +29,7 @@
   44 px. The markup did not change after the sweep.
 
 ## Docs updated
-- The T19 design invariant (above). `CLAUDE.md` was left alone, as the order requires, and the
-  dev-workflows block refresh was not run because it commits `CLAUDE.md`.
+- The T19 design invariant (above). Nothing else documents this rule.
 
 ## Follow-ups / known gaps
 - `request()` still returns `null` for an unparseable 2xx. Overview, Treasury, Lending and
