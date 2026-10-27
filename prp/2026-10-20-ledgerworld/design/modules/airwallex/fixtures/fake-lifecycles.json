@@ -3,7 +3,7 @@
  "about": "Status lifecycles the fake reproduces, for API version 2024-09-27 (provider docs, research note 23 Oct). Each path is a sequence of fake 'advance' or simulation calls from a fresh fake; the test asserts the status after each step and the balance effect. Amounts: integer minor units in, provider decimal strings on the wire. Approval statuses (IN_APPROVAL...) are out of scope: approval rules are off on our account.",
  "start": {
   "balances": [{"currency": "USD", "available_minor": 10000000}, {"currency": "EUR", "available_minor": 0}],
-  "global_accounts": [{"id": "ga-usd-1", "currency": "USD"}],
+  "global_accounts": [{"id": "ga-usd-1", "status": "ACTIVE", "required_features": [{"currency": "USD", "transfer_method": "LOCAL"}], "supported_features": [{"currency": "USD", "transfer_method": "LOCAL", "type": "DEPOSIT"}]}],
   "beneficiaries": [{"id": "ben-payroll-1", "currency": "USD", "allowlisted": true}]
  },
  "transfer": {
@@ -14,8 +14,7 @@
     "create": {"request_id": "leg-payroll-1", "beneficiary_id": "ben-payroll-1", "transfer_amount_minor": 5000000, "currency": "USD"},
     "wire_amount": "50000.00",
     "steps": [
-     {"do": "create", "status": "SCHEDULED", "available_minor": 5000000},
-     {"do": "transition PROCESSING", "status": "PROCESSING"},
+     {"do": "create", "answer": "SCHEDULED", "status": "PROCESSING", "available_minor": 5000000, "note": "the create answers SCHEDULED; the sandbox moves a fresh payout on by itself"},
      {"do": "transition SENT", "status": "SENT"},
      {"do": "transition PAID", "status": "PAID", "available_minor": 5000000}
     ],
@@ -23,8 +22,7 @@
    {"id": "paid-then-failed",
     "create": {"request_id": "leg-payroll-2", "beneficiary_id": "ben-payroll-1", "transfer_amount_minor": 1000000, "currency": "USD"},
     "steps": [
-     {"do": "create", "status": "SCHEDULED", "available_minor": 9000000},
-     {"do": "transition PROCESSING", "status": "PROCESSING"},
+     {"do": "create", "answer": "SCHEDULED", "status": "PROCESSING", "available_minor": 9000000},
      {"do": "transition SENT", "status": "SENT"},
      {"do": "transition PAID", "status": "PAID"},
      {"do": "transition FAILED failure_type=INVALID_ACCOUNT_NAME_OR_NUMBER", "status": "FAILED"},
@@ -34,8 +32,8 @@
    {"id": "skip-is-refused",
     "create": {"request_id": "leg-payroll-3", "beneficiary_id": "ben-payroll-1", "transfer_amount_minor": 100000, "currency": "USD"},
     "steps": [
-     {"do": "create", "status": "SCHEDULED"},
-     {"do": "transition PAID", "refused": {"http": 400, "note": "the requested status must be the next valid one"}, "status": "SCHEDULED"}
+     {"do": "create", "answer": "SCHEDULED", "status": "PROCESSING"},
+     {"do": "transition PAID", "refused": {"http": 400, "note": "the requested status must be the next valid one"}, "status": "PROCESSING"}
     ]},
    {"id": "unfunded-refused",
     "create": {"request_id": "leg-payroll-4", "beneficiary_id": "ben-payroll-1", "transfer_amount_minor": 20000000, "currency": "USD"},
@@ -46,21 +44,15 @@
  },
  "conversion": {
   "statuses": ["SCHEDULED", "OVERDUE", "SETTLED", "CANCELLED"],
+  "note": "the sandbox (run 2) answers a create already SETTLED, named by conversion_id with no id key; the fake does the same",
   "paths": [
    {"id": "eur-invoice-cover",
     "quote": {"sell_currency": "USD", "buy_currency": "EUR", "buy_amount_minor": 1000000, "fake_rate": "1.1100"},
     "create": {"request_id": "leg-fx-1", "buy_amount": "10000.00", "sell_amount_expected": "11100.00"},
     "steps": [
-     {"do": "create", "status": "SCHEDULED", "USD_available_minor": 8890000, "EUR_available_minor": 0},
-     {"do": "settle", "status": "SETTLED", "EUR_available_minor": 1000000}
+     {"do": "create", "status": "SETTLED", "USD_available_minor": 8890000, "EUR_available_minor": 1000000}
     ],
-    "note": "exactly one of buy_amount / sell_amount; the fake rate is fixed per seed, never a live rate in tests"},
-   {"id": "cancel-unsettled",
-    "create": {"request_id": "leg-fx-2", "sell_currency": "USD", "buy_currency": "EUR", "sell_amount": "1000.00"},
-    "steps": [
-     {"do": "create", "status": "SCHEDULED"},
-     {"do": "cancel", "status": "CANCELLED", "USD_available_minor": 10000000}
-    ]}
+    "note": "exactly one of buy_amount / sell_amount; the fake rate is fixed per seed, never a live rate in tests"}
   ]
  },
  "deposit_simulation": {

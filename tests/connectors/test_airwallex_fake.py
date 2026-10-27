@@ -255,6 +255,7 @@ def test_transfer_lifecycle(path):
                 transfer = client.create_transfer(
                     spec["request_id"], beneficiary_id=spec["beneficiary_id"],
                     amount=Money(minor=spec["transfer_amount_minor"], currency=spec["currency"]))
+                assert transfer.status == step["answer"]
             elif do.startswith("transition"):
                 _, status, *rest = do.split()
                 failure = rest[0].removeprefix("failure_type=") if rest else None
@@ -291,25 +292,16 @@ def test_conversion_paths():
     body = posts(transport, "/api/v1/fx/conversions/create")[0].body
     assert body["buy_amount"] == cover["create"]["buy_amount"] and "sell_amount" not in body
     assert conv.amount == cover["create"]["sell_amount_expected"] and conv.currency == "USD"
-    created, settled = cover["steps"]
+    (created,) = cover["steps"]  # the sandbox settles a conversion at create
     assert conv.status == created["status"]
+    assert client.get_conversion(conv.provider_id).status == created["status"]
     assert transport.available("USD") == created["USD_available_minor"]
     assert transport.available("EUR") == created["EUR_available_minor"]
-    transport.settle_conversion(conv.provider_id)
-    assert client.get_conversion(conv.provider_id).status == settled["status"]
-    assert transport.available("EUR") == settled["EUR_available_minor"]
 
-    cancel = paths["cancel-unsettled"]
-    transport, client = make()
-    spec = cancel["create"]
-    conv = client.create_conversion(
-        spec["request_id"], sell_currency=spec["sell_currency"],
-        buy_currency=spec["buy_currency"], amount=usd(100000))
+    transport, client = make()  # an amount in the sell currency goes out as sell_amount
+    client.create_conversion("leg-fx-2", sell_currency="USD", buy_currency="EUR",
+                             amount=usd(100000))
     assert posts(transport, "/api/v1/fx/conversions/create")[0].body["sell_amount"] == "1000.00"
-    assert conv.status == cancel["steps"][0]["status"]
-    transport.cancel_conversion(conv.provider_id)
-    assert client.find_conversion(spec["request_id"])[0].status == cancel["steps"][1]["status"]
-    assert transport.available("USD") == cancel["steps"][1]["USD_available_minor"]
 
 
 def test_deposit_simulation_sends_a_number_from_the_converter():
@@ -695,16 +687,17 @@ def test_a_reply_that_cannot_be_read_is_a_timeout_after_send():
     assert lost.value.after_send is True
 
 
-def test_a_conversion_on_behalf_of_a_connected_account_settles_and_refunds_there():
+def test_a_conversion_on_behalf_of_a_connected_account_settles_there():
     transport, client = make(connected=True)
     transport.balances[CONNECTED_ACCOUNT]["USD"] = 100000
     body = {"request_id": "leg-c-1", "sell_currency": "USD", "buy_currency": "EUR",
             "sell_amount": "1000.00"}
     conv = client._request("POST", "/api/v1/fx/conversions/create", body, request_id="leg-c-1",
                            headers={"x-on-behalf-of": CONNECTED_ACCOUNT})
-    transport.cancel_conversion(conv["id"])
-    assert transport.available("USD", CONNECTED_ACCOUNT) == 100000
-    assert transport.available("USD") == 10000000
+    assert conv["status"] == "SETTLED"
+    assert transport.available("USD", CONNECTED_ACCOUNT) == 0
+    assert transport.available("EUR", CONNECTED_ACCOUNT) == 90090  # 1,000.00 USD at 1.1100
+    assert (transport.available("USD"), transport.available("EUR")) == (10000000, 0)
 
 
 def test_bad_credentials_fail_the_probe_instead_of_choosing_mode_b():

@@ -4,7 +4,7 @@ Tasks: T12 (adapter: transports, fake sandbox, key switch) · T15 (sandbox arriv
 Read with `00-system.md` §10 and the research note `research/airwallex-sandbox-semantics.md` in the design. The connector is the only code that speaks the provider's protocol. It decides nothing about money: it builds requests from `Money`, sends them, and returns typed results. What to do with an unknown outcome is the gateway's job (execution module).
 
 Three rules this module exists to keep:
-- **A replayed `request_id` is rejected, not answered.** The provider returns `duplicate_request_id` (`request_id_duplicate` on connected-account transfers), or `409` while the first call is in flight. The fake behaves the same way. The original object is found by list-by-`request_id`.
+- **A replayed `request_id` is rejected, not answered.** The provider returns `request_id_duplicate` (on a transfer, with no `trace_id`), `400 invalid_argument` "request_id '…' has been used in the past" on a conversion, or `409` while the first call is in flight; the client also reads the documented `duplicate_request_id`. The fake behaves the same way. The original object is found by list-by-`request_id`.
 - **The client never repeats a POST after a timeout or a 5xx.** That outcome is `OutcomeUnknown`. A `429` or a `401` is a rejection (nothing moved), so the client retries it itself with the same `request_id`.
 - **The fake is the provider's double, not a convenience.** Every behaviour the gateway tests rely on is pinned in `fixtures/`, and T15 diffs the fake against the sandbox on the requests in `canonical-requests.json`.
 
@@ -29,7 +29,8 @@ Webhook verification lives in the execution module (`webhooks.py`, owned by T13)
 - `request_id` = the leg id: `<plan_hash[:12]>-<leg index>-<kind>`. It is deterministic, so a crash and restart reuse the same id. The same id is never reused for a different leg.
 - Statuses used, for API version 2024-09-27:
   - transfer `SCHEDULED → PROCESSING → SENT → PAID`, with `OVERDUE`, `FAILED` (reachable even after `PAID`), `CANCELLATION_REQUESTED`, `CANCELLED`;
-  - conversion `SCHEDULED → SETTLED`, with `OVERDUE`, `CANCELLED`.
+  - conversion `SCHEDULED → SETTLED`, with `OVERDUE`, `CANCELLED`; the sandbox answers a create already `SETTLED`, named by `conversion_id` (no `id`);
+  - a payout create answers `SCHEDULED` and reads back `PROCESSING` straight after; a quote answers 200 with `valid_to_at`.
   - Approval statuses are out of scope.
 - Receipt shape (inside C4): `{provider_id, request_id, kind, status, amount (provider string), currency, label, mode, raw_keys[], observed_at}`. `label` comes from `leg_plan`.
 - The fake's start state comes from the fixture (`fake-lifecycles.json` `start`). Its FX rate is per seed and documented as fake; a live rate never enters a test.
