@@ -29,5 +29,6 @@ an upstream path is modified or deleted and not listed in the second table.
 | `.gitignore` | adds `var/` and `frontend/dist/` to the upstream rules |
 | `backend/app/__init__.py` | registers the `/api/v1` blueprint (`app.api.v1.register`) in `create_app` |
 | `frontend/src/router/index.js` | adds the `/overview`, `/treasury`, `/lending` and `/simulation` routes; upstream routes unchanged |
+| `frontend/src/components/GraphPanel.vue` | exposes its own `closeDetailPanel` so the `/simulation` screen closes a selection when the round or run changes |
 | `frontend/package.json` | adds the `test:unit` script and its dev dependencies (vitest, happy-dom, @vue/test-utils) |
 | `frontend/package-lock.json` | the lock for those dev dependencies |
