@@ -34,7 +34,10 @@ names its intent and every intent its evidence, so a trace never needs a guess.
   records). Convention: an actor's ledger entity is its `actor_id`; it acts from `<actor>/operating`.
 - **`coordinator.Coordinator.run_round(world)`**: the ten steps inside one ledger connection-level transaction;
   step 10 records the transcript, then commits the ledger (the durable point).
-  Clearing: `pay` → `ledger.pay`; `request_advance` → an addressed message `req:<actor>:r<round>` to the lender,
+  Step 6 also holds every intent to its tool's argument schema and to one use of its id. Every reference an
+  intent names is checked before the ledger is asked, so a wrong one is a rejection, never a failed round.
+  Clearing: `pay` → `ledger.pay` to an operating or cash account, or out of the world (never into a loan,
+  payable or in-transit account, never of an obligation); `request_advance` → an addressed message `req:<actor>:r<round>` to the lender,
   or, against an `offered` facility, `lending.disburse` into the borrower's `in-transit` account plus a pending_in
   that lands at the next round boundary (step 2); `offer`/`accept` → a revenue-advance facility in state
   `offered` (LF-2 terms: 8 % fee, 15 % share); `disburse` → as above; `release` → closes an offer; `pledge` →

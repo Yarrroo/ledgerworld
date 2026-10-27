@@ -6,7 +6,8 @@
 transit included) and mark ``overdue`` every pending_in promised by now that did not land ·
 3. publish the scheduled posts · 4. build each actor's scoped observation · 5. ``env.step``:
 every agent answers at once and its tool calls queue C1 intents; the OASIS clock must then read
-this round · 6. validate the drained intents (schema, branch, round, mandate) · 7. clear them in
+this round · 6. validate the drained intents (C1 schema, the tool's argument schema, branch,
+round, mandate, an id used once and fitting the ledger) · 7. clear them in
 ``(priority class, minute, actor, call)`` order against the ledger · 8. run the mandatory
 settlements · 9. keep the C2 results for delivery next round · 10. record the transcript and
 commit the ledger, the durable point.
@@ -20,17 +21,23 @@ restored world differs from its capture, the world is marked unusable and refuse
 round. This is exception rollback, not process-crash recovery. A rejected intent, or malformed
 output the guardrail turned into ``no_action``, is a C2 result, not a failed round.
 
-Clearing, per intent type (the actor acts from ``<actor>/operating``):
+Clearing, per intent type (the actor acts from ``<actor>/operating``). Every account,
+counterparty and request an intent names is checked before the ledger is asked, so a wrong one
+is a rejection with its reason:
 
-- ``pay`` → ``ledger.pay`` to ``<to>/operating`` or the outside world; a refusal is the reason.
+- ``pay`` → ``ledger.pay`` to ``<to>/operating``, a cash account named by id, or the outside
+  world (a counterparty the world does not hold); never into a loan, payable or in-transit
+  account, never to an account id the world lacks, never of an obligation (it settles when due).
 - ``request_advance`` → against an ``offered`` advance of that lender (``facility_id``, or the
   one offered for that amount) it disburses through ``lending.disburse`` into the borrower's
   in-transit account, landing as a pending_in at the next round boundary; otherwise it becomes
   the message ``req:<actor>:r<round>`` to the lender, read from the next round on.
-- ``accept`` (a request) and ``offer`` → a revenue advance in state ``offered`` on LF-2's terms.
+- ``accept`` (a request) and ``offer`` → a revenue advance in state ``offered`` on LF-2's terms,
+  from a pool lending the borrower's own currency.
 - ``disburse`` (an accepted request) → as an offered request, through ``lending.disburse``.
 - ``release`` → an offered advance of the lender is withdrawn (``closed``).
-- ``pledge`` → ``store.pledge``; ``repay``, ``defer``, ``convert`` are rejected with the reason.
+- ``pledge`` → ``store.pledge`` in the account's currency; ``repay``, ``defer``, ``convert`` are
+  rejected with the reason.
 """
 
 from __future__ import annotations
