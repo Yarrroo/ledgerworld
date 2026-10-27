@@ -6,6 +6,7 @@ snapshot with the formulas of system brief §5 and §6 and never imports the fin
 
 from __future__ import annotations
 
+import copy
 import json
 from datetime import datetime, timedelta
 from functools import cache
@@ -48,6 +49,11 @@ def hours(fx: dict, iso: str) -> float:
 def usd(minor: int) -> str:
     """The hand notation of the fixtures: 4000000 -> '40,000'."""
     return f"{minor // 100:,}" + (f".{minor % 100:02d}" if minor % 100 else "")
+
+
+def amount(minor: int) -> str:
+    """The binding notation, always with cents: 2700000 -> '27,000.00'."""
+    return f"{minor // 100:,}.{minor % 100:02d}"
 
 
 def snapshots(name: str) -> list[tuple[str, dict]]:
@@ -107,10 +113,13 @@ def test_lf2_snapshot_carries_the_design_numbers():
     (pool,) = fx["snapshot"]["pools"]
     assert pool["floor"]["minor"] == design["snapshot"]["pool"]["floor_minor"]
     contracts = {c["contract_id"]: c for c in fx["snapshot"]["contracts"]}
-    line, adv = contracts["line-b"], contracts["adv-a"]
-    assert line["limit"]["minor"] == 1000000 and line["drawn"]["minor"] == 0
-    assert (adv["principal"]["minor"], adv["fee_bps"], adv["repay_share_bps"]) == (
-        1000000, 800, 1500)
+    for want in design["snapshot"]["contracts"]:
+        got = contracts[want["contract_id"]]
+        assert (got["kind"], got["borrower"]) == (want["kind"], want["borrower"])
+        for term in ("limit", "drawn", "principal", "fee_bps", "repay_share_bps"):
+            if term in want:
+                value = got[term]
+                assert (value["minor"] if isinstance(value, dict) else value) == want[term]
 
 
 def test_the_venue_couples_the_two_worlds():
@@ -148,12 +157,14 @@ def treasury(delay_h: int = 0, extra_in: list[tuple[int, int]] = ()):
         return (settled + sum(a for h, a in ins if h <= t) - sum(a for h, a in outs if h <= t)
                 - sum(a for h, a in dues if h <= t))
 
+    # P is a step function: its minimum over [0, horizon] is at 0 or at a time it changes
+    horizon = fx["horizon_h"]
+    P.times = sorted({0, horizon} | {h for h, _ in ins + outs + dues if 0 <= h <= horizon})
     return S, P, acct["floor"]["minor"]
 
 
 def min_p(P):
-    horizon = fixture("lf1_treasury")["horizon_h"]
-    value, at_h = min((P(t), t) for t in range(horizon + 1))
+    value, at_h = min((P(t), t) for t in P.times)
     return {"value": value, "at_h": at_h}
 
 
@@ -177,7 +188,7 @@ def test_lf1_receipt_delayed_240h_breaches_the_floor():
     breach = want["breach"]
     assert breach["at_h"] == want["min_P"]["at_h"]
     assert breach["short_minor"] == floor - min_p(P)["value"] == 1000000
-    assert f"{usd(floor)}.00" in breach["binding"]
+    assert f"reserve floor {amount(floor)}" in breach["binding"]
     assert usd(breach["short_minor"]) in want["hand"]
 
 
@@ -199,7 +210,8 @@ def test_lf1_rejections():
     expected = fixture("lf1_treasury")["expected"]
     cases = {c["id"]: c for c in expected["rejections"]}
     S, P, floor = treasury()
-    headroom = expected["no_shock"]["headroom_0"]
+    headroom = max(0, min_p(P)["value"] - floor)
+    assert headroom == expected["no_shock"]["headroom_0"]
 
     def verdict(amount):
         if amount > S(0):
@@ -213,10 +225,10 @@ def test_lf1_rejections():
     assert verdict(big["intent"]["amount"]) == big["reason"] and big["status"] == "rejected"
     mid = cases["pay-20k-breaks-floor"]
     assert verdict(mid["intent"]["amount"]) == mid["reason"] and mid["status"] == "rejected"
-    assert P(40) - mid["intent"]["amount"] < floor
+    assert min_p(P)["value"] - mid["intent"]["amount"] < floor
     small = cases["pay-10k-keeps-floor"]
     assert verdict(small["intent"]["amount"]) == small["status"] == "accepted"
-    assert P(40) - small["intent"]["amount"] == floor
+    assert min_p(P)["value"] - small["intent"]["amount"] == floor
 
     pledge = cases["double-pledge"]
     first, second = pledge["intents"]
@@ -225,20 +237,25 @@ def test_lf1_rejections():
     assert pledge["status"] == ["accepted", "rejected"] and pledge["reason"] == "already_pledged"
 
     idle = cases["inaction-keeps-obligation"]
-    (payroll,) = fixture("lf1_treasury")["snapshot"]["obligations"]
-    assert idle["intent"]["type"] == "no_action" and payroll["obligation_id"] in idle["expect"]
-    assert payroll.get("mandatory", True) and payroll.get("state", "open") == "open"
+    (payroll,) = Snapshot.model_validate(fixture("lf1_treasury")["snapshot"]).obligations
+    assert idle["intent"]["type"] == "no_action" and payroll.obligation_id in idle["expect"]
+    assert payroll.mandatory is True and payroll.state == "open"
     (acct,) = fixture("lf1_treasury")["snapshot"]["accounts"]
-    assert acct["buckets"]["reserved"]["minor"] == payroll["amount"]["minor"]
+    assert acct["buckets"]["reserved"]["minor"] == payroll.amount.minor
 
 
 # ------------------------------------------------------------------------- LF-2 by hand
 
+STALE_AFTER = timedelta(hours=6)
+
+
 def capacity(snap: dict) -> tuple[int, str, dict]:
-    """K_p of the pool, its authority and its parts: §6's formula, read off one snapshot."""
+    """K_p of the pool at t0, its authority and its parts: §6's formula, read off one snapshot."""
+    fx = fixture("lf2_lender")
     (pool,) = snap["pools"]
     accounts = [a for a in snap["accounts"] if a["entity"] == pool["entity"]]
-    known = [a for a in accounts if a["observability"] == "known"]
+    known = [a for a in accounts if a["observability"] == "known"
+             and at(fx["t0"]) - at(a["as_of"]) <= STALE_AFTER]
     lines = [c for c in snap["contracts"]
              if c["kind"] == "committed_line" and c["lender"] == pool["entity"]]
     parts = {
@@ -246,7 +263,8 @@ def capacity(snap: dict) -> tuple[int, str, dict]:
         "committed_undrawn": sum(c["limit"]["minor"] - c["drawn"]["minor"] for c in lines),
         "pledged": sum(a["buckets"]["pledged"]["minor"] for a in accounts),
         "obligations": sum(o["amount"]["minor"] for o in snap["obligations"]
-                           if o["entity"] == pool["entity"]),
+                           if o["entity"] == pool["entity"]
+                           and hours(fx, o["due_at"]) <= fx["horizon_h"]),
         "floor": pool["floor"]["minor"],
     }
     k_p = parts["settled_known"] - sum(v for k, v in parts.items() if k != "settled_known")
@@ -289,14 +307,14 @@ def test_lf2_draws_against_capacity():
     k_p, _, _ = capacity(fx["stressed"]["venue_freeze"])
     assert stressed["K_p_minor"] == k_p < 3000000
     assert (stressed["status"], stressed["reason"]) == ("rejected", "beyond_capacity")
-    assert stressed["binding"] == f"K_p = {usd(k_p)}.00"
+    assert stressed["binding"] == f"K_p = {amount(k_p)}"
 
     calm = want["draw_30k_no_stress"]
     k_p, _, _ = capacity(fx["snapshot"])
     assert calm["status"] == "accepted" and calm["K_p_after"] == k_p - 3000000
 
     line = want["committed_line_draw"]
-    after = json.loads(json.dumps(fx["snapshot"]))
+    after = copy.deepcopy(fx["snapshot"])
     drawn = next(c for c in after["contracts"] if c["contract_id"] == "line-b")
     drawn["drawn"]["minor"] += line["amount"]
     operating = next(a for a in after["accounts"] if a["id"] == drawn["reserved_on"])

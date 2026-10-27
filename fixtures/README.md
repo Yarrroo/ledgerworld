@@ -9,7 +9,7 @@ number below from the snapshot without the ledger engine.
 
 - **S(t)** spendability = settled − reserved − pledged − Σ all pending_out + Σ pending_in arriving ≤ t
 - **P(t)** projected cash = settled + Σ pending_in arriving ≤ t − Σ pending_out due ≤ t − Σ obligations due ≤ t
-- The reserve floor is checked on **P** over the horizon; headroom(now) = min P(t) − floor.
+- The reserve floor is checked on **P** over the horizon; headroom(now) = max(0, min P(t) − floor).
 
 ## LF-1 · treasury (`lf1_treasury.json`, borrower-a)
 
