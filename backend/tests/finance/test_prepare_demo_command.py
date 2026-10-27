@@ -91,8 +91,10 @@ def test_command_prepares_the_real_store_and_all_read_only_screens(deployed, mon
 def test_partial_preparation_reuses_its_execution_after_restart(deployed, monkeypatch):
     services, build = deployed
     publish = services.prepare_demo
-    monkeypatch.setattr(services, "prepare_demo", lambda *a: (_ for _ in ()).throw(
-        RuntimeError("interrupted before publication")))
+    def interrupted(*args):
+        raise RuntimeError("interrupted before publication")
+
+    monkeypatch.setattr(services, "prepare_demo", interrupted)
     with pytest.raises(RuntimeError, match="interrupted"):
         prepare.prepare(services, timeout=90)
     before = services.store.rows("postings")
@@ -201,3 +203,84 @@ def test_prepared_job_configuration_is_simulation_safe(tmp_path):
         str(root / p) for p in ("backend", "packages/oasis-finance/src"))}
     subprocess.run([sys.executable, "-c", code], cwd=tmp_path, env=env, check=True,
                    capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("point", ["after_submitted_before_send", "after_response_before_state_write",
+                                  "before_payout_settlement", "before_execution"])
+def test_interrupted_execution_can_resume_without_duplicate_money(deployed, monkeypatch, point):
+    from datetime import timedelta
+
+    services, build = deployed
+    original_gateway = prepare.Gateway
+    original_pay = prepare.pay
+    interrupted = False
+
+    def crash(at, leg):
+        nonlocal interrupted
+        if not interrupted and at == point and leg.kind == "payout":
+            interrupted = True
+            raise KeyboardInterrupt("simulated process exit")
+
+    def gateway(*a, **kw):
+        gw = original_gateway(*a, **kw, on_point=crash)
+        if point == "before_execution":
+            gw.execute = lambda *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt())
+        return gw
+
+    def pay(*a, **kw):
+        if point == "before_payout_settlement":
+            raise KeyboardInterrupt()
+        return original_pay(*a, **kw)
+
+    monkeypatch.setattr(prepare, "Gateway", gateway)
+    monkeypatch.setattr(prepare, "pay", pay)
+    with pytest.raises(KeyboardInterrupt):
+        prepare._execution(services, "demo-crash", "integrated")
+    monkeypatch.setattr(prepare, "Gateway", original_gateway)
+    monkeypatch.setattr(prepare, "pay", original_pay)
+    restarted = build()
+    if point == "before_execution":
+        now = restarted.now() + timedelta(minutes=16)
+        restarted.clock = lambda: now
+    execution_id = prepare._execution(restarted, "demo-crash", "integrated")
+    gw = restarted.gateway()
+    legs = gw.legs(execution_id)
+    assert len(legs) == 2
+    assert all(leg.state == "settled" and leg.reconciled for leg in legs)
+    before = restarted.store.rows("postings")
+    assert prepare._execution(restarted, "demo-crash", "integrated") == execution_id
+    assert restarted.store.rows("postings") == before
+
+
+def test_changed_advance_terms_are_refused_before_execution(deployed):
+    from app.demo.run import ADVANCE
+    from app.finance import contracts
+    from app.finance.schemas import RevenueAdvance
+
+    services, _ = deployed
+    contract = RevenueAdvance.model_validate(ADVANCE | {"fee_bps": 5000})
+    contracts.register(services.store, contract, as_of=services.now())
+    before = services.store.rows("postings")
+    with pytest.raises(RuntimeError, match="terms"):
+        prepare._execution(services, "demo-changed", "integrated")
+    assert services.store.rows("postings") == before
+
+
+def test_prepared_run_cannot_be_reforked_with_a_different_world(deployed):
+    services, _ = deployed
+    run_id = "demo-read-only"
+    services.token = "test-demo-token"
+    doc = prepare.new_run(run_id, "demo-world", services.snapshot.as_of)
+    doc["committed_round"] = 5
+    services.jobs.put("run", run_id, doc)
+    services.jobs.put("run_spec", run_id, {"scenario": prepare.SCENARIO, "rounds": 5,
+                                          "prepared_demo": True})
+    services.jobs.create("job-read-only", "run", run_id, {}, max_attempts=1)
+    assert services.jobs.move("job-read-only", ["queued"], "done")
+    http = register(Flask(__name__), services).test_client()
+    response = http.post(f"/api/v1/runs/{run_id}/fork", headers={
+        "Authorization": "Bearer test-demo-token"}, json={
+            "checkpoint_round": 2, "policies": prepare.POLICIES})
+    assert response.status_code == 409
+    assert response.get_json()["error"]["code"] == "prepared_demo_read_only"
+    assert services.jobs.get("decisions", run_id) is None

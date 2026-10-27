@@ -25,8 +25,9 @@ from ..execution.approval import bind
 from ..execution.gateway import Gateway
 from ..finance import contracts
 from ..jobs.runner import FORK, RUN, family_of, new_run, pending_decisions
-from ..simulation.scenarios import load_world
-from .run import APPROVER, TERMS, connect, observed_snapshot, pay
+from ..simulation.scenarios import DemoWorld, load_world
+from .provider import client_for
+from .run import APPROVER, TERMS, observed_snapshot, pay
 
 LOCK = "ledgerworld:demo:prepare"
 SCENARIO = {"family": "delayed-receipt", "seed": 7}
@@ -72,29 +73,49 @@ def _job(services: Services, kind: str, run_id: str, payload: dict, deadline: fl
         raise PreparationError(f"demo {kind} job {job_id} is {job.state}; check the worker log")
 
 
-def _execution(services: Services, run_id: str, selected: str) -> str:
+def _execution(services: Services, run_id: str, selected: str, world: DemoWorld | None = None) -> str:
     # The synthetic shock is the observed input to this fake plan, not a branch's snapshot.
     # Use the app's current clock/store for all monetary checks; never reset its balances.
-    world = load_world()
+    world = world or load_world()
     snapshot = observed_snapshot(world, run_id)
     beneficiaries = beneficiaries_for(snapshot)
     plan = plan_for_now(next(p for p in ALL if p.id == selected), snapshot, epoch=world.epoch,
                         terms=TERMS, beneficiaries=beneficiaries)
     if plan is None:
         raise PreparationError("the selected demo policy has no executable plan")
-    client, leg_mode = connect("fake", None)
+    client = client_for(services.jobs, run_id)
+    leg_mode = client.probe_connected("off")
     gateway = Gateway(services.store, client, mode="fake", leg_mode=leg_mode,
                       beneficiaries=set(beneficiaries.values()), clock=services.now)
     approval = bind(plan, snapshot, APPROVER, "fake", now=services.now())
     stored = gateway.stored(approval.approval_id)
+    # Only the advance used by this plan may be added; never silently adopt different terms.
+    facility_ids = {leg.facility_id for leg in approval.legs if leg.facility_id}
+    for contract in snapshot.contracts:
+        if contract.contract_id not in facility_ids:
+            continue
+        try:
+            facility = contracts.facility(services.store, contract.contract_id)
+        except LookupError:
+            contracts.register(services.store, contract, as_of=services.now())
+        else:
+            actual = (facility.pool, facility.borrower, facility.currency, facility.kind,
+                      facility.limit_minor, facility.fee_bps, facility.repay_share_bps)
+            expected = (contract.lender, contract.borrower, contract.principal.currency,
+                        contract.kind, contract.principal.minor, contract.fee_bps,
+                        contract.repay_share_bps)
+            if actual != expected:
+                raise PreparationError("the stored demo advance terms differ from its simulation")
     if stored is None:
-        # The app's initial world contains the committed line, but not the demo advance offer.
-        for contract in snapshot.contracts:
-            try:
-                contracts.facility(services.store, contract.contract_id)
-            except LookupError:
-                contracts.register(services.store, contract, as_of=services.now())
         gateway.record(approval)
+        stored = approval
+    elif not gateway.legs(stored.approval_id) and stored.expires_at <= services.now():
+        # No leg was queued: reapprove identical terms, under the same operation ids.
+        with gateway.transaction():
+            gateway.conn.execute("UPDATE approvals SET expires_at = ? WHERE approval_id = ?",
+                                 (approval.expires_at.isoformat(), approval.approval_id))
+            gateway.conn.execute("UPDATE approval_terms SET terms = ? WHERE approval_id = ?",
+                                 (approval.model_dump_json(), approval.approval_id))
         stored = approval
     services.jobs.put("approval_run", stored.approval_id, run_id)
     legs = gateway.legs(stored.approval_id)
@@ -102,11 +123,20 @@ def _execution(services: Services, run_id: str, selected: str) -> str:
         outcome = gateway.execute(stored, current_snapshot_id=snapshot.snapshot_id)
         if not outcome.ok:
             raise PreparationError(f"demo execution refused: {outcome.code}")
+    # Recover only this preparation, not another execution in the shared app outbox.
+    for leg in gateway.legs(stored.approval_id):
+        if leg.state == "submitted" and leg.provider_id is None:
+            sent = leg.attempts == gateway.outbox._claims(leg)
+            gateway.outbox._move(leg, "unknown", "restart_after_send" if sent else "restart",
+                                 incident=("outcome_unknown", "prepared execution resumed"))
     for _ in stored.legs:
-        for leg in gateway.legs(stored.approval_id):
+        legs = gateway.run(stored.approval_id)
+        if all(leg.state == "settled" and leg.reconciled for leg in legs):
+            break
+        for leg in legs:
             if leg.state == "settled" and leg.reconciled:
-                continue  # a restart's fresh fake transport does not own old provider objects
-            if leg.kind == "payout" and leg.state == "submitted":
+                continue
+            if leg.kind == "payout" and leg.state == "submitted" and leg.provider_id:
                 pay(client, leg.provider_id, gateway.provider.get(leg).status)
             reconcile.reconcile_leg(gateway, leg.leg_id)
     legs = gateway.legs(stored.approval_id)
@@ -136,7 +166,8 @@ def prepare(services: Services, *, timeout: float = 300) -> dict:
         run_id = state["run_id"]
         world = load_world()
         if services.jobs.get("run", run_id) is None:
-            services.jobs.put("run_spec", run_id, {"scenario": SCENARIO, "rounds": 5})
+            services.jobs.put("run_spec", run_id, {"scenario": SCENARIO, "rounds": 5,
+                                                   "prepared_demo": True})
             services.jobs.put("run", run_id, new_run(run_id, world.snapshot.snapshot_id,
                                                       world.snapshot.as_of))
         _job(services, RUN, run_id, {"run_id": run_id, "scenario": SCENARIO, "rounds": 5},
@@ -150,7 +181,7 @@ def prepare(services: Services, *, timeout: float = 300) -> dict:
         decisions = services.jobs.get("decisions", run_id)
         if decisions["status"] != "selected":
             raise PreparationError("demo decisions selected no feasible policy")
-        execution_id = _execution(services, run_id, decisions["selected"])
+        execution_id = _execution(services, run_id, decisions["selected"], world)
         return services.prepare_demo(run_id, execution_id)
 
 

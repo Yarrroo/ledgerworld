@@ -9,7 +9,7 @@ from .run import ADVANCE, TERMS
 
 
 def demo_runner(runner):
-    snapshot = runner.world.snapshot.model_copy(deep=True)
+    snapshot = runner.world.snapshot
     data = snapshot.model_dump(mode="json")
     data["contracts"].append(ADVANCE)
     world = replace(runner.world, snapshot=type(snapshot).model_validate(data))
