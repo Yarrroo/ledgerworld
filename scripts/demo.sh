@@ -5,6 +5,8 @@
 #   bash scripts/demo.sh --mode fake|sandbox --out FILE [--seed N]
 #                        [--beneficiary ID] [--connected-account ID]   (sandbox only)
 #
+# Sandbox with scripted agents (no model key): set LLM_BASE_URL=scripted://family.
+# The receipt records model: scripted independently of the sandbox provider mode.
 # Validate the receipt with: uv run python checks/demo_receipt.py FILE [--require-live]
 # The steps and the modes are documented in backend/app/demo/run.py.
 set -euo pipefail

@@ -30,8 +30,10 @@ for orphans: every older object there would read as one.
 
 Fake mode: the connector's ``FakeTransport`` (never the process's Airwallex variables) and the
 confidence-rumour family's ``ScriptedModel`` plan. Sandbox mode: the Airwallex sandbox from the
-environment and the configured model (``LLM_BASE_URL=scripted://…`` is a scripted plan, anything
-else a live OpenAI-compatible model); its payroll beneficiary is ``--beneficiary`` and a Mode A
+environment and the configured model (``LLM_BASE_URL=scripted://family`` uses the same rumour
+plan as fake mode, with no model key; other ``scripted://…`` URLs load a named plan or absolute
+path, anything else a live OpenAI-compatible model). The receipt labels the model separately
+from the provider mode; its payroll beneficiary is ``--beneficiary`` and a Mode A
 run needs ``--connected-account``. The provider is reached, and Mode A or B decided, before the
 simulation spends any model budget. In Mode B a short sandbox wallet is funded first by one
 deposit per currency, listed under ``setup``, never as a checkpoint. The payout is walked along
@@ -153,11 +155,13 @@ def describe(event: dict) -> str:
 
 
 def scripted_plan(source: str) -> Any:
-    """The scripted plan a run's agents answer from, or None for a live model. ``family`` is
-    the rumour's script; ``configured`` is the plan ``LLM_BASE_URL`` names, if it names one."""
+    """The rumour's script for ``family`` or its demo URL alias; otherwise the configured plan
+    or None for a live model. The alias belongs to this demo, not the generic plan loader."""
     from ..testing.scripted_model import ScriptedPlan
 
-    return load_family(RUMOUR).plan() if source == "family" else ScriptedPlan.from_env()
+    if source == "family" or os.environ.get("LLM_BASE_URL") == "scripted://family":
+        return load_family(RUMOUR).plan()
+    return ScriptedPlan.from_env()
 
 
 def model_kind(source: str) -> str:
