@@ -8,7 +8,6 @@ one cleared order), `observation-scope.json` (borrower-c at t=16 h) and `actors.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import threading
 from pathlib import Path
@@ -16,7 +15,8 @@ from pathlib import Path
 import pytest
 from app.finance.schemas import ActionIntent
 from app.simulation.actions import IntentQueue
-from app.simulation.observations import Observation, build_observation, canonical_json
+from app.simulation.observations import Observation, build_observation
+from oasis_finance import sha256_of
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "prp/2026-10-20-ledgerworld/design/modules/agent-world/fixtures"
@@ -138,7 +138,7 @@ def test_obs_hash_stable_and_blind_to_excluded_items():
     assert build(list(reversed(SCOPE["world_items"]))).obs_hash == obs.obs_hash
     only_included = [i for i in SCOPE["world_items"] if i["id"] not in SCOPE["expect"]["excluded"]]
     assert build(only_included) == obs
-    assert obs.obs_hash == hashlib.sha256(canonical_json(obs.body).encode()).hexdigest()
+    assert obs.obs_hash == sha256_of(obs.body)
     assert obs.obs_hash == PINNED_OBS_HASH
     assert obs.body["t"] == "2026-01-01T16:00:00Z"
 

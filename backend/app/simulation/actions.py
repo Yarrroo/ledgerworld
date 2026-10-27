@@ -8,6 +8,6 @@ change what clears first. The simulation imports it from here.
 
 from __future__ import annotations
 
-from oasis_finance.actions import IntentQueue, clearing_key
+from oasis_finance.actions import IntentQueue
 
-__all__ = ["IntentQueue", "clearing_key"]
+__all__ = ["IntentQueue"]

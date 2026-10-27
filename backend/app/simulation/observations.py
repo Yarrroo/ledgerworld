@@ -10,10 +10,10 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
-from oasis_finance.observation import DEFAULT_EPOCH, Observation, canonical_json
+from oasis_finance.observation import DEFAULT_EPOCH, Observation
 from oasis_finance.observation import build_observation as _build
 
-__all__ = ["Observation", "build_observation", "canonical_json"]
+__all__ = ["Observation", "build_observation"]
 
 
 def build_observation(actor: Mapping[str, Any], world_items: Iterable[Mapping[str, Any]],
