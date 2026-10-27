@@ -3,8 +3,8 @@
 The fixture is loaded unchanged. Its legs are flat (`amount`, `currency`); C3 carries Money, so
 `c3_leg` reshapes them. A change without `rehash` alters what is presented and keeps the stored
 approval; with `rehash` the changed plan is bound afresh. The binding-level codes are tested
-here; the ledger-backed cases and the token check are carried, skipped, until the gateway's
-preflight and the approvals route land (T13).
+here; the ledger-backed cases run through the gateway's preflight in `test_gateway.py`, and the
+token check is carried, skipped, until the approvals route lands.
 """
 
 from __future__ import annotations
@@ -35,7 +35,6 @@ BINDING = {"ok", *ALTERED, "expired", "mode-mismatch", "branch-snapshot", "snaps
 LEDGER = ["unowned-source", "beneficiary-not-allowlisted", "stale-balance", "breaks-floor",
           "reservation-mismatch"]
 ROUTE = {"no-token"}
-LANDS_WITH_T13 = "lands with T13: the gateway's ledger-backed preflight"
 
 
 def at(text: str) -> datetime:
@@ -225,12 +224,6 @@ def test_not_an_approval_refused(value):
             "not_an_approval")
 
 
-@pytest.mark.skip(reason=LANDS_WITH_T13)
-@pytest.mark.parametrize("case_id", LEDGER)
-def test_ledger_backed_case_refused(case_id):
-    refused(setup(case_id).verify(), CASES[case_id]["expect"]["refused"])
-
-
-@pytest.mark.skip(reason="lands with T13: the token-guarded POST /api/v1/approvals route")
+@pytest.mark.skip(reason="lands with the API task: the token-guarded POST /api/v1/approvals")
 def test_approval_route_needs_the_demo_token():
     assert CASES["no-token"]["expect"]["http"] == 401

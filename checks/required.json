@@ -49,11 +49,22 @@
       "tests/finance/test_lending.py::test_lf2_draw_beyond_capacity_is_rejected_with_the_binding_constraint",
       "tests/finance/test_lending.py::test_a_partial_line_draw_keeps_the_rest_held_and_refuses_beyond_it"
     ]},
-    {"id": "no_duplicate_movement", "name": "no duplicate movement", "tests": []},
-    {"id": "no_movement_from_unowned_funds", "name": "no movement from unowned funds", "tests": []},
-    {"id": "altered_approval_refused", "name": "altered approval refused", "tests": []},
-    {"id": "timeout_resolved_by_query", "name": "timeout resolved by query", "tests": []},
-    {"id": "reconciliation_closes_advance", "name": "reconciliation closes the advance", "tests": []},
+    {"id": "no_duplicate_movement", "name": "no duplicate movement", "tests": [
+      "tests/execution/test_gateway.py::test_no_duplicate_movement",
+      "tests/execution/test_gateway.py::test_a_409_in_flight_is_adopted_never_resent_under_a_new_id"
+    ]},
+    {"id": "no_movement_from_unowned_funds", "name": "no movement from unowned funds", "tests": [
+      "tests/execution/test_gateway.py::test_no_movement_from_unowned_funds"
+    ]},
+    {"id": "altered_approval_refused", "name": "altered approval refused", "tests": [
+      "tests/execution/test_gateway.py::test_altered_approval_refused"
+    ]},
+    {"id": "timeout_resolved_by_query", "name": "timeout resolved by query", "tests": [
+      "tests/execution/test_gateway.py::test_timeout_resolved_by_query"
+    ]},
+    {"id": "reconciliation_closes_advance", "name": "reconciliation closes the advance", "tests": [
+      "tests/execution/test_reconcile.py::test_reconciliation_closes_the_advance"
+    ]},
     {"id": "clairvoyant_policy_rejected", "name": "clairvoyant policy rejected", "tests": [
       "tests/decisions/test_nonanticipativity.py::test_the_tree_shares_the_fixtures_histories",
       "tests/decisions/test_nonanticipativity.py::test_honest_policies_are_accepted",

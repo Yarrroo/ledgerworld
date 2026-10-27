@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -137,6 +137,8 @@ class Provider(Protocol):
 
 # Posts the leg's journal on the outbox's connection, inside the settle transaction; returns its id.
 PostJournal = Callable[[sqlite3.Connection, Leg], str]
+# Opens one write transaction on the outbox's connection (the ledger's, when they share a store).
+Transaction = Callable[[], AbstractContextManager[None]]
 
 
 def request_id(plan_hash: str, index: int, kind: str) -> str:
@@ -156,8 +158,9 @@ def _now() -> str:
 
 class Outbox:
     """The execution legs of one store. It runs its own transactions, so it puts the connection
-    in autocommit mode: give it a connection of its own. `on_point(point, leg)` is called at each
-    named crash point."""
+    in autocommit mode: give it a connection of its own, or pass `transaction`, the store's own
+    way of opening a transaction on that connection, so its writes and a journal share one.
+    `on_point(point, leg)` is called at each named crash point."""
 
     def __init__(
         self,
@@ -166,6 +169,7 @@ class Outbox:
         *,
         clock: Callable[[], str] = _now,
         on_point: Callable[[str, Leg], None] | None = None,
+        transaction: Transaction | None = None,
     ) -> None:
         conn.isolation_level = None
         conn.execute("PRAGMA foreign_keys = ON")
@@ -173,6 +177,7 @@ class Outbox:
         self.post_journal = post_journal
         self.clock = clock
         self.on_point = on_point
+        self._begin = transaction or self._immediate
 
     # ------------------------------------------------------------------------------ reading
 
@@ -202,8 +207,11 @@ class Outbox:
 
     # ------------------------------------------------------------------------------ writing
 
+    def _tx(self) -> AbstractContextManager[None]:
+        return self._begin()
+
     @contextmanager
-    def _tx(self) -> Iterator[None]:
+    def _immediate(self) -> Iterator[None]:
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             yield
