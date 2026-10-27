@@ -56,16 +56,31 @@
     ]},
     {"id": "no_duplicate_movement", "name": "no duplicate movement", "tests": [
       "tests/execution/test_gateway.py::test_no_duplicate_movement",
-      "tests/execution/test_gateway.py::test_a_409_in_flight_is_adopted_never_resent_under_a_new_id"
+      "tests/execution/test_gateway.py::test_a_409_in_flight_is_adopted_never_resent_under_a_new_id",
+      "tests/execution/test_outbox_state.py::test_crash_and_retry",
+      "tests/execution/test_outbox_state.py::test_any_crash_any_restarts_moves_money_once",
+      "tests/execution/test_outbox_state.py::test_queue_is_idempotent_and_ids_never_change",
+      "tests/execution/test_outbox_state.py::test_a_live_worker_leaves_a_claimed_leg_alone",
+      "tests/execution/test_outbox_state.py::test_a_restart_after_the_send_never_resends_on_a_lookup_miss",
+      "tests/execution/test_outbox_state.py::test_an_earlier_unsent_claim_does_not_make_a_later_send_resendable"
     ]},
     {"id": "no_movement_from_unowned_funds", "name": "no movement from unowned funds", "tests": [
       "tests/execution/test_gateway.py::test_no_movement_from_unowned_funds"
     ]},
     {"id": "altered_approval_refused", "name": "altered approval refused", "tests": [
-      "tests/execution/test_gateway.py::test_altered_approval_refused"
+      "tests/execution/test_gateway.py::test_altered_approval_refused",
+      "tests/execution/test_approval_binding.py::test_altered_approval_refused",
+      "tests/execution/test_approval_binding.py::test_a_term_outside_the_hash_is_still_bound",
+      "tests/execution/test_approval_binding.py::test_a_tampered_stored_approval_is_refused"
     ]},
     {"id": "timeout_resolved_by_query", "name": "timeout resolved by query", "tests": [
-      "tests/execution/test_gateway.py::test_timeout_resolved_by_query"
+      "tests/execution/test_gateway.py::test_timeout_resolved_by_query",
+      "tests/execution/test_outbox_state.py::test_crash_and_retry[timeout-after-accept]",
+      "tests/execution/test_outbox_state.py::test_crash_and_retry[timeout-before-send]",
+      "tests/execution/test_outbox_state.py::test_crash_and_retry[lookup-errors]",
+      "tests/execution/test_outbox_state.py::test_lookup_errors_then_recovers",
+      "tests/execution/test_outbox_state.py::test_a_timeout_that_may_have_sent_is_never_resent_blind",
+      "tests/execution/test_outbox_state.py::test_a_lookup_never_adopts_another_request_ids_object"
     ]},
     {"id": "reconciliation_closes_advance", "name": "reconciliation closes the advance", "tests": [
       "tests/execution/test_reconcile.py::test_reconciliation_closes_the_advance"
