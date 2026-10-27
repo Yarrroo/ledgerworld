@@ -17,6 +17,7 @@ from __future__ import annotations
 import ast
 import re
 from collections import deque
+from functools import cache
 from pathlib import Path
 
 import pytest
@@ -35,28 +36,31 @@ SIM_FILES = ("backend/scripts/run_*_simulation.py", "backend/scripts/action_logg
 # Where in-repo modules resolve from: `app.*` and `oasis_finance.*`.
 SOURCE_ROOTS = ("backend", "packages/oasis-finance/src")
 
-CONNECTOR = re.compile(r"(?:^|\.)connectors\.airwallex(?:\.(\w+))?")
-GATEWAY = re.compile(r"(?:^|\.)execution\.gateway(?:\.|$)")
-CREDENTIAL_NAME = re.compile(r"^(?:AIRWALLEX|(?i:airwallex_))")
+# A string names the client only by its path; a bare "airwallex" in a string is a label.
+NAMED_IN_STRING = re.compile(r"connectors\.airwallex|execution\.gateway")
+CREDENTIAL_NAME = re.compile(r"^AIRWALLEX")
+# Settings loaders map lowercase fields to the variable, so identifiers match either case.
+CREDENTIAL_FIELD = re.compile(r"^(?:AIRWALLEX|(?i:airwallex_))")
 IMPORTERS = {"import_module", "__import__", "find_spec"}
 
 
 def forbidden(name: str) -> bool:
-    """A dotted name a simulation process must never load: the connector bar its fake, or
-    the execution gateway."""
-    match = CONNECTOR.search(name)
-    if match:
-        return match.group(1) != "fake"
-    return bool(GATEWAY.search(name))
+    """A dotted path a simulation process must never load: any `airwallex` segment but the
+    connector's fake, or the execution gateway. Segments, so an alias (`c.airwallex`) counts."""
+    parts = name.split(".")
+    return any(
+        (a == "airwallex" and b != "fake") or (a, b) == ("execution", "gateway")
+        for a, b in zip(parts, [*parts[1:], None])
+    )
 
 
-def dotted(node: ast.AST) -> str | None:
+def dotted(node: ast.AST) -> str:
+    """`a.b.c` for a Name/Attribute chain; a base that is not a name reads as `?`."""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
-        base = dotted(node.value)
-        return f"{base}.{node.attr}" if base else None
-    return None
+        return f"{dotted(node.value)}.{node.attr}"
+    return "?"
 
 
 def call_target(node: ast.Call) -> str | None:
@@ -75,8 +79,7 @@ def call_target(node: ast.Call) -> str | None:
             return resolve(package, len(name) - len(name.lstrip(".")), name.lstrip("."))
         return name
     if func == "getattr" and len(node.args) > 1 and isinstance(args[1], str):
-        base = dotted(node.args[0])
-        return f"{base}.{args[1]}" if base else None
+        return f"{dotted(node.args[0])}.{args[1]}"
     return None
 
 
@@ -103,7 +106,8 @@ def violations(path: Path, source: str) -> list[str]:
     """Return `path:line: reason` for every way this module itself names the client."""
     tree = ast.parse(source, filename=str(path))
     docstrings = docstring_nodes(tree)
-    inner = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    inner = inner_attributes(tree)
+    handled = set()
     found = []
 
     def flag(node: ast.AST, reason: str) -> None:
@@ -124,23 +128,29 @@ def violations(path: Path, source: str) -> list[str]:
             target = call_target(node)
             if target and forbidden(target):
                 flag(node, f"loads {target}")
+                handled |= {id(n) for n in ast.walk(node) if n is not node}
         elif isinstance(node, ast.Attribute):
-            if CREDENTIAL_NAME.match(node.attr):
+            if CREDENTIAL_FIELD.match(node.attr):
                 flag(node, f"reads {node.attr}")
-            elif id(node) not in inner and forbidden(dotted(node) or ""):
+            elif id(node) not in inner and forbidden(dotted(node)):
                 flag(node, f"reaches {dotted(node)}")
-        elif isinstance(node, ast.Name) and CREDENTIAL_NAME.match(node.id):
+        elif isinstance(node, ast.Name) and CREDENTIAL_FIELD.match(node.id):
             flag(node, f"reads {node.id}")
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
-            and id(node) not in docstrings
+            and id(node) not in docstrings | handled
         ):
-            if forbidden(node.value):
+            if NAMED_IN_STRING.search(node.value) and forbidden(node.value):
                 flag(node, f"names the client module in a string: {node.value!r}")
             elif CREDENTIAL_NAME.match(node.value):
                 flag(node, f"names a credential variable: {node.value!r}")
     return found
+
+
+def inner_attributes(tree: ast.AST) -> set[int]:
+    """Attributes that are the base of a longer chain; only the outermost is judged."""
+    return {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
 
 
 def py_files(base: Path, pattern: str = "*.py") -> list[Path]:
@@ -163,13 +173,22 @@ def module_index(root: Path) -> dict[str, Path]:
 
 
 def import_time_nodes(tree: ast.Module):
-    """Nodes that run when the module is imported: everything but function bodies."""
+    """Nodes that run when the module is imported: all but function bodies, whose decorators
+    and defaults do run."""
     stack = list(tree.body)
     while stack:
         node = stack.pop()
         yield node
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            stack += getattr(node, "decorator_list", [])
+            stack += [d for d in (*node.args.defaults, *node.args.kw_defaults) if d]
+        else:
             stack.extend(ast.iter_child_nodes(node))
+
+
+@cache
+def parse(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
 def imported_names(path: Path, module: str | None, lazy: bool) -> list[tuple[int, str]]:
@@ -179,7 +198,8 @@ def imported_names(path: Path, module: str | None, lazy: bool) -> list[tuple[int
     only through what runs when it is imported. A file outside the source roots (`module` is
     None) has no package, so only its absolute imports resolve.
     """
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    tree = parse(path)
+    inner = inner_attributes(tree)
     package = (module or "") if path.name == "__init__.py" else (module or "").rpartition(".")[0]
     found = []
     for node in ast.walk(tree) if lazy else import_time_nodes(tree):
@@ -192,6 +212,12 @@ def imported_names(path: Path, module: str | None, lazy: bool) -> list[tuple[int
             found += [(node.lineno, f"{base}.{alias.name}") for alias in node.names]
         elif isinstance(node, ast.Call) and (target := call_target(node)):
             found.append((node.lineno, target))
+        elif (
+            isinstance(node, ast.Attribute)
+            and id(node) not in inner
+            and forbidden(name := dotted(node))
+        ):
+            found.append((node.lineno, name))
     return found
 
 
@@ -295,6 +321,9 @@ def test_fence_catches_a_planted_live_import(tmp_path):
         "from app import connectors\ngetattr(connectors, 'airwallex')\n",
         "from unittest import mock\nmock.patch('app.connectors.airwallex.live.login')\n",
         "from .. import connectors\nconnectors.airwallex.live\n",
+        "from app import connectors as c\nc.airwallex.live\n",
+        "import app.connectors as c\nc.airwallex.live.login()\n",
+        "import app.connectors as c\ngetattr(c, 'airwallex')\n",
     ],
 )
 def test_fence_catches_every_import_form(tmp_path, source):
@@ -351,6 +380,16 @@ def test_fence_catches_a_chain_through_another_module(tmp_path, source):
          "app.finance.store"),
         ("backend/app/connectors/airwallex/__init__.py", "from . import live\n",
          "app.connectors.airwallex"),
+        ("backend/app/finance/store.py", "from app import connectors as c\nx = c.airwallex.live\n",
+         "app.finance.store"),
+        ("backend/app/finance/store.py",
+         ("import importlib\ndef g(m=importlib.import_module('app.connectors.airwallex.live')):\n"
+          "    return m\n"),
+         "app.finance.store"),
+        ("backend/app/finance/store.py",
+         ("import importlib\n@print(importlib.import_module('app.connectors.airwallex.live'))\n"
+          "def g():\n    pass\n"),
+         "app.finance.store"),
     ],
 )
 def test_fence_follows_what_a_reached_module_loads(tmp_path, rel, source, via):
@@ -360,6 +399,12 @@ def test_fence_follows_what_a_reached_module_loads(tmp_path, rel, source, via):
         "from app.finance import store\nfrom app.connectors.airwallex import fake\n"
     ))
     assert any(f"via {via}" in h for h in scan(tmp_path)), scan(tmp_path)
+
+
+def test_fence_reports_a_loader_call_once(tmp_path):
+    rel = "backend/app/simulation/planted.py"
+    plant(tmp_path, rel, "import importlib\nimportlib.import_module('app.connectors.airwallex.live')\n")
+    assert scan(tmp_path) == [f"{rel}:2: loads app.connectors.airwallex.live"]
 
 
 def test_fence_runs_the_parent_packages_of_a_simulation_module(tmp_path):
@@ -405,6 +450,8 @@ def test_fence_passes_clean_simulation_code(tmp_path):
         "import app.connectors.airwallex.fake\n"
         "from app.connectors.airwallex import fake\n"
         "from app.connectors.airwallex.fake import FakeTransport\n"
+        "from app.connectors import airwallex_rates\n"
+        "EVENT = 'airwallex_fake_used'\n"
         "from unittest import mock\n"
         "from app.finance import ledger\n"
         "from ..execution import approval\n\n"

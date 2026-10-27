@@ -22,6 +22,7 @@
       "tests/execution/test_import_fence.py::test_fence_catches_every_credential_read",
       "tests/execution/test_import_fence.py::test_fence_catches_a_chain_through_another_module",
       "tests/execution/test_import_fence.py::test_fence_follows_what_a_reached_module_loads",
+      "tests/execution/test_import_fence.py::test_fence_reports_a_loader_call_once",
       "tests/execution/test_import_fence.py::test_fence_runs_the_parent_packages_of_a_simulation_module",
       "tests/execution/test_import_fence.py::test_fence_scans_the_simulation_entry_points_and_tests",
       "tests/execution/test_import_fence.py::test_fence_ignores_what_runs_only_when_a_reached_function_is_called",
