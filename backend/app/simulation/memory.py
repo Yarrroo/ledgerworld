@@ -20,6 +20,7 @@ import threading
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from ..decisions.nonanticipativity import canonical
 from ..testing.fake_graph_memory import NAMESPACE_RE, NamespaceViolation, namespace_for
 
 __all__ = [
@@ -64,10 +65,7 @@ class MemorySnapshot:
     def digest(self) -> str:
         """sha256 of the records as canonical JSON, for comparing captures."""
 
-        body = [asdict(r) for r in self.records]
-        return hashlib.sha256(
-            json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
+        return hashlib.sha256(canonical([asdict(r) for r in self.records]).encode()).hexdigest()
 
     def restore_into(self, child: BranchMemory) -> tuple[MemoryRecord, ...]:
         """Copy the pinned records, in order, into an empty sibling namespace of this world."""
@@ -76,7 +74,7 @@ class MemorySnapshot:
             raise ValueError(f"cannot restore {self.namespace} into world {child.world_id}")
         if child.namespace == self.namespace:
             raise ValueError(f"cannot restore {self.namespace} into itself")
-        if child.retrieve():
+        if child._uuids:
             raise ValueError(f"{child.namespace} already holds records; restore needs it empty")
         return tuple(
             child.write_record(r.actor_id, r.key, r.value, r.round) for r in self.records
@@ -120,7 +118,7 @@ class BranchMemory:
             episode = self.client.graph.add(
                 graph_id=self.graph_id,
                 type="json",
-                data=json.dumps(body, sort_keys=True, separators=(",", ":")),
+                data=canonical(body),
                 source_description=RECORD_SOURCE,
             )
             self._uuids.append(episode.uuid_)

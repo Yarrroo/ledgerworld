@@ -161,12 +161,9 @@ def test_memory_matches_branch_reference_model(world):
     for w in spec["memory_writes"]:
         ref_forks[w["branch_id"]].write(w["actor_id"], w["key"], w["value"], w["round"])
 
-    def ref_projection(records):
-        return [(r.actor_id, r.key, r.value, r.round) for r in records]
-
-    assert projection(parent.retrieve()) == ref_projection(ref_parent.records())
+    assert projection(parent.retrieve()) == projection(ref_parent.records())
     for branch_id, ref in ref_forks.items():
-        assert projection(forks[branch_id].retrieve()) == ref_projection(ref.records())
+        assert projection(forks[branch_id].retrieve()) == projection(ref.records())
         assert ref.ns == forks[branch_id].namespace
     with pytest.raises(branch_ref.NamespaceViolation):
         ref_forks["integrated"].records(branch_ref.namespace(spec["world_id"], "no-action"))

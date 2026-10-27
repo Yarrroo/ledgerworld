@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..decisions.nonanticipativity import canonical as _canonical
 from ..testing.fake_graph_memory import namespace_for
 from ..testing.scripted_model import ScriptedModel, ScriptedPlan, ToolCall, UnexpectedModelCall
 
@@ -28,10 +29,6 @@ __all__ = ["ModelCall", "ReplayMiss", "ReplayModel", "Transcript"]
 
 class ReplayMiss(UnexpectedModelCall):
     """A replayed model call the transcript does not hold, or holds for another observation."""
-
-
-def _canonical(obj: Any) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 @dataclass(frozen=True)
@@ -207,7 +204,5 @@ class ReplayModel(ScriptedModel):
                 )
         try:
             return super()._answer(messages, tools)
-        except ReplayMiss:
-            raise
         except UnexpectedModelCall as exc:
             raise ReplayMiss(str(exc)) from exc
