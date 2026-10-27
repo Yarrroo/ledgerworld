@@ -25,15 +25,14 @@
 
         <article v-if="notCurrent.length" class="lw-tile" data-test="not-current">
           <div class="lw-tile__label">Not current, not counted</div>
-          <template v-for="a in notCurrent" :key="a.account_id">
+          <template v-for="f in notCurrent" :key="f.id">
             <div class="lw-figure lw-figure--small">
-              {{ a.account_id }} ·
-              <span :class="['lw-status', `lw-status--${stateOf(a.status).tone}`]">
-                <span aria-hidden="true">{{ stateOf(a.status).icon }}</span>
-                {{ stateOf(a.status).word }}
+              {{ f.id }} ·
+              <span :class="['lw-status', `lw-status--${f.tone}`]">
+                <span aria-hidden="true">{{ f.icon }}</span> {{ f.word }}
               </span>
             </div>
-            <div v-if="a.status === 'stale'" class="lw-time">as of {{ formatTime(a.as_of).utc }}</div>
+            <div v-if="f.at" class="lw-time">as of {{ f.at }}</div>
           </template>
         </article>
       </section>
@@ -97,7 +96,7 @@
 import { computed } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import {
-  ApiError, ScreenShell, amountText, contextKey, formatTime, getLending, getOverview, metricText,
+  ApiError, ScreenShell, amountText, contextKey, freshness, getLending, getOverview, metricText,
   money, routeExists, stateOf, useReading
 } from '../api/v1.js'
 
@@ -140,8 +139,8 @@ const calculation = computed(() => {
   return `${terms.join(' - ')} = ${amountText(capacity.value.K_p)}`
 })
 
-const notCurrent = computed(() =>
-  state.body.notCurrent.filter((a) => a.account_id.startsWith(`${state.body.pool}/`)))
+const notCurrent = computed(() => state.body.notCurrent
+  .filter((a) => a.account_id.startsWith(`${state.body.pool}/`)).map(freshness))
 
 const fundingWhy = computed(() => {
   if (state.status === 'error') return 'Last loaded, not current; reload before funding'

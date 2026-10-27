@@ -5,9 +5,8 @@
       reserve floor. Each figure comes from the API; open a tile to see its inputs.
     </p>
     <p v-if="body.completeness.status === 'partial'" class="lw-note" data-test="partial">
-      Partial: not current — {{ body.completeness.accounts.map(freshness).join('; ') }}.
-      A stale account keeps its last observed value and figures that use it say Stale; an
-      unknown one has no value, so figures that depend on it read Unknown, not zero.
+      Partial: not current — {{ notCurrent }}.
+      A stale account was observed and keeps its last value; an unknown one has no value.
     </p>
 
     <section class="lw-strip" aria-label="Answer">
@@ -119,6 +118,8 @@ const { state, refresh } = useReading(() => getOverview())
 const next = computed(() => state.body?.upcoming_outflows[0] ?? null)
 const due = computed(() => formatTime(next.value?.due_at))
 const floor = computed(() => floorState(state.body?.coverage.headroom))
+const notCurrent = computed(() =>
+  state.body?.completeness.accounts.map((a) => freshness(a).text).join('; '))
 
 const runId = computed(() => state.body?.demo.run_id ?? null)
 const simulationTarget = computed(() => {

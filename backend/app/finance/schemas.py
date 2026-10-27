@@ -597,21 +597,37 @@ class Coverage(_Shape):
 
 
 class NotCurrent(_Shape):
-    """A cash account whose balance is not current, and why: stale keeps its last observed
-    value (as of `as_of`), unknown has none."""
+    """A cash account whose balance is not current, and why: a stale one was observed and
+    keeps its last value as of `as_of`; an unknown one has no value and no time."""
+
+    model_config = _rules(_when("status", "stale", _props(as_of=IS_STRING), _props(as_of=IS_NULL)))
 
     account_id: Id
     status: Literal["stale", "unknown"]
-    as_of: Time
+    as_of: Time | None
+
+    @model_validator(mode="after")
+    def _only_a_stale_account_has_a_time(self) -> NotCurrent:
+        if (self.status == "stale") != (self.as_of is not None):
+            raise ValueError("a stale account carries its as_of; an unknown one carries none")
+        return self
 
 
 class Completeness(_Shape):
-    """`missing` names every cash account that is not current; `accounts` says, for each of
-    them in the same order, whether it is stale or unknown."""
+    """`missing` names every cash account that is not current; `accounts` gives each of them,
+    in the same order, its reason (stale or unknown)."""
 
     status: Literal["complete", "partial"]
     missing: list[Id]
     accounts: list[NotCurrent]
+
+    @model_validator(mode="after")
+    def _missing_is_the_accounts(self) -> Completeness:
+        if self.missing != [a.account_id for a in self.accounts]:
+            raise ValueError("missing names exactly the accounts, in the same order")
+        if (self.status == "partial") != bool(self.accounts):
+            raise ValueError("partial exactly when an account is not current")
+        return self
 
 
 class OverviewResponse(Response):

@@ -227,6 +227,8 @@ describe('a stale account is not current, and it is not unknown', () => {
     expect(partial).toContain('lender/venue · ? Unknown')
     expect(partial).not.toMatch(/operating · \? Unknown/)
     expect(partial).not.toContain('not observed')
+    // K_p counts only known balances: the note must not say a stale value feeds the figures.
+    expect(partial).not.toMatch(/figures that use it/i)
     expect(text(w, 'settled')).toContain('USD 70,000.00 · stale') // its last value, kept
   })
 

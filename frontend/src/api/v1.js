@@ -142,12 +142,16 @@ export const STATES = {
 
 export const stateOf = (status) => STATES[status] || STATES.unassessed
 
-/** A not-current account from completeness.accounts, with its own reason: stale was observed
- * (as of a time), unknown was not ("lender/venue · ? Unknown"). */
+/** A not-current account from completeness.accounts, with its own reason: a stale one was
+ * observed and carries its as_of; an unknown one was not and carries none. ``text`` reads
+ * "lender/venue · ? Unknown" or "lender/operating · ◷ Stale, as of 2026-01-05 12:00 UTC". */
 export function freshness (account) {
   const s = stateOf(account.status)
-  const at = account.status === 'stale' ? `, as of ${formatTime(account.as_of).utc}` : ''
-  return `${account.account_id} · ${s.icon} ${s.word}${at}`
+  const at = account.as_of ? formatTime(account.as_of).utc : null
+  return {
+    ...s, id: account.account_id, at,
+    text: `${account.account_id} · ${s.icon} ${s.word}${at ? `, as of ${at}` : ''}`
+  }
 }
 
 /** Floor kept or breached, read off an API headroom metric (P minimum − floor). */

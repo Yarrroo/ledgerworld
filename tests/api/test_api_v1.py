@@ -184,7 +184,7 @@ def test_venue_freeze_is_partial_and_unknown_is_never_zero():
     body = check(http.get("/api/v1/overview"), "OverviewResponse")
     assert body["lender_capacity"]["minor"] == 2_700_000  # LF-2 stressed: K_p = 27,000.00
     assert body["completeness"] == {"status": "partial", "missing": ["lender/venue"], "accounts": [
-        {"account_id": "lender/venue", "status": "unknown", "as_of": iso(NOW)}]}
+        {"account_id": "lender/venue", "status": "unknown", "as_of": None}]}  # no value, no time
     lending = check(http.get("/api/v1/lending"), "LendingResponse")
     assert lending["capacity"]["authority"] == "reduced"
     assert lending["capacity"]["parts"]["settled_known"]["minor"] == 4_500_000
@@ -221,7 +221,39 @@ def test_treasury_shows_s_and_p_apart_and_a_stale_balance_keeps_its_value():
     # Stale is observed but not current, never unknown: each account says which it is.
     assert {a["account_id"]: a["status"] for a in over["completeness"]["accounts"]} == {
         "borrower-a/operating": "stale", "lender/operating": "stale", "lender/venue": "stale"}
-    assert over["completeness"]["missing"] == [a["account_id"] for a in over["completeness"]["accounts"]]
+    assert [a["as_of"] for a in over["completeness"]["accounts"]] == [iso(NOW)] * 3
+
+
+def test_completeness_is_one_list_of_reasons():
+    stale = {"account_id": "lender/operating", "status": "stale", "as_of": iso(NOW)}
+    unknown = {"account_id": "lender/venue", "status": "unknown", "as_of": None}
+    c6.Completeness.model_validate(
+        {"status": "partial", "missing": ["lender/operating", "lender/venue"],
+         "accounts": [stale, unknown]})
+    for bad in ({"status": "partial", "missing": ["lender/venue"], "accounts": [stale, unknown]},
+                {"status": "complete", "missing": ["lender/venue"], "accounts": [unknown]},
+                {"status": "partial", "missing": ["lender/venue"],
+                 "accounts": [unknown | {"as_of": iso(NOW)}]},
+                {"status": "partial", "missing": ["lender/operating"],
+                 "accounts": [stale | {"as_of": None}]}):
+        with pytest.raises(ValueError):
+            c6.Completeness.model_validate(bad)
+
+
+STALE_EXAMPLES = {"overview": "valid-overview-lf-stale", "lending": "valid-lending-lf-stale"}
+
+
+@pytest.mark.parametrize("route", sorted(STALE_EXAMPLES))
+def test_the_stale_examples_are_what_the_api_answers(route):
+    """The screens' stale-account tests read these recordings; they must stay the API's own."""
+    later = build(observed(stressed=True), clock=lambda: NOW + timedelta(hours=7))
+    body = check(client(later).get(f"/api/v1/{route}"), f"{route.capitalize()}Response")
+    path = ROOT / f"contracts/examples/c6_api/{STALE_EXAMPLES[route]}.json"
+    if os.environ.get("LW_RECORD_EXAMPLES"):
+        doc = json.loads(path.read_text(encoding="utf-8")) | {"instance": body}
+        path.write_text(json.dumps(doc, indent=1, sort_keys=True, ensure_ascii=False) + "\n",
+                        encoding="utf-8")
+    assert body == json.loads(path.read_text(encoding="utf-8"))["instance"]
 
 
 def test_an_unknown_treasury_balance_has_no_value():

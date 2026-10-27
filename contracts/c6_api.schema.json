@@ -844,7 +844,7 @@
     },
     "Completeness": {
       "additionalProperties": false,
-      "description": "`missing` names every cash account that is not current; `accounts` says, for each of\nthem in the same order, whether it is stale or unknown.",
+      "description": "`missing` names every cash account that is not current; `accounts` gives each of them,\nin the same order, its reason (stale or unknown).",
       "properties": {
         "status": {
           "enum": [
@@ -2164,7 +2164,35 @@
     },
     "NotCurrent": {
       "additionalProperties": false,
-      "description": "A cash account whose balance is not current, and why: stale keeps its last observed\nvalue (as of `as_of`), unknown has none.",
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "as_of": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "stale"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "as_of": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ],
+      "description": "A cash account whose balance is not current, and why: a stale one was observed and\nkeeps its last value as of `as_of`; an unknown one has no value and no time.",
       "properties": {
         "account_id": {
           "maxLength": 128,
@@ -2181,9 +2209,16 @@
           "type": "string"
         },
         "as_of": {
-          "format": "date-time",
-          "title": "As Of",
-          "type": "string"
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "As Of"
         }
       },
       "required": [
