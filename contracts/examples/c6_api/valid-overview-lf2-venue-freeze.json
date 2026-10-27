@@ -11,6 +11,13 @@
    "status": "known"
   },
   "completeness": {
+   "accounts": [
+    {
+     "account_id": "lender/venue",
+     "as_of": null,
+     "status": "unknown"
+    }
+   ],
    "missing": [
     "lender/venue"
    ],

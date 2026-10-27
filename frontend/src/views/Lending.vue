@@ -23,11 +23,17 @@
           </details>
         </article>
 
-        <article v-if="unobserved.length" class="lw-tile" data-test="unobserved">
-          <div class="lw-tile__label">Not observed, not counted</div>
-          <div v-for="id in unobserved" :key="id" class="lw-figure lw-figure--small">
-            {{ id }} · <span class="lw-status lw-status--warn"><span aria-hidden="true">?</span> Unknown</span>
-          </div>
+        <article v-if="notCurrent.length" class="lw-tile" data-test="not-current">
+          <div class="lw-tile__label">Not current, not counted</div>
+          <template v-for="f in notCurrent" :key="f.id">
+            <div class="lw-figure lw-figure--small">
+              {{ f.id }} ·
+              <span :class="['lw-status', `lw-status--${f.tone}`]">
+                <span aria-hidden="true">{{ f.icon }}</span> {{ f.word }}
+              </span>
+            </div>
+            <div v-if="f.at" class="lw-time">as of {{ f.at }}</div>
+          </template>
         </article>
       </section>
 
@@ -90,21 +96,22 @@
 import { computed } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import {
-  ApiError, ScreenShell, amountText, contextKey, getLending, getOverview, metricText, money,
-  routeExists, stateOf, useReading
+  ApiError, ScreenShell, amountText, contextKey, freshness, getLending, getOverview, metricText,
+  money, routeExists, stateOf, useReading
 } from '../api/v1.js'
 
 const router = useRouter()
 
 /** Lending, and the same snapshot's completeness: C6 Lending lists no pool accounts, so the
- * accounts it could not observe are read from the overview of the same context. */
+ * accounts that are not current (each stale or unknown) are read from the overview of the same
+ * context. */
 async function load () {
   const [lending, overview] = await Promise.all([getLending(), getOverview()])
   if (contextKey(lending) !== contextKey(overview)) {
     throw new ApiError(0, 'context_mismatch',
       'lending and overview answered for different snapshots or modes; reload')
   }
-  return { ...lending, missing: overview.completeness.missing, demo: overview.demo }
+  return { ...lending, notCurrent: overview.completeness.accounts, demo: overview.demo }
 }
 
 const { state, refresh } = useReading(load)
@@ -132,8 +139,8 @@ const calculation = computed(() => {
   return `${terms.join(' - ')} = ${amountText(capacity.value.K_p)}`
 })
 
-const unobserved = computed(() =>
-  state.body.missing.filter((id) => id.startsWith(`${state.body.pool}/`)))
+const notCurrent = computed(() => state.body.notCurrent
+  .filter((a) => a.account_id.startsWith(`${state.body.pool}/`)).map(freshness))
 
 const fundingWhy = computed(() => {
   if (state.status === 'error') return 'Last loaded, not current; reload before funding'

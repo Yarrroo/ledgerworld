@@ -1,0 +1,90 @@
+{
+ "about": "GET /api/v1/overview 7 h after the LF-1/LF-2 observation (stale after 6 h): under the venue freeze: the venue account is unknown and every other cash account is stale (observed, not current), so completeness is partial and names each reason. Recorded from the API.",
+ "def": "OverviewResponse",
+ "instance": {
+  "as_of": "2026-01-05T19:00:00Z",
+  "cash": {
+   "as_of": "2026-01-05T12:00:00Z",
+   "currency": "USD",
+   "minor": 7000000,
+   "status": "stale"
+  },
+  "completeness": {
+   "accounts": [
+    {
+     "account_id": "borrower-a/operating",
+     "as_of": "2026-01-05T12:00:00Z",
+     "status": "stale"
+    },
+    {
+     "account_id": "lender/operating",
+     "as_of": "2026-01-05T12:00:00Z",
+     "status": "stale"
+    },
+    {
+     "account_id": "lender/venue",
+     "as_of": null,
+     "status": "unknown"
+    }
+   ],
+   "missing": [
+    "borrower-a/operating",
+    "lender/operating",
+    "lender/venue"
+   ],
+   "status": "partial"
+  },
+  "coverage": {
+   "at": "2026-01-06T16:00:00Z",
+   "floor": {
+    "as_of": null,
+    "currency": "USD",
+    "minor": 3000000,
+    "status": "known"
+   },
+   "headroom": {
+    "as_of": null,
+    "currency": "USD",
+    "minor": -1000000,
+    "status": "stale"
+   },
+   "min_projected": {
+    "as_of": "2026-01-05T19:00:00Z",
+    "currency": "USD",
+    "minor": 2000000,
+    "status": "stale"
+   }
+  },
+  "demo": {
+   "execution_id": null,
+   "run_id": null
+  },
+  "lender_capacity": {
+   "as_of": "2026-01-05T19:00:00Z",
+   "currency": "USD",
+   "minor": -1800000,
+   "status": "stale"
+  },
+  "mode": "fake",
+  "snapshot_id": "obs-lf-venue-freeze",
+  "spendable": {
+   "as_of": "2026-01-05T12:00:00Z",
+   "currency": "USD",
+   "minor": 2000000,
+   "status": "stale"
+  },
+  "upcoming_outflows": [
+   {
+    "amount": {
+     "currency": "USD",
+     "minor": 5000000
+    },
+    "due_at": "2026-01-06T16:00:00Z",
+    "kind": "payroll",
+    "obligation_id": "payroll-1",
+    "reserved": true
+   }
+  ]
+ },
+ "valid": true
+}
