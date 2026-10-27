@@ -202,6 +202,7 @@ class World:
                               if e.get("branch") in (None, branch_id)),
                              key=lambda e: e["round"])
         self.clock = Clock(epoch=epoch)
+        self.seed = seed  # a checkpoint records it, so a fork starts from the same stream
         # This world's own stream, OASIS's draws included. Its tasks hold this object, so it is
         # only ever reseeded or restored in place, never replaced.
         self.rng = random.Random(seed)

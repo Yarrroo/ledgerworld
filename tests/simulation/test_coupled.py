@@ -450,6 +450,9 @@ class Barriers:
         self.records: list[str] = []
         self.armed = True
         self.stubborn = False
+        self.cleanup_gate: asyncio.Event | None = None  # set: a cancelled writer cleans up slowly
+        self.in_cleanup = asyncio.Event()
+        self.writer: asyncio.Task | None = None
 
 
 class SiblingModel(ScriptedModel):
@@ -469,11 +472,15 @@ class SiblingModel(ScriptedModel):
         submit(self.world.queue, agent.finance_actor,
                [(FinancialActionType.NO_ACTION, NoActionArgs(reason="provisional"))])
         b.records.append("provisional writes")
+        b.writer = asyncio.current_task()
         child = asyncio.create_task(self._child(agent))
         b.reached.set()
         try:
             await b.release.wait()
         except asyncio.CancelledError:
+            if b.cleanup_gate is not None:
+                b.in_cleanup.set()
+                await b.cleanup_gate.wait()
             self._cleanup(agent)
             if b.stubborn:  # a writer that will not stop
                 b.records.append("stubborn: ignoring cancellation")
@@ -516,6 +523,12 @@ class FailingModel(ScriptedModel):
             await self.barriers.reached.wait()
             raise InjectedFault("an actor raised in step 5")
         return self._answer(messages, tools)
+
+
+async def settle() -> None:
+    """Let every ready task run a step: what a released barrier would let through, lands."""
+    for _ in range(20):
+        await asyncio.sleep(0)
 
 
 def memory_record(agent, text):
@@ -700,8 +713,7 @@ def test_an_aborted_agent_step_stops_every_writer_before_restoring(tmp_path, con
                             else "failed")
             # cleanup_writes_removed, writes_after_restore: release every barrier and look again.
             barriers.release.set()
-            for _ in range(20):
-                await asyncio.sleep(0)
+            await settle()
             assert world.fingerprint() == capture.fingerprint
             assert expect["writes_after_restore"] == 0 and expect["cleanup_writes_removed"]
             barriers.armed = False
@@ -729,8 +741,171 @@ def test_a_world_whose_writer_will_not_stop_refuses_a_retry(tmp_path):
             assert "stubborn: ignoring cancellation" in barriers.records
         finally:
             barriers.release.set()
-            for _ in range(20):
-                await asyncio.sleep(0)
+            await settle()
+            await world.close()
+
+    run(go())
+
+
+@pytest.mark.parametrize("cause", ["fault", "cancel"])
+def test_a_cancellation_during_abort_cleanup_waits_for_it_to_finish(tmp_path, control, cause):
+    """The coordinator is cancelled while the round's abort is still stopping a writer: the
+    cleanup still runs to the end (writers joined, ledger rolled back, connection closed, world
+    restored) before the cancellation propagates."""
+    seen = {}
+
+    def advanced(world, ctx):
+        seen["conn"] = ctx.conn
+
+    async def go():
+        barriers = Barriers()
+        barriers.cleanup_gate = asyncio.Event()
+        world = rollback_world(tmp_path, f"cancel-in-cleanup-{cause}", barriers,
+                               fail=cause == "fault")
+        try:
+            capture = await to_round_start(world)
+            world.coordinator.hooks["advanced"] = advanced
+            task = asyncio.create_task(world.coordinator.run_round(world))
+            await barriers.reached.wait()
+            if cause == "cancel":
+                task.cancel()
+            await barriers.in_cleanup.wait()  # the abort is waiting on the writer's cleanup
+            task.cancel()
+            await settle()
+            assert not task.done()  # the cancellation waits for the cleanup
+            barriers.cleanup_gate.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert barriers.writer.done()
+            assert "cleanup memory written" in barriers.records
+            conn = seen["conn"]
+            assert conn.closed and not conn.in_transaction()
+            assert_restored(world, capture, "cancelled" if cause == "cancel" else "failed")
+            barriers.release.set()
+            await settle()
+            assert world.fingerprint() == capture.fingerprint
+            del world.coordinator.hooks["advanced"]
+            barriers.armed = False
+            await retry_equals_control(world, control)
+        finally:
+            barriers.cleanup_gate.set()
+            barriers.release.set()
+            await settle()
+            await world.close()
+
+    run(go())
+
+
+class RestoreBroke(Exception):
+    pass
+
+
+@pytest.mark.parametrize("cause", ["fault", "cancel"])
+def test_an_abort_that_raises_leaves_the_world_unusable_and_reaches_the_caller(tmp_path, cause):
+    """A failed abort is named on the world; it reaches the caller in place of a round fault,
+    and as a note on a cancellation, which still propagates."""
+    def fault(world, ctx):
+        raise InjectedFault("fault-in-commit") if cause == "fault" else asyncio.CancelledError()
+
+    def broken_restore(capture):
+        raise RestoreBroke("restore broke")
+
+    async def go():
+        world = rollback_world(tmp_path, f"abort-raises-{cause}")
+        try:
+            await to_round_start(world)
+            world.coordinator.hooks["before_transcript"] = fault
+            world.restore = broken_restore
+            if cause == "fault":
+                with pytest.raises(RestoreBroke) as raised:
+                    await world.coordinator.run_round(world)
+                assert isinstance(raised.value.__context__, InjectedFault)
+            else:
+                with pytest.raises(asyncio.CancelledError) as raised:
+                    await world.coordinator.run_round(world)
+                assert "the abort failed: RestoreBroke" in "".join(raised.value.__notes__)
+            assert "abort did not finish" in world.unusable
+            assert "abort_failed" in [e for e, _ in world.lifecycle]
+            assert world.failures[-1]["round"] == ROLLBACK_ROUND
+            with pytest.raises(WorldUnusable):
+                await world.coordinator.run_round(world)
+        finally:
+            await world.close()
+
+    run(go())
+
+
+def test_an_abort_cancelled_itself_still_closes_the_ledger_and_refuses_a_retry(tmp_path):
+    seen = {}
+
+    def advanced(world, ctx):
+        seen["conn"] = ctx.conn
+
+    async def go():
+        barriers = Barriers()
+        barriers.cleanup_gate = asyncio.Event()
+        world = rollback_world(tmp_path, "abort-cancelled", barriers, fail=True)
+        try:
+            capture = await to_round_start(world)
+            world.coordinator.hooks["advanced"] = advanced
+            task = asyncio.create_task(world.coordinator.run_round(world))
+            await barriers.in_cleanup.wait()
+            (abort,) = [t for t in asyncio.all_tasks()
+                        if t.get_name() == f"round-{ROLLBACK_ROUND}-abort"]
+            abort.cancel()  # the loop shutting down cancels every task, the abort's included
+            with pytest.raises(InjectedFault):
+                await task
+            conn = seen["conn"]
+            assert conn.closed and not conn.in_transaction()
+            assert world.fingerprint()["ledger"] == capture.fingerprint["ledger"]
+            assert "abort did not finish (cancelled)" in world.unusable
+            assert (world.failures[-1]["round"], world.failures[-1]["status"]) == (
+                ROLLBACK_ROUND, "failed")
+            with pytest.raises(WorldUnusable):
+                await world.coordinator.run_round(world)
+        finally:
+            barriers.cleanup_gate.set()
+            barriers.release.set()
+            await settle()
+            await world.close()
+
+    run(go())
+
+
+def test_an_abort_cancelled_before_its_first_step_still_closes_the_round(tmp_path):
+    seen = {}
+
+    def fault(world, ctx):
+        seen["conn"] = ctx.conn
+        loop = asyncio.get_running_loop()
+
+        def cancel_the_abort_before_it_starts():
+            aborts = [t for t in asyncio.all_tasks()
+                      if t.get_name() == f"round-{ROLLBACK_ROUND}-abort"]
+            if aborts:  # created, its first step still queued
+                aborts[0].cancel()
+            else:
+                loop.call_soon(cancel_the_abort_before_it_starts)
+
+        loop.call_soon(cancel_the_abort_before_it_starts)
+        raise InjectedFault("fault-in-commit")
+
+    async def go():
+        world = rollback_world(tmp_path, "abort-cancelled-early")
+        try:
+            capture = await to_round_start(world)
+            world.coordinator.hooks["before_transcript"] = fault
+            with pytest.raises(InjectedFault):
+                await world.coordinator.run_round(world)
+            conn = seen["conn"]
+            assert conn.closed and not conn.in_transaction()
+            assert world.fingerprint()["ledger"] == capture.fingerprint["ledger"]
+            assert ("admission_closed", f"round {ROLLBACK_ROUND}") in world.lifecycle
+            assert "abort did not finish (cancelled)" in world.unusable
+            assert world.failures[-1]["round"] == ROLLBACK_ROUND
+            with pytest.raises(WorldUnusable):
+                await world.coordinator.run_round(world)
+        finally:
             await world.close()
 
     run(go())
