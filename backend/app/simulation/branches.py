@@ -18,7 +18,9 @@ in its own ledger, which ``ledger_hash`` leaves out: it is lineage, not money.
 ``replay(checkpoint, transcript)`` re-runs a branch from its recorded model calls with no live
 model: each actor answers through the transcript's ``ReplayModel``, which refuses any call whose
 observation differs from the recorded one. A replay keeps the branch's id, so its journals can
-be compared byte for byte, and it is labelled ``replay=true`` in its ledger and its label.
+be compared byte for byte, and it is labelled ``replay=true`` in its ledger and its label. Its
+graph memory keeps the branch's namespace but is stored in a graph of its own, so a replay on
+the original's memory backend neither collides with nor deletes the original's graph.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import sqlite3
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -276,9 +279,11 @@ async def _fork(cp: Checkpoint, branch_id: str, *, model: ModelFactory, workdir:
             raise BranchMismatch(f"{branch_id} restored differently from its checkpoint: "
                                  f"{differs}")
         if memory_client is not None:
-            memory = BranchMemory(memory_client, cp.world_id, branch_id)
-            # A replay of the checkpoint's own branch shares its namespace, on its own client,
-            # so the pinned records are written as they were rather than restored "into" it.
+            # A replay keeps its branch's namespace (logical identity) in a fresh graph (storage
+            # identity): the original's graph may live on the same backend and stays untouched.
+            # The pinned records are written as they were rather than restored "into" it.
+            memory = BranchMemory(memory_client, cp.world_id, branch_id,
+                                  instance=f"replay-{uuid.uuid4().hex}" if replay else None)
             for r in cp.memory.records if cp.memory is not None else ():
                 memory.write_record(r.actor_id, r.key, r.value, r.round)
     except BaseException:

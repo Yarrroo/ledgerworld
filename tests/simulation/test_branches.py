@@ -701,6 +701,70 @@ def test_siblings_draw_alike_whatever_order_they_run_in(tmp_path, order):
     assert untouched
 
 
+# --------------------------------- correction l_b14b1d00ea: a replay on the original's backend
+
+
+async def shared_parent(tmp: Path):
+    """main after two idle rounds, checkpointed after the first, its graph on ``graph``."""
+    graph = GraphMemoryStore()
+    world = parent_world(tmp, ScriptedPlan(copy.deepcopy(coupled.IDLE)))
+    memory = BranchMemory(FakeGraphMemory(namespace_for(WORLD_ID, PARENT), graph),
+                          WORLD_ID, PARENT)
+    await world.start()
+    await world.run(1)
+    memory.write_record(*PARENT_MEMORY[0])
+    cp = checkpoint(world, memory)
+    await world.run(1)
+    memory.write_record(*LATE_MEMORY)
+    return world, memory, cp, graph
+
+
+def test_a_replay_on_the_originals_memory_backend_leaves_its_graph_alone(tmp_path):
+    async def go():
+        parent, memory, cp, graph = await shared_parent(tmp_path)
+        out = []
+        for n in (1, 2):  # a second replay on the same backend is not refused either
+            (tmp_path / f"again-{n}").mkdir()
+            replayed = await replay(
+                cp, parent.transcript, workdir=tmp_path / f"again-{n}",
+                memory_client=FakeGraphMemory(namespace_for(WORLD_ID, PARENT), graph))
+            out.append((replayed.memory.namespace, replayed.memory.graph_id,
+                        recs(replayed.memory.retrieve()), replayed.label()["replay"]))
+            await replayed.world.close()
+        await parent.close()
+        return out, recs(memory.retrieve()), memory.graph_id, set(graph.graphs)
+
+    out, original, original_graph, graphs = asyncio.run(go())
+    namespace = namespace_for(WORLD_ID, PARENT)
+    assert [(ns, r, flag) for ns, _, r, flag in out] == [(namespace, PARENT_MEMORY, True)] * 2
+    replay_graphs = {g for _, g, _, _ in out}
+    assert len(replay_graphs) == 2 and original_graph not in replay_graphs
+    assert original == [*PARENT_MEMORY, LATE_MEMORY]
+    assert graphs == {original_graph, *replay_graphs}
+
+
+def test_a_failed_replay_on_the_originals_backend_removes_only_its_own_graph(tmp_path):
+    async def go():
+        parent, memory, cp, graph = await shared_parent(tmp_path)
+        (tmp_path / "again").mkdir()
+        with pytest.raises(ReplayMiss):  # one round more than the transcript recorded
+            await replay(cp, parent.transcript, workdir=tmp_path / "again", rounds=2,
+                         memory_client=FakeGraphMemory(namespace_for(WORLD_ID, PARENT), graph))
+        left = (sorted(p.name for p in (tmp_path / "again").iterdir()), set(graph.graphs))
+        replayed = await replay(
+            cp, parent.transcript, workdir=tmp_path / "again",
+            memory_client=FakeGraphMemory(namespace_for(WORLD_ID, PARENT), graph))
+        records = recs(replayed.memory.retrieve())
+        await replayed.world.close()
+        await parent.close()
+        return left, records, recs(memory.retrieve()), memory.graph_id
+
+    (files, graphs), records, original, original_graph = asyncio.run(go())
+    assert files == [] and graphs == {original_graph}
+    assert records == PARENT_MEMORY
+    assert original == [*PARENT_MEMORY, LATE_MEMORY]
+
+
 # --------------------------------------- correction: concurrent social writes replay identically
 
 POSTERS = ("borrower-b", "borrower-c")

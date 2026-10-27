@@ -35,10 +35,15 @@ __all__ = [
 RECORD_SOURCE = "ledgerworld-memory"
 
 
-def graph_id_for(namespace: str) -> str:
-    """The graph that holds a namespace's records; distinct namespaces get distinct ids."""
+def graph_id_for(namespace: str, instance: str | None = None) -> str:
+    """The graph that holds a namespace's records; distinct namespaces get distinct ids.
 
-    return "lw-mem-" + hashlib.sha256(namespace.encode()).hexdigest()[:32]
+    ``instance`` names another store for the same namespace (a replay of its branch), so the
+    namespace's own graph is never the one created, written or deleted for it.
+    """
+
+    key = namespace if instance is None else f"{namespace}#{instance}"
+    return "lw-mem-" + hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
 @dataclass(frozen=True)
@@ -87,10 +92,13 @@ class BranchMemory:
     ``client`` is a graph-memory client shaped like ``zep_cloud.Zep`` (``FakeGraphMemory`` in
     tests). A client that carries a ``namespace`` must carry this branch's. Creating a
     ``BranchMemory`` creates its graph; a second one for the same namespace on the same store
-    is refused by the client.
+    is refused by the client, unless it names its own ``instance``: the same logical namespace
+    in a graph of its own (``graph_id_for``), which is how a replay runs beside its original.
     """
 
-    def __init__(self, client: Any, world_id: str, branch_id: str) -> None:
+    def __init__(
+        self, client: Any, world_id: str, branch_id: str, *, instance: str | None = None
+    ) -> None:
         namespace = namespace_for(world_id, branch_id)
         if not NAMESPACE_RE.match(namespace):
             raise ValueError(f"world and branch ids may not hold '/' or spaces: {namespace!r}")
@@ -101,7 +109,7 @@ class BranchMemory:
         self.world_id = world_id
         self.branch_id = branch_id
         self.namespace = namespace
-        self.graph_id = graph_id_for(namespace)
+        self.graph_id = graph_id_for(namespace, instance)
         self._uuids: list[str] = []
         self._lock = threading.Lock()
         client.graph.create(graph_id=self.graph_id, name=namespace)
