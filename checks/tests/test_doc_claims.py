@@ -31,15 +31,15 @@ def test_a_retired_claim_is_absent(name: str, phrase: str) -> None:
     assert phrase not in _text(name), f"{name} still says {phrase!r}"
 
 
-def _methods() -> set[str]:
+def test_the_named_symbols_exist() -> None:
     tree = ast.parse(CLIENT.read_text(encoding="utf-8"))
-    return {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    methods = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    missing = set(SYMBOLS) - methods
+    assert not missing, f"{sorted(missing)} gone from {CLIENT.name}; fix the docs"
 
 
 @pytest.mark.parametrize("name", DOCS)
-def test_the_corrected_claim_names_symbols_that_exist(name: str) -> None:
+def test_the_corrected_claim_names_the_symbols(name: str) -> None:
     text = (ROOT / name).read_text(encoding="utf-8")
-    methods = _methods()
     for symbol in SYMBOLS:
-        assert symbol in methods, f"{symbol} is gone from {CLIENT.name}; fix the docs"
         assert f"`{symbol}`" in text, f"{name} does not name `{symbol}`"
