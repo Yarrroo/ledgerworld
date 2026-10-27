@@ -729,11 +729,11 @@ class Coordinator:
         ctx.observations = world.observe_all(conn)  # 4
         delivered_c2 = [c["intent_id"] for c in world.state.pending_c2]
         await self._hook("observed", world, ctx)
-        # 5: posts commit in agent order, however the models' answers interleave (SocialOrder)
-        world.social_order.begin(agent.social_agent_id for agent in world.agents.values())
+        # 5: posts commit in the step's agent order, however the models' answers interleave
+        actions = {agent: world.oasis.LLMAction() for agent in world.agents.values()}
+        world.social_order.begin(agent.social_agent_id for agent in actions)
         try:
-            await world.env.step({agent: world.oasis.LLMAction()
-                                  for agent in world.agents.values()})
+            await world.env.step(actions)
         finally:
             world.social_order.end()
         world.clock.settle_step(world.platform.sandbox_clock)

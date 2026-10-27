@@ -35,7 +35,7 @@ from app.simulation.memory import BranchMemory, NamespaceViolation, namespace_fo
 from app.simulation.transcripts import ReplayMiss, Transcript
 from app.testing.fake_graph_memory import FakeGraphMemory, GraphMemoryStore
 from app.testing.scripted_model import ScriptedPlan
-from oasis_finance.agent import FinanceAgent
+from oasis_finance.agent import FinanceAgent, SocialOrder
 
 FIXTURE = json.loads((coupled.FIXTURES / "branch-isolation.json").read_text())
 EXPECT = FIXTURE["expect"]
@@ -782,3 +782,17 @@ def test_a_step_that_fails_before_any_turn_holds_no_later_turn(tmp_path):
             return await asyncio.wait_for(world.agents["borrower-c"].perform_action_by_llm(), 5)
 
     assert [i.type for i in asyncio.run(go()).intents] == ["no_action"]
+
+
+def test_ending_a_step_releases_a_turn_still_waiting():
+    """A turn already waiting for an earlier agent when its step ends is let go, not left
+    waiting on an order nobody will finish."""
+    async def go():
+        order = SocialOrder()
+        order.begin([0, 1])
+        waiting = asyncio.create_task(order.wait(1))
+        await asyncio.sleep(0)
+        order.end()
+        await asyncio.wait_for(waiting, 5)
+
+    asyncio.run(go())

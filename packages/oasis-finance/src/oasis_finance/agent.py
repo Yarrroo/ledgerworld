@@ -70,7 +70,10 @@ class SocialOrder:
         self._turns = {agent_id: asyncio.Event() for agent_id in agent_ids}
 
     def end(self) -> None:
-        """The step is over, however it ended: a turn that never started holds nobody up."""
+        """The step is over, however it ended: a turn that never started holds nobody up, and
+        one still waiting is let go."""
+        for turn in self._turns.values():
+            turn.set()
         self._turns = {}
 
     async def wait(self, agent_id: int) -> None:
