@@ -796,3 +796,71 @@ def test_ending_a_step_releases_a_turn_still_waiting():
         await asyncio.wait_for(waiting, 5)
 
     asyncio.run(go())
+
+
+# ------------------------- correction: a failed fork or replay leaves a supplied store as it was
+
+
+def file_store(path: Path):
+    from app.finance.store import LedgerStore
+
+    return LedgerStore(f"sqlite:///{path}")
+
+
+@pytest.mark.parametrize("fault", ["model", "lineage"])
+def test_a_failed_fork_can_be_retried_on_the_same_store(tmp_path, monkeypatch, fault):
+    """A fork that fails while building its world (a model backend refused) or after loading
+    the checkpoint's ledger leaves the store it was given empty, and the same store takes the
+    retry."""
+    from app.simulation import branches
+
+    def refuse(actor_id, world):
+        raise RuntimeError("injected")
+
+    def lineage(*args):
+        raise RuntimeError("injected")
+
+    if fault == "lineage":
+        monkeypatch.setattr(branches, "_write_lineage", lineage)
+
+    async def go():
+        parent, cp = await small_parent(tmp_path)
+        (tmp_path / "a").mkdir()
+        store = file_store(tmp_path / "a-ledger.db")
+        with pytest.raises(RuntimeError, match="injected"):
+            await fork(cp, "a", model=refuse if fault == "model" else idle_model(),
+                       workdir=tmp_path / "a", store=store)
+        monkeypatch.undo()
+        left = {t: r for t, r in store.dump().items() if r}
+        files = sorted(p.name for p in (tmp_path / "a").iterdir())
+        a = await fork(cp, "a", model=idle_model(), workdir=tmp_path / "a", store=store)
+        restored = ledger_hash(store)
+        await a.world.close()
+        await parent.close()
+        return left, files, restored, cp.ledger_digest
+
+    left, files, restored, digest = asyncio.run(go())
+    assert left == {} and files == []
+    assert restored == digest
+
+
+def test_a_failed_replay_can_be_retried_on_the_same_store(played, tmp_path):
+    cp, calls = played["cp"], list(played["integrated"]["calls"])
+    n = next(i for i, c in enumerate(calls)
+             if (c.round, c.actor_id) == (CP_ROUND + 1, "borrower-c"))
+    bad = [*calls[:n], dataclasses.replace(calls[n], obs_hash="f" * 64), *calls[n + 1:]]
+    store = file_store(tmp_path / "ledger.db")
+
+    async def go():
+        with pytest.raises(ReplayMiss):
+            await replay(cp, Transcript(WORLD_ID, "integrated", calls=bad), workdir=tmp_path,
+                         store=store)
+        left = {t: r for t, r in store.dump().items() if r}
+        branch = await replay(cp, Transcript(WORLD_ID, "integrated", calls=calls),
+                              workdir=tmp_path, store=store)
+        await branch.world.close()
+        return left, journal_bytes(branch.world)
+
+    left, journals = asyncio.run(go())
+    assert left == {}
+    assert journals == played["integrated"]["journals"]
