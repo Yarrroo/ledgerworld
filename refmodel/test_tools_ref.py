@@ -65,6 +65,24 @@ class ObservationScope(unittest.TestCase):
         self.assertEqual(h, hashlib.sha256(text.encode()).hexdigest())
         self.assertEqual(obs["t"], "2026-01-01T16:00:00Z")
 
+    def test_item_times_are_iso_in_hash_input(self):
+        obs, _, _ = self.build(self.fx["world_items"])
+        for item in obs["items"]:
+            self.assertNotIn("visible_from_h", item)
+            self.assertRegex(item["visible_from"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    def test_duplicate_ids_do_not_make_hash_order_dependent(self):
+        a = {"id": "acct:borrower-c/operating", "kind": "account", "owner": "borrower-c", "balance_minor": 1}
+        b = dict(a, balance_minor=2)
+        self.assertEqual(self.build([a, b])[1], self.build([b, a])[1])
+
+    def test_due_scheduled_event_only_reaches_its_addressee(self):
+        unaddressed = {"id": "sched:receipt-delay@16h", "kind": "scheduled_event", "visible_from_h": 16}
+        addressed = dict(unaddressed, id="sched:call@16h", to="borrower-c")
+        other = dict(unaddressed, id="sched:treasury@16h", to="treasury")
+        _, _, evidence = self.build([unaddressed, addressed, other])
+        self.assertEqual(evidence, ["sched:call@16h"])
+
     def test_float_refused_in_canonical_json(self):
         with self.assertRaises(ValueError):
             ref.canonical_json({"amount_minor": 1.5})
@@ -107,7 +125,8 @@ class MalformedOutput(unittest.TestCase):
                 self.assertEqual(len(prompts), 1)
                 self.assertIn("refused", prompts[0])
                 self.assertIn(out["repair_prompt"], prompts)
-        out, prompts = self.run_case(self.fx["cases"][3])  # float-never-reaches-ledger
+        float_case = next(c for c in self.fx["cases"] if c["id"] == "float-never-reaches-ledger")
+        out, prompts = self.run_case(float_case)
         self.assertIn("'amount_minor' must be int, got float", prompts[0])
 
     def test_no_float_in_any_intent(self):
@@ -124,6 +143,14 @@ class MalformedOutput(unittest.TestCase):
         out = ref.guard_model_output(self.actor, call, never, 4, "h" * 64, [])
         self.assertEqual((out["repair_attempts"], out["alert"]), (0, False))
         self.assertEqual(out["intent"]["intent_id"], "i-r4-borrower-c-1")
+
+    def test_failed_repair_call_becomes_no_action(self):
+        def boom(_):
+            raise TimeoutError("model timed out")
+
+        out = ref.guard_model_output(self.actor, self.fx["cases"][0]["first"], boom, 4, "h" * 64, [])
+        self.assertEqual((out["intent"]["type"], out["alert"], out["alert_reason"]),
+                         ("no_action", True, "repair_call_failed"))
 
     def test_never_raises_on_garbage(self):
         for garbage in (None, "text", [], {"name": None}, {"name": "pay"}, {"name": "pay", "args": "x"}):
@@ -184,6 +211,30 @@ class ActorTools(unittest.TestCase):
         items = load("observation-scope")["world_items"]
         _, _, evidence = ref.build_observation(BY_ID["market-maker"], items, 4, 16)
         self.assertEqual(evidence, [])
+
+    def test_bad_currency_and_empty_target_refused(self):
+        for args in ({"amount_minor": 100, "currency": "dollars", "to": "payroll"},
+                     {"amount_minor": 100, "currency": "USD", "to": ""}):
+            with self.subTest(args=args):
+                with self.assertRaises(ref.ToolRefusal) as cm:
+                    ref.gate_tool_call(BY_ID["borrower-c"], {"name": "pay", "args": args})
+                self.assertEqual(cm.exception.reason, "malformed_tool_args")
+
+    def test_targetless_calls_refused(self):
+        for actor, call in (("lender", {"name": "accept", "args": {}}),
+                            ("lender", {"name": "release", "args": {}}),
+                            ("treasury", {"name": "defer", "args": {}})):
+            with self.subTest(call=call):
+                with self.assertRaises(ref.ToolRefusal):
+                    ref.gate_tool_call(BY_ID[actor], call)
+        self.assertEqual(ref.gate_tool_call(BY_ID["lender"], {"name": "accept", "args": {"intent_id": "i-r4-borrower-c-1"}}),
+                         {"intent_id": "i-r4-borrower-c-1"})
+
+    def test_mandated_tool_without_schema_named_as_such(self):
+        actor = dict(BY_ID["treasury"], tools=["hedge"])
+        with self.assertRaises(ref.ToolRefusal) as cm:
+            ref.gate_tool_call(actor, {"name": "hedge", "args": {}})
+        self.assertEqual(cm.exception.reason, "tool_schema_missing")
 
     def test_bool_is_not_money(self):
         with self.assertRaises(ref.ToolRefusal):

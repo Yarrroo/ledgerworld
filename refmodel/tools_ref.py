@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 # The simulated clock has no calendar date in the brief; the epoch is an explicit input.
@@ -28,8 +29,10 @@ DEFAULT_EPOCH = datetime(2026, 1, 1, tzinfo=timezone.utc)
 SCOPE_RULES = {
     "own_accounts": ({"account", "own_account"}, "owner"),
     "own_contracts": ({"contract", "own_contract"}, "owner"),
-    "messages_to_me": ({"message"}, "to"),
-    "public_posts": ({"public_post", "scheduled_event"}, None),
+    # A due scheduled event reaches an actor only when addressed to it; its public side
+    # effects arrive as posts and prices, so an unaddressed event is never observed raw.
+    "messages_to_me": ({"message", "scheduled_event"}, "to"),
+    "public_posts": ({"public_post"}, None),
     "public_prices": ({"public_price"}, None),
     "memory": ({"memory"}, "owner"),
 }
@@ -47,10 +50,19 @@ TOOL_SCHEMAS = {
     "pay": ({**MONEY_ARGS, "to": str}, {}),
     "pledge": (MONEY_ARGS, {"account": str}),
     "release": ({}, {"facility_id": str, "account": str}),
-    "defer": ({}, {"obligation_id": str, "until_h": int}),
+    "defer": ({"obligation_id": str, "until_h": int}, {}),
     "create_post": ({"content": str}, {}),
     "no_action": ({}, {}),
 }
+
+# Tools whose optional arguments must name at least one target.
+ONE_OF = {
+    "accept": ("intent_id", "facility_id"),
+    "release": ("facility_id", "account"),
+}
+
+CURRENCY_ARGS = {"currency", "to_currency"}
+ISO_CURRENCY = re.compile(r"[A-Z]{3}")
 
 
 class ToolRefusal(Exception):
@@ -80,7 +92,7 @@ def canonical_json(value) -> str:
                 check(x)
 
     check(value)
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def visible(item: dict, actor: dict, sim_time_h: int) -> bool:
@@ -96,10 +108,19 @@ def visible(item: dict, actor: dict, sim_time_h: int) -> bool:
     return False
 
 
+def observed_item(item: dict, epoch: datetime = DEFAULT_EPOCH) -> dict:
+    """The item as it enters the hash input: its hour offset becomes an ISO-8601 UTC time."""
+    out = {k: v for k, v in item.items() if k != "visible_from_h"}
+    if "visible_from_h" in item:
+        out["visible_from"] = iso_utc(item["visible_from_h"], epoch)
+    return out
+
+
 def build_observation(actor: dict, world_items: list, round_: int, sim_time_h: int,
                       epoch: datetime = DEFAULT_EPOCH):
     """-> (observation, obs_hash, evidence_ids). Items are ordered by id, so input order is irrelevant."""
-    items = sorted((i for i in world_items if visible(i, actor, sim_time_h)), key=lambda i: i["id"])
+    items = sorted((observed_item(i, epoch) for i in world_items if visible(i, actor, sim_time_h)),
+                   key=lambda i: (i["id"], canonical_json(i)))
     observation = {
         "actor_id": actor["actor_id"],
         "round": round_,
@@ -129,6 +150,13 @@ def check_args(name: str, args) -> dict:
             errors.append(f"'{arg}' must be {typ.__name__}, got {type(value).__name__} {value!r}")
         elif arg == "amount_minor" and value <= 0:
             errors.append(f"'amount_minor' must be positive, got {value}")
+        elif arg in CURRENCY_ARGS and not ISO_CURRENCY.fullmatch(value):
+            errors.append(f"'{arg}' must be an ISO 4217 code like 'USD', got {value!r}")
+        elif typ is str and not value.strip():
+            errors.append(f"'{arg}' must not be empty")
+    targets = ONE_OF.get(name, ())
+    if targets and not any(t in args for t in targets):
+        errors.append("needs one of " + ", ".join(f"'{t}'" for t in targets))
     if errors:
         raise ToolRefusal("malformed_tool_args", f"{name}: " + "; ".join(errors))
     return args
@@ -137,9 +165,11 @@ def check_args(name: str, args) -> dict:
 def gate_tool_call(actor: dict, call: dict) -> dict:
     """Refuse a tool outside the actor's mandate, then check its arguments. -> args."""
     name = call.get("name") if isinstance(call, dict) else None
-    if name not in actor.get("tools", []) or name not in TOOL_SCHEMAS:
+    if name not in actor.get("tools", []):
         raise ToolRefusal("tool_not_in_mandate",
                           f"'{name}' is not one of {actor['actor_id']}'s tools {actor.get('tools', [])}")
+    if name not in TOOL_SCHEMAS:
+        raise ToolRefusal("tool_schema_missing", f"'{name}' is in the mandate but has no argument schema")
     return check_args(name, call.get("args"))
 
 
@@ -188,9 +218,14 @@ def guard_model_output(actor: dict, first: dict, ask_repair, round_: int, obs_ha
     except ToolRefusal as refusal:
         prompt = repair_prompt(refusal, actor)
     try:
-        return accept(ask_repair(prompt), 1, prompt)
-    except ToolRefusal as refusal:
-        final = refusal
+        repaired = ask_repair(prompt)
+    except Exception:  # a failed repair call (timeout, exhausted plan) is still a malformed answer
+        reason = "repair_call_failed"
+    else:
+        try:
+            return accept(repaired, 1, prompt)
+        except ToolRefusal as refusal:
+            reason = refusal.reason
     intent = make_intent(actor["actor_id"], round_, n, "no_action", {}, obs_hash, evidence_ids, branch_id)
     return {"intent": intent, "repair_attempts": 1, "alert": True,
-            "alert_reason": final.reason, "repair_prompt": prompt}
+            "alert_reason": reason, "repair_prompt": prompt}
