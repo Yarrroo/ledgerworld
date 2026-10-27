@@ -34,7 +34,10 @@
   Harmless today, because Vue stops the view's watchers on unmount and nothing is rescheduled.
   A shared `onUnmounted`-aware signal would serve every screen; it is out of this item's scope.
 - `request()` reports an aborted fetch as `unreachable`. Only the disposed path aborts today.
-- An approval the server grants after the screen is gone is not kept: returning offers a fresh
-  review, and a second confirm creates a second approval for the run. This predates the fix (the
-  late answer only ever reached the dead view); keeping a granted approval in tab memory is a
-  change to the quarantine's design.
+- A settled answer that arrives after the screen is gone is not kept, only an unknown one is.
+  A granted approval is lost, so returning offers a fresh review, and a second confirm creates a
+  second approval for the run. An execution refusal (`approval_used`, `snapshot_moved`) leaves
+  no notice on return. Both predate the fix, because the late answer only ever reached the dead
+  view. Keeping settled outcomes in tab memory is a change to the quarantine's design.
+- The polled status read has no timeout (it had none before either). One GET that never
+  answers stops the polling while the screen stays open.
