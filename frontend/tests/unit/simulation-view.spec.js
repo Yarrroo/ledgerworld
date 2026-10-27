@@ -29,7 +29,8 @@ const GraphStub = defineComponent({
   setup (props, { emit }) {
     watch(() => props.graphData, (g) => graphs.push(g), { immediate: true })
     return () => h('div', { 'data-test': 'graph-panel', 'data-nodes': props.graphData?.nodes.length ?? 0 }, [
-      h('button', { type: 'button', 'data-test': 'expand', onClick: () => emit('toggle-maximize') }, 'Expand')
+      h('button', { type: 'button', 'data-test': 'expand', onClick: () => emit('toggle-maximize') }, 'Expand'),
+      h('button', { type: 'button', 'data-test': 'graph-refresh', onClick: () => emit('refresh') }, 'Refresh')
     ])
   }
 })
@@ -400,5 +401,23 @@ describe('review findings, each pinned', () => {
     expect(text(w, 'cash-value')).toBe('USD 42,000.00')
     await scrubTo(w, 2)
     expect(text(w, 'cursor')).toBe('Round 2 of 5 · simulated time not loaded')
+  })
+
+  it('a reload asked for while a poll is in flight shows as loading, not as a quiet poll', async () => {
+    vi.useFakeTimers()
+    const body = run()
+    body.status = 'running'
+    const [poll, reload] = [held(), held()]
+    let gets = 0
+    const { wrapper: w } = await open(() => [body, poll.promise, reload.promise][Math.min(gets++, 2)])
+    await vi.advanceTimersByTimeAsync(4000) // the poll is in flight
+    expect(disabled(w, 'refresh')).toBe(false)
+    await w.get('[data-test="graph-refresh"]').trigger('click') // the operator reloads
+    await flushPromises()
+    expect(disabled(w, 'refresh')).toBe(true)
+    poll.resolve(body)
+    reload.resolve(body)
+    await flushPromises()
+    expect(disabled(w, 'refresh')).toBe(false)
   })
 })

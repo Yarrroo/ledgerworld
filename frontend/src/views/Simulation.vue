@@ -1,5 +1,5 @@
 <template>
-  <ScreenShell title="Live simulation" :reading="shellReading" :refresh="refresh">
+  <ScreenShell title="Live simulation" :reading="shellReading" :refresh="reload">
     <div class="lw-live" :class="{ 'is-graph-expanded': graphExpanded }">
       <section class="lw-live-panel lw-live__controls" aria-label="Round and controls" data-test="controls">
         <p class="lw-live__phase" :class="`is-${phase.tone}`" role="status" data-test="phase">
@@ -58,7 +58,7 @@
       <section class="lw-live-panel lw-live__graph" aria-label="Graph and actor inspector" data-test="graph">
         <div class="lw-live__graph-view">
           <GraphPanel :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
-                      @refresh="refresh" @toggle-maximize="graphExpanded = !graphExpanded" />
+                      @refresh="reload" @toggle-maximize="graphExpanded = !graphExpanded" />
         </div>
         <div class="lw-live__inspector" data-test="inspector">
           <h2>Actors up to round {{ display ?? '–' }}</h2>
@@ -287,6 +287,12 @@ function scrub (round) {
 
 // ------------------------------------------------------------- polling a running job
 
+/** A reload someone asked for (or a run or fork changed): shown as loading, never as a poll. */
+function reload () {
+  polling.value = false
+  return refresh()
+}
+
 let poller = null
 async function poll () {
   if (state.status === 'loading') return
@@ -325,7 +331,7 @@ watch(runId, () => {
   forkError.value = interviewError.value = ''
   pause()
   paused.value = false
-  refresh()
+  reload()
 })
 
 const forkWhy = computed(() => {
@@ -351,7 +357,7 @@ async function fork () {
     })
     if (run !== runId.value) return // answered for a run no longer on screen
     forked.value = { round, branch_ids: accepted?.branch_ids ?? [] }
-    refresh() // the new branches and their cash paths
+    reload() // the new branches and their cash paths
   } catch (error) {
     if (run === runId.value) forkError.value = `Fork not accepted: ${error.message}`
   } finally {
