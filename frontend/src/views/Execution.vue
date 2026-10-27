@@ -241,6 +241,10 @@ const opener = shallowRef(null)
 const heading = shallowRef(null)
 const now = shallowRef(Date.now())
 let clock = null
+// The screen is gone: a late answer applies nothing and starts no timer. A POST is never
+// aborted (its effect stands either way); a status read is, since nothing will show it.
+let disposed = false
+const reads = new AbortController()
 
 /** Why nothing can be approved from this screen right now, or '' when it can. */
 const authority = computed(() => {
@@ -324,6 +328,7 @@ async function confirmApproval () {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { run_id: state.body.run_id, policy: policy.value }
     })
+    if (disposed) return
     flow.approval = answer.approval
     flow.serverAt = Date.parse(answer.as_of)
     flow.receivedAt = Date.now()
@@ -390,6 +395,7 @@ const moving = (body) => !body.legs.length ||
  */
 function schedule () {
   clearTimeout(timer)
+  if (disposed) return
   const body = execution.value
   const keep = followed ? (!body || moving(body)) : Boolean(body && moving(body))
   timer = keep ? setTimeout(poll, POLL_MS) : null
@@ -398,16 +404,16 @@ function schedule () {
 /** Read an execution's state by id; out-of-order or other-execution answers are dropped. */
 async function poll () {
   const id = activeId.value
-  if (!id) return
+  if (!id || disposed) return
   const ticket = guard.issue()
   try {
-    const body = await request(`/executions/${enc(id)}`)
-    if (!guard.accept(ticket, id)) return
+    const body = await request(`/executions/${enc(id)}`, { signal: reads.signal })
+    if (disposed || !guard.accept(ticket, id)) return
     live.value = body
     notFound.value = false
     pollError.value = ''
   } catch (error) {
-    if (!guard.accept(ticket, id)) return
+    if (disposed || !guard.accept(ticket, id)) return
     if (error.status === 404) notFound.value = true
     else pollError.value = error.message
   }
@@ -415,6 +421,7 @@ async function poll () {
 }
 
 function follow (id) {
+  if (disposed) return
   followed = true
   followedId.value = id
   activeId.value = id
@@ -457,6 +464,8 @@ watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
 })
 
 onUnmounted(() => {
+  disposed = true
+  reads.abort()
   clearTimeout(timer)
   clearInterval(clock)
 })

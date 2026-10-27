@@ -685,3 +685,85 @@ describe('vet round 2, re-read', () => {
     await flushPromises()
   })
 })
+
+describe('unmount with a request pending', () => {
+  const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+  const gets = (calls, path) => calls.filter((x) => x.method === 'GET' && x.path === path)
+  const held = () => { let release; const promise = new Promise((resolve) => { release = resolve }); return { promise, release } }
+
+  /** Leave the screen: the token is forgotten first, as afterEach would, then the view goes. */
+  async function leave (w) {
+    await w.get('[data-test="forget-token"]').trigger('click')
+    mounted.splice(mounted.indexOf(w), 1)
+    w.unmount()
+  }
+
+  it('a status read answered after the screen is gone schedules no further read', async () => {
+    fakeTimers()
+    let answer = executionBody({ legs: [sentPayout()] })
+    const calls = serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': () => answer
+    })
+    const w = await open(Execution, '/execution')
+    const pending = held()
+    answer = pending.promise
+    vi.advanceTimersByTime(5000)
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
+    mounted.splice(mounted.indexOf(w), 1)
+    w.unmount()
+    pending.release(executionBody({ legs: [sentPayout()] }))
+    await flushPromises()
+    vi.advanceTimersByTime(30000)
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('an execution POST answered after the screen is gone starts no status reads', async () => {
+    fakeTimers()
+    const pending = held()
+    const { w, calls } = await reviewReady({
+      'POST /executions': () => pending.promise,
+      'GET /executions/apr-1': executionBody({ legs: [sentPayout()] })
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await leave(w)
+    pending.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    await flushPromises()
+    vi.advanceTimersByTime(30000)
+    await flushPromises()
+    expect(posts(calls, '/executions')).toHaveLength(1)
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('an unanswered execution POST failing after the screen is gone starts no status reads', async () => {
+    fakeTimers()
+    const pending = held()
+    const { w, calls } = await reviewReady({ 'POST /executions': () => pending.promise })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await leave(w)
+    pending.release(refuse(503, 'unavailable'))
+    await flushPromises()
+    vi.advanceTimersByTime(30000)
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('an approval POST answered after the screen is gone starts no expiry clock', async () => {
+    fakeTimers()
+    const pending = held()
+    const { w } = await reviewReady({ 'POST /approvals': () => pending.promise })
+    await w.get('[data-test="confirm"]').trigger('click')
+    await leave(w)
+    pending.release(approvalBody())
+    await flushPromises()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
