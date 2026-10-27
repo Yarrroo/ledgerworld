@@ -56,7 +56,6 @@ describe('the source link contrast', () => {
   })
 
   it('the footer link is a plain link inside the reading screen', async () => {
-    vi.resetModules()
     vi.stubEnv('VITE_SOURCE_URL', SOURCE)
     const { ScreenShell } = await import('../../src/api/v1.js')
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: { render: () => null } }] })
