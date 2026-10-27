@@ -41,9 +41,9 @@
         <template v-else>Execution {{ activeId }} is unavailable: the server has no record of it.</template>
       </p>
       <p v-if="pollError" class="lw-note" data-test="poll-error">
-        {{ STATES.error.icon }} {{ STATES.error.word }}: {{ pollError }}
+        {{ STATES.error.icon }} {{ execution ? STATES.error.word : 'Could not read' }}: {{ pollError.replace(/\.$/, '') }}.<template v-if="rereading"> Reading again.</template>
       </p>
-      <p v-if="!execution && !notFound" class="lw-time" data-test="no-execution">
+      <p v-if="!execution && !notFound && !pollError" class="lw-time" data-test="no-execution">
         Unavailable: no execution to show for this run.
       </p>
       <template v-if="execution">
@@ -199,10 +199,46 @@ const REFUSALS = {
 const route = useRoute()
 const enc = encodeURIComponent
 
+/** A 2xx whose body is missing or incomplete: answered, but what it says cannot be read. */
+const unreadable = () => new ApiError(null, 'unreadable', 'the answer could not be read')
+const isText = (x) => typeof x === 'string' && x !== ''
+const isTextOrNull = (x) => x == null || isText(x)
+// C6 times in the one form the server emits and every browser parses alike; Date.parse alone also
+// takes "1" or "Nov 5", and only some engines take a space separator
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
+const isTime = (iso) => ISO.test(iso) && !Number.isNaN(Date.parse(iso))
+
+/** A C6 execution leg and incident as the receipts and the incident view draw them. */
+const isExecutionLeg = (l) => isText(l?.leg_id) && isText(l.kind) && Object.hasOwn(WORD, l.state) &&
+  typeof l.reconciled === 'boolean' &&
+  (l.receipt == null || (isText(l.receipt.status) && Array.isArray(l.receipt.raw_keys)))
+const isIncident = (i) => isText(i?.leg_id) && isText(i.kind) && isText(i.state) && isTime(i.opened_at)
+
+/** GET /executions/:id; an answer about another execution, or an incomplete one, is unreadable. */
+async function readExecution (id, signal) {
+  const body = await request(`/executions/${enc(id)}`, { signal })
+  const readable = body?.execution_id === id && isTime(body.as_of) && isText(body.mode) &&
+    isText(body.approval_id) && isText(body.snapshot_id) &&
+    Array.isArray(body.legs) && body.legs.every(isExecutionLeg) &&
+    Array.isArray(body.incidents) && body.incidents.every(isIncident)
+  if (!readable) throw unreadable()
+  return body
+}
+
+/** GET /decisions/:run; one without its status, results' costs or selected policy is unreadable. */
+async function readDecisions (runId) {
+  const body = await request(`/decisions/${enc(runId)}`)
+  const readable = isText(body?.status) && Array.isArray(body.results) &&
+    body.results.every((r) => Number.isSafeInteger(r?.funding_cost?.minor) && isText(r.funding_cost.currency)) &&
+    (body.status !== 'selected' || isText(body.selected))
+  if (!readable) throw unreadable()
+  return body
+}
+
 /** A read that may name nothing yet: 404 is "not there", every other failure is an error. */
-async function optional (path) {
+async function optional (reading) {
   try {
-    return await request(path)
+    return await reading
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) return null
     throw error
@@ -220,16 +256,18 @@ const { state, refresh } = useReading(async () => {
   const demo = !asked || asked === overview.demo.run_id
   const executionId = route.query.execution_id || (demo ? overview.demo.execution_id : null) || null
   let decisionsError = ''
+  let executionError = null
   const { generation } = guard.issue()
   const [decisions, execution] = await Promise.all([
     // the receipts still read when this fails; only the review needs the decision
-    runId ? optional(`/decisions/${enc(runId)}`).catch((error) => { decisionsError = error.message; return null }) : null,
-    executionId ? optional(`/executions/${enc(executionId)}`) : null
+    runId ? optional(readDecisions(runId)).catch((error) => { decisionsError = error.message; return null }) : null,
+    // and the review still opens when the receipts cannot be read
+    executionId ? optional(readExecution(executionId)).catch((error) => { executionError = error; return null }) : null
   ])
   const head = execution ?? overview
   return {
     as_of: head.as_of, mode: head.mode, snapshot_id: head.snapshot_id, run_id: runId,
-    execution_id: executionId, decisions, decisionsError, execution, generation
+    execution_id: executionId, decisions, decisionsError, execution, executionError, generation
   }
 })
 
@@ -306,14 +344,32 @@ const executeWhy = computed(() => {
   if ((decisions.value?.results ?? []).some((r) => r.branch_id === a.snapshot_id)) {
     return 'Bound to a hypothetical branch, not the observed state; review again'
   }
-  if (!a.legs.length) return 'No legs were bound'
   if (serverNow.value >= Date.parse(a.expires_at)) return 'Approval expired'
   if (flow.submitting) return 'Sending'
   return ''
 })
 
-/** No answer, or a server/proxy failure: the POST may or may not have taken effect. */
-const unanswered = (error) => error.status === 0 || error.status >= 500
+/**
+ * No answer, a server/proxy failure, or a 2xx this screen cannot read: the POST may or may not
+ * have taken effect. Only a 4xx is a definite refusal.
+ */
+const unanswered = (error) => !(error?.status >= 400 && error.status < 500)
+
+/** A C3 leg as the bound-terms table shows it. */
+const isLeg = (l) => Number.isSafeInteger(l?.index) && isText(l.kind) && isText(l.source) &&
+  isText(l.counterparty) && Number.isSafeInteger(l.amount?.minor) && isText(l.amount.currency) &&
+  isTextOrNull(l.funded_by) && isTextOrNull(l.facility_id) &&
+  (l.after == null || (Array.isArray(l.after) && l.after.every(Number.isSafeInteger))) // leg indices
+
+/** The approval a 201 bound, with every term the review shows; anything less is unreadable. */
+function boundApproval (answer) {
+  const a = answer?.approval
+  const readable = isTime(answer?.as_of) && isText(a?.approval_id) && isText(a.plan_hash) &&
+    isText(a.entity) && isText(a.account) && isText(a.snapshot_id) && isText(a.mode) &&
+    isTime(a.expires_at) && Array.isArray(a.legs) && a.legs.length > 0 && a.legs.every(isLeg)
+  if (!readable) throw unreadable()
+  return a
+}
 
 function refusal (error) {
   return REFUSALS[error.code] || `Refused: ${error.message}`
@@ -356,8 +412,9 @@ async function confirmApproval () {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { run_id: state.body.run_id, policy: policy.value }
     })
+    const approval = boundApproval(answer) // unreadable is unknown, and held, even once left
     if (disposed) return
-    flow.approval = answer.approval
+    flow.approval = approval
     flow.serverAt = Date.parse(answer.as_of)
     flow.receivedAt = Date.now()
     now.value = flow.receivedAt
@@ -385,11 +442,13 @@ async function executePlan () {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { approval_id: id }
     })
-    hold(runId, { followedId: answer.execution_id })
+    // the server names an execution by its approval id; any other answer is unreadable
+    if (answer?.execution_id !== id) throw unreadable()
+    hold(runId, { followedId: id })
     if (disposed) return
     if (here(runId)) {
-      flow.message = `Execution ${answer.execution_id} accepted; reading its provider state.`
-      follow(answer.execution_id)
+      flow.message = `Execution ${id} accepted; reading its provider state.`
+      follow(id)
     }
   } catch (error) {
     if (!unanswered(error)) {
@@ -417,6 +476,8 @@ const activeId = shallowRef(null)
 const execution = shallowRef(null)
 const notFound = shallowRef(false)
 const pollError = shallowRef('')
+const retrying = shallowRef(false) // a failed read worth reading again: no answer, or retry-later
+const rereading = shallowRef(false) // a read is scheduled: what "Reading again" says
 let failedAt = 0 // generation of the newest failed read: only a later answer clears its error
 let timer = null
 const followedId = shallowRef(null)
@@ -428,16 +489,25 @@ const moving = (body) => !body.legs.length ||
   body.legs.some((l) => UNSETTLED.has(l.state) || (!l.reconciled && l.state !== 'failed'))
 
 /**
- * Read again in 5 s while the outcome is open. An execution this tab sent is read until a read
- * shows it finished, whatever the last read returned; one named by the context is read only
- * while a loaded answer shows it moving, so an id the server does not have is not polled.
+ * Read again in 5 s while the outcome is open or the last read failed. An execution this tab sent
+ * is read until a read shows it finished, whatever the last read returned; one named by the
+ * context is read only while a loaded answer shows it moving, so an id the server does not have
+ * (404) is not polled.
  */
 function schedule () {
   clearTimeout(timer)
   if (disposed) return
   const body = execution.value
-  const keep = followed ? (!body || moving(body)) : Boolean(body && moving(body))
+  const keep = Boolean(pollError.value && retrying.value) || (followed ? (!body || moving(body)) : Boolean(body && moving(body)))
   timer = keep ? setTimeout(poll, POLL_MS) : null
+  rereading.value = keep
+}
+
+/** A failed read: said, kept as the newest failure, and read again unless refused outright. */
+function failed (error, generation) {
+  pollError.value = error.message
+  retrying.value = unanswered(error) || [408, 429].includes(error.status)
+  failedAt = Math.max(failedAt, generation)
 }
 
 /** An answer to a read issued after the newest failure clears its error; an older one does not. */
@@ -451,7 +521,7 @@ async function poll () {
   if (!id || disposed) return
   const ticket = guard.issue()
   try {
-    const body = await request(`/executions/${enc(id)}`, { signal: reads.signal })
+    const body = await readExecution(id, reads.signal)
     if (disposed || !guard.accept(ticket, id)) return
     execution.value = body
     notFound.value = false
@@ -466,8 +536,7 @@ async function poll () {
     } else {
       // a failed read is no answer: it never discards a reading issued before it
       if (!guard.current(ticket, id)) return
-      pollError.value = error.message
-      failedAt = ticket.generation
+      failed(error, ticket.generation)
     }
   }
   schedule()
@@ -486,6 +555,7 @@ function follow (id) {
   guard.select(id)
   execution.value = null
   notFound.value = false
+  pollError.value = '' // another execution's failure is not this one's
   poll()
 }
 
@@ -509,11 +579,20 @@ watch(() => state.body, (body) => {
     poll() // Refresh re-reads the execution this tab sent
     return
   }
+  if (activeId.value !== body.execution_id) { // another execution: nothing read for the last stands
+    execution.value = null
+    notFound.value = false
+    pollError.value = ''
+  }
   activeId.value = body.execution_id
   guard.select(body.execution_id)
   // this read replaces any poll answered before it and invalidates every poll issued before it;
-  // a poll issued after it and already answered is newer, and stays
-  if (guard.accept({ generation: body.generation, context: body.execution_id })) {
+  // a poll issued after it and already answered is newer, and stays. A failed read is no answer:
+  // it shows its error and discards nothing read before it.
+  const ticket = { generation: body.generation, context: body.execution_id }
+  if (body.executionError) {
+    if (guard.current(ticket)) failed(body.executionError, body.generation)
+  } else if (guard.accept(ticket)) {
     execution.value = body.execution
     notFound.value = Boolean(body.execution_id && !body.execution)
     answered(body.generation)
@@ -534,6 +613,8 @@ watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
     followedId.value = null
     activeId.value = null
     execution.value = null
+    notFound.value = false
+    pollError.value = ''
     clearTimeout(timer)
   }
   refresh()

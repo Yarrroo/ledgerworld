@@ -29,9 +29,12 @@
   never an attribute, a URL, storage or a log.
 - A financial POST is sent once per explicit click: a `submitting` flag set before the `await`
   disables the button; an approval is executed at most once from this tab, whatever the outcome.
-- A timed-out execution POST is resolved by `GET /executions/{approval_id}`; 404 there is "not yet
-  recorded", never "failed". A timed-out approval POST has no id, so the review blocks with
-  "operator resolution required"; no lookup endpoint is invented.
+- Only a 4xx is a refusal. A timed-out, 5xx or unreadable answer to a financial POST (a 2xx whose
+  body does not parse or lacks a term the screen shows) is an unknown outcome. An unknown execution
+  POST is resolved by `GET /executions/{approval_id}`; 404 there is "not yet recorded", never
+  "failed", and an unreadable read is an error that is read again, never a state. An unknown
+  approval POST has no id we can trust, so the review blocks with "operator resolution required";
+  no lookup endpoint is invented.
 - Expiry is read on the server's clock: `as_of` of the approval response plus elapsed tab time.
 
 ## Decisions
