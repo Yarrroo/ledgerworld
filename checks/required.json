@@ -188,6 +188,7 @@
       "tests/simulation/test_scenarios.py::test_the_world_ledger_is_lf1_and_lf2",
       "tests/simulation/test_scenarios.py::test_the_six_families_are_the_fixtures",
       "tests/simulation/test_scenarios.py::test_a_family_is_parameterised_and_refuses_what_it_cannot_run",
+      "tests/simulation/test_scenarios.py::test_an_override_the_family_cannot_run_is_refused_before_a_round",
       "tests/simulation/test_scenarios.py::test_a_silent_borrower_never_acts_in_its_family",
       "tests/simulation/test_scenarios.py::test_each_family_runs_three_rounds_and_clears_a_financial_action[delayed-receipt]",
       "tests/simulation/test_scenarios.py::test_each_family_runs_three_rounds_and_clears_a_financial_action[confidence-rumour]",

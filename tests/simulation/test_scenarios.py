@@ -169,12 +169,42 @@ def test_a_family_is_parameterised_and_refuses_what_it_cannot_run():
         load_family("fx-gap", seed="106")
 
 
+def test_an_override_the_family_cannot_run_is_refused_before_a_round(tmp_path):
+    world = load_world()
+    late = load_family("delayed-receipt", params={"at_round": 11})  # receivable-1 landed at 3
+    with pytest.raises(ValueError, match="delays no pending flow"):
+        late.snapshot(world.snapshot)
+    with pytest.raises(ValueError, match="delays no pending flow"):
+        load_family("delayed-receipt", params={"flow_id": "receivable-9"}).snapshot(
+            world.snapshot)
+    with pytest.raises(ValueError, match="due after round"):
+        load_family("redemption-spike", params={"due_h": 8})
+    with pytest.raises(ValueError, match="EUR"):
+        load_family("fx-gap", params={"currency": "GBP"})
+    with pytest.raises(ValueError, match="stops"):
+        load_family("borrower-silence", params={"stops": []})
+    quiet = load_family("borrower-silence", params={"stops": ["repay"]})
+    assert quiet.events[0]["text"] == "borrower-b's scheduled repayment did not arrive."
+    # Its script was written for the file's parameters; another run brings its own model.
+    moved = load_family("borrower-silence", params={"from_round": 5})
+    assert (moved.scripted, load_family("borrower-silence").scripted) == (False, True)
+    with pytest.raises(ValueError, match="fits the file's parameters"):
+        build_world(moved, workdir=tmp_path)
+
+
 def test_a_silent_borrower_never_acts_in_its_family(tmp_path):
     family = load_family("borrower-silence")
     assert not [e for e in family.script if e.get("actor_id") == "borrower-b"]
     with pytest.raises(ValueError, match="acts after it fell silent"):
         load_family("borrower-silence", params={"borrower": "borrower-c"},
                     directory=_with_script(family, "borrower-c", tmp_path))
+    talks = {"actor_id": "borrower-b", "round": 7, "content": "we will pay soon"}
+    directory = _with_script(family, "borrower-c", tmp_path)
+    raw = json.loads((directory / "borrower-silence.json").read_text())
+    raw["script"] = [*family.script, talks]
+    (directory / "borrower-silence.json").write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="acts after it fell silent"):
+        load_family("borrower-silence", directory=directory)
 
 
 def _with_script(family, talker: str, directory: Path) -> Path:

@@ -16,8 +16,11 @@ parameters into what a world is hit with:
   LF-1 and LF-2 exactly.
 
 A family file also carries ``script``, the ``ScriptedModel`` plan its demo and tests run on, and
-``cleared``, the (actor, type) pairs that plan clears in the family's rounds. ``build_world``
-puts the three together into a ``World`` on the family's seed.
+``cleared``, the (actor, type) pairs that plan clears in the family's rounds; both fit the file's
+own parameters, so a family loaded with others is not ``scripted`` and its run brings its own
+model. An override the world could not run (a delay after its flow landed, a grown obligation
+due before it is added) is refused at load, never mid-round. ``build_world`` puts the three
+together into a ``World`` on the family's seed.
 
 Where the round world cannot do what the design names, the family says so rather than
 pretending: ``convert`` and ``defer`` are refused by the coordinator (no FX quote, no deferrable
@@ -94,6 +97,7 @@ class Family:
     script: list[dict]
     cleared: list[tuple[str, str]]
     refused: dict[str, str] = field(default_factory=dict)
+    scripted: bool = True  # the script fits these params: they are the file's own
 
     @property
     def last_round(self) -> int:
@@ -116,9 +120,21 @@ class Family:
         for flow in self.overlay.get("pending_in", []):
             flow = at(flow)
             by_id[flow.pop("account")]["buckets"]["pending_in"].append(flow)
-        return Snapshot.model_validate(snap)
+        result = Snapshot.model_validate(snap)
+        due = {f.flow_id: (f.expected_at - result.as_of) // timedelta(hours=1)
+               for a in result.accounts for f in a.buckets.pending_in}
+        for event in self.events:  # a delay lands before its flow does, or a round fails
+            if event["kind"] == "delay_receipt" and (
+                    event["flow_id"] not in due
+                    or event["round"] > _due_round(due[event["flow_id"]])):
+                raise ValueError(f"family {self.id}: {event['id']} in round {event['round']} "
+                                 f"delays no pending flow {event['flow_id']!r} still due then")
+        return result
 
     def plan(self) -> ScriptedPlan:
+        if not self.scripted:
+            raise ValueError(f"family {self.id}: its script fits the file's parameters only; "
+                             "a run with other parameters brings its own model")
         return ScriptedPlan([*copy.deepcopy(self.script), IDLE], source=f"family:{self.id}")
 
     def deliver_market(self, world: World, ctx: RoundContext) -> None:
@@ -197,12 +213,16 @@ def _stablecoin_depeg(p: Mapping[str, Any]) -> tuple[list, list, dict]:
 
 
 def _borrower_silence(p: Mapping[str, Any]) -> tuple[list, list, dict]:
-    borrower, r = p["borrower"], _int(p, "from_round", 1)
-    if not set(p["stops"]) <= {"repay", "messages"}:
-        raise ValueError(f"a silent borrower stops repay and messages, not {p['stops']!r}")
+    borrower, r, stops = p["borrower"], _int(p, "from_round", 1), p["stops"]
+    if not isinstance(stops, list) or not stops or not set(stops) <= {"repay", "messages"}:
+        raise ValueError(f"a silent borrower stops repay, messages or both, not {stops!r}")
+    said = []
+    if "repay" in stops:
+        said.append(f"{borrower}'s scheduled repayment did not arrive")
+    if "messages" in stops:
+        said.append(f"{borrower} does not answer calls or messages")
     note = {"round": r, "kind": "message", "id": f"silence-{borrower}-r{r}", "to": "lender",
-            "text": f"{borrower}'s scheduled repayment did not arrive and {borrower} does not "
-                    "answer calls or messages."}
+            "text": " and ".join(said) + "."}
     return [note], [], {}
 
 
@@ -211,6 +231,8 @@ def _redemption_spike(p: Mapping[str, Any]) -> tuple[list, list, dict]:
     if after <= before:
         raise ValueError("a redemption spike grows the obligation")
     r, due_h = _int(p, "at_round", 1), _int(p, "due_h", 1)
+    if due_h <= r * ROUND_HOURS:
+        raise ValueError(f"the grown redemption is due after round {r} adds it, not at {due_h} h")
     standing = {"obligation_id": "redemption-1", "entity": "lender", "account": "lender/operating",
                 "amount": {"minor": before, "currency": "USD"}, "due_h": due_h,
                 "kind": "redemption"}
@@ -225,6 +247,8 @@ def _redemption_spike(p: Mapping[str, Any]) -> tuple[list, list, dict]:
 
 def _fx_gap(p: Mapping[str, Any]) -> tuple[list, list, dict]:
     currency = p["currency"]
+    if currency != "EUR":
+        raise ValueError(f"the FX gap's path is EUR/USD; its invoice is in EUR, not {currency!r}")
     account = f"treasury/{currency.lower()}"
     zero = {"minor": 0, "currency": currency}
     holding = {"id": account, "entity": "treasury", "currency": currency,
@@ -268,14 +292,22 @@ def load_family(family_id: str, seed: int | None = None,
     events, market, overlay = BUILDERS[family_id](merged)
     script = raw["script"]
     if family_id == "borrower-silence":
-        quiet = merged["from_round"]
         talking = [e for e in script if e.get("actor_id") == merged["borrower"]
-                   and e["round"] >= quiet
-                   and any(c["name"] != "no_action" for c in e["tool_calls"])]
+                   and e["round"] >= merged["from_round"] and _breaks_silence(e, merged["stops"])]
         if talking:
             raise ValueError(f"{merged['borrower']} acts after it fell silent: {talking}")
     return Family(family_id, seed, raw["starts_round"], raw["rounds"], merged, events, market,
-                  overlay, script, [tuple(c) for c in raw["cleared"]], raw.get("refused", {}))
+                  overlay, script, [tuple(c) for c in raw["cleared"]], raw.get("refused", {}),
+                  scripted=merged == raw["params"])
+
+
+def _breaks_silence(entry: Mapping[str, Any], stops: list[str]) -> bool:
+    """A silent borrower that stopped messages takes nothing but ``no_action`` and says nothing;
+    one that stopped repaying only never repays."""
+    calls = [c["name"] for c in entry.get("tool_calls") or []]
+    if "messages" in stops:
+        return "content" in entry or any(name != "no_action" for name in calls)
+    return "repay" in calls
 
 
 def build_world(family: Family, *, model: ModelFactory | None = None, workdir: str | Path,
