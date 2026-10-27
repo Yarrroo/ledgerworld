@@ -289,6 +289,10 @@ def replay_world(selected: Any, b: Baseline, events: Sequence[Mapping[str, Any]]
     events = resolve(b, [*b.shock, *events])
     obs0 = snapshot_observation(b.snapshot, epoch=b.epoch, account=_account(b).id,
                                 terms=b.terms, horizon_h=b.horizon_h)
+    if obs0["holdings"] or any(o["currency"] != obs0["currency"] or "account" in o
+                               for o in obs0["obligations"]):
+        raise ValueError("not_replayable: the rules-replay world holds one account in one "
+                         "currency, and this treasury owes on another")
     t0 = obs0["t_h"]
     start, end = t0 // HOURS_PER_ROUND, b.horizon_h // HOURS_PER_ROUND
     if b.horizon_h % HOURS_PER_ROUND:

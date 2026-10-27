@@ -12,6 +12,11 @@ the branch, read before its own payment when the branch paid it there. One paid 
 checkpoint is history and left out. Funding cost is the expense the entity booked in the branch
 (an advance's fee is recognised at disbursal). Every number is an integer in minor units.
 
+The obligations are the entity's on every cash account it holds, not the assessed account's
+alone: one on another account (a EUR invoice on a EUR account) is met or short against that
+account's own settled cash, reservations and pledges, and carries its account and currency.
+The floor is the assessed account's.
+
 Cash is usable only at the end of a round whose balance was known: an unknown balance adds
 nothing (HANDOFF), so the floor and an unmet obligation's shortfall count only what it owes
 (``min(settled, 0)``) whatever the ledger holds. The store keeps only the current
@@ -44,6 +49,10 @@ class ObligationResult:
     # Outstanding past its deadline at the checkpoint: the first assessed round end, whose free
     # cash its shortfall counts.
     overdue_h: int | None = None
+    # Held on another of the entity's accounts: that account, and its currency when it is not
+    # the assessed account's.
+    account: str | None = None
+    currency: str | None = None
 
     @property
     def checked_h(self) -> int:
@@ -54,7 +63,7 @@ class ObligationResult:
     def as_dict(self) -> dict:
         out = {"id": self.id, "due_h": self.due_h, "amount_minor": self.amount_minor,
                "met": self.met}
-        for key in ("short_minor", "overdue_h"):
+        for key in ("short_minor", "overdue_h", "account", "currency"):
             if getattr(self, key) is not None:
                 out[key] = getattr(self, key)
         return out
@@ -158,30 +167,54 @@ def _paid_round(store: Any, ob: Mapping) -> int | None:
                          .where(journals.c.journal_id.in_(ids))).scalar()
 
 
-def assess(world: Any, account: str, *, from_round: int, to_round: int,
-           observability: Mapping[int, str]) -> Feasibility:
-    """The branch's realised outcome on ``account`` over the rounds after ``from_round`` through
-    ``to_round`` (the horizon). ``world`` is a branch's world, or the ``Branch`` holding it;
-    ``observability`` is the account's at the end of each of those rounds."""
-    world = getattr(world, "world", world)
-    store, epoch = world.store, world.clock.epoch
-    if to_round <= from_round:
-        raise ValueError(f"nothing to assess between rounds {from_round} and {to_round}")
-    rounds = range(from_round + 1, to_round + 1)
+def _check(account: str, rounds: range, observability: Mapping[int, str]) -> None:
     missing = [r for r in rounds if r not in observability]
     if missing:
         raise ValueError(f"no observability of {account} recorded for rounds {missing}")
     odd = {r: observability[r] for r in rounds if observability[r] not in ("known", "unknown")}
     if odd:
         raise ValueError(f"observability of {account} is known or unknown, not {odd}")
+
+
+def assess(world: Any, account: str, *, from_round: int, to_round: int,
+           observability: Mapping[int, str],
+           observability_of: Mapping[str, Mapping[int, str]] | None = None) -> Feasibility:
+    """The branch's realised outcome on ``account`` over the rounds after ``from_round`` through
+    ``to_round`` (the horizon). ``world`` is a branch's world, or the ``Branch`` holding it;
+    ``observability`` is the account's at the end of each of those rounds, and
+    ``observability_of`` the same for the entity's other cash accounts (one not recorded there
+    is read as it is now, for every round)."""
+    world = getattr(world, "world", world)
+    store, epoch = world.store, world.clock.epoch
+    if to_round <= from_round:
+        raise ValueError(f"nothing to assess between rounds {from_round} and {to_round}")
+    rounds = range(from_round + 1, to_round + 1)
+    _check(account, rounds, observability)
     view = store.view(account)
     settled = settled_by_round(store, account, rounds)
     unknown = {r * ROUND_HOURS for r in rounds if observability[r] == "unknown"}
     usable = {h: min(v, 0) if h in unknown else v for h, v in settled.items()}
 
+    held = {account: (view, settled, unknown)}  # account -> its view, settled, unknown hours
+    for a in store.rows("accounts"):
+        other = a["account_id"]
+        if a["entity_id"] != view.entity_id or a["kind"] != "cash" or other == account:
+            continue
+        other_view = store.view(other)
+        seen = (observability_of or {}).get(other) or {r: other_view.observability
+                                                        for r in rounds}
+        _check(other, rounds, seen)
+        held[other] = (other_view, settled_by_round(store, other, rounds),
+                       {r * ROUND_HOURS for r in rounds if seen[r] == "unknown"})
+
     obligations = []
-    rows = [r for r in store.rows("obligations") if r["account_id"] == account]
+    rows = [r for r in store.rows("obligations") if r["account_id"] in held]
     for ob in sorted(rows, key=lambda r: (_aware(r["due_at"]), r["obligation_id"])):
+        where = ob["account_id"]
+        own_view, own_settled, own_unknown = held[where]
+        elsewhere = {} if where == account else {
+            "account": where,
+            "currency": None if own_view.currency == view.currency else own_view.currency}
         due_h = due_hour(_aware(ob["due_at"]), epoch)
         due_round = -(-due_h // ROUND_HOURS)
         if due_round > to_round:
@@ -195,22 +228,24 @@ def assess(world: Any, account: str, *, from_round: int, to_round: int,
         if met:  # an overdue one met by the checkpoint is history, not the branch's outcome
             if not overdue:
                 obligations.append(ObligationResult(ob["obligation_id"], due_h,
-                                                    ob["amount_minor"], True))
+                                                    ob["amount_minor"], True, **elsewhere))
             continue
         # Its first chance in the branch: its due round, or for an overdue one the first round.
         first_h = max(due_round, rounds.start) * ROUND_HOURS
         later = sum(o["amount_minor"] for o in rows
                     if o["reservation_id"] and o["obligation_id"] != ob["obligation_id"]
-                    and _aware(o["due_at"]) > _aware(ob["due_at"]))
+                    and o["account_id"] == where and _aware(o["due_at"]) > _aware(ob["due_at"]))
         # Paid there, late: the cash then is read before it went out, and an unknown round end
         # still counts none of it.
-        then = settled[first_h] + (ob["amount_minor"] if paid == first_h // ROUND_HOURS else 0)
-        free = (min(then, 0) if first_h in unknown else then) - later - view.pledged_minor
+        then = own_settled[first_h] + (ob["amount_minor"]
+                                       if paid == first_h // ROUND_HOURS else 0)
+        free = (min(then, 0) if first_h in own_unknown else then) - later - own_view.pledged_minor
         # Paid late from cash that was there then (a committed flow landing after its due round,
         # an overdue one paid at its first chance) is unmet with nothing short.
         obligations.append(ObligationResult(
             ob["obligation_id"], due_h, ob["amount_minor"], False,
-            max(0, ob["amount_minor"] - max(0, free)), overdue_h=first_h if overdue else None))
+            max(0, ob["amount_minor"] - max(0, free)), overdue_h=first_h if overdue else None,
+            **elsewhere))
 
     floor = view.floor_minor or 0
     series = list(usable.items())

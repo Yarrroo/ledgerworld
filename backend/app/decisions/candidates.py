@@ -27,8 +27,16 @@ the execution module binds; a decision is never an approval.
 
 The policy's world is flat: scalars (``t_h``, ``settled``, ``floor_minor``, ``horizon_h``,
 ``account``, ``currency``) and one leaf per record (``pending_in[rcv-1]``,
-``obligations[payroll-1]``, ``facilities[adv-a]``, ``c2_seen[<intent>]``, ``prices[EUR/USD]``),
-every one available at t, plus ``scenario.*`` leaves that are never observable.
+``obligations[payroll-1]``, ``facilities[adv-a]``, ``holdings[<account>]``, ``c2_seen[<intent>]``,
+``prices[EUR/USD]``), every one available at t, plus ``scenario.*`` leaves that are never
+observable.
+
+The treasury's position is every cash account it holds, not its operating account alone. The
+operating (home) account carries the scalars; each other account is a holding with its own
+currency and free cash, and every obligation names its currency and, when it is not the home
+account's, its account. A holding pays its own account's obligations first; what it cannot pay
+is the home account's to fund, valued at the observed price. An obligation the projection must
+value and cannot (no price observed) is refused (``UnpricedPosition``), never dropped.
 """
 
 from __future__ import annotations
@@ -56,14 +64,15 @@ from .nonanticipativity import HOURS_PER_ROUND, Leaf, PolicyView, check_pairs, g
 from .objective import DecisionResult, Evaluation, rank
 
 __all__ = ["ALL", "FixedReserve", "Integrated", "NoAction", "Projection", "Proposal",
-           "branch_observation", "decide", "evaluate", "plan_for_now", "project",
+           "UnpricedPosition", "branch_observation", "decide", "evaluate", "plan_for_now", "project",
            "snapshot_observation", "view_world"]
 
 DEFAULT_HORIZON_H = 72
 CONVERT_LEAD_H = HOURS_PER_ROUND  # a foreign-currency obligation is converted one round early
 SCALARS = ("t_h", "account", "currency", "settled", "floor_minor", "horizon_h")
 RECORDS = {"pending_in": "flow_id", "pending_out": "flow_id", "obligations": "id",
-           "outflows": "id", "facilities": "id", "reserved": "id", "c2_seen": "intent"}
+           "outflows": "id", "facilities": "id", "reserved": "id", "c2_seen": "intent",
+           "holdings": "id"}
 NEVER_OBSERVABLE = ("scenario.params", "scenario.events", "scenario.rng")
 
 
@@ -131,6 +140,33 @@ def value_in(amount: int, currency: str, obs: Mapping[str, Any]) -> int | None:
     return int((Decimal(amount) * Decimal(str(rate))).to_integral_value(ROUND_CEILING))
 
 
+class UnpricedPosition(ValueError):
+    """An obligation the treasury owes that cannot be valued in its home currency."""
+
+    def __init__(self, obligation: str, currency: str, home: str):
+        self.obligation, self.currency, self.home = obligation, currency, home
+        super().__init__(f"no {currency}/{home} price for {obligation}")
+
+
+def uncovered(obs: Mapping[str, Any]) -> list[tuple[dict, int]]:
+    """Every obligation due within the horizon with the part of it, in its own currency, that
+    the home account must fund: all of it on the home account; on another account, what that
+    account's free cash does not cover, the earliest due paid first."""
+    home = obs.get("account")
+    free = {h["id"]: max(0, h["settled"]) for h in obs.get("holdings", ())}
+    out = []
+    for o in sorted(obs["obligations"], key=lambda o: (o["due_h"], o["id"])):
+        if o["due_h"] > obs["horizon_h"]:
+            continue
+        amount, where = o["amount"], o.get("account", home)
+        if where != home:
+            paid = min(amount, free.get(where, 0))
+            free[where] = free.get(where, 0) - paid
+            amount -= paid
+        out.append((o, amount))
+    return out
+
+
 def project(obs: Mapping[str, Any], *, deferred: Mapping[str, int] | None = None,
             advances: Sequence[tuple[int, int]] = (), fees: int = 0) -> Projection:
     """P over the horizon from ``obs``, with ``deferred`` outflows moved to their new hour,
@@ -149,10 +185,14 @@ def project(obs: Mapping[str, Any], *, deferred: Mapping[str, int] | None = None
             at(f["expected_h"], f["amount"])
     for f in obs["pending_out"]:
         at(f["due_h"], -f["amount"])
-    for o in obs["obligations"]:
-        value = value_in(o["amount"], o.get("currency", obs["currency"]), obs)
-        if value is not None:  # an unpriced obligation adds nothing it cannot be valued at
-            at(o["due_h"], -value)
+    for o, amount in uncovered(obs):
+        if not amount:
+            continue
+        currency = o.get("currency", obs["currency"])
+        value = value_in(amount, currency, obs)
+        if value is None:  # a debt it cannot value is refused, never left out
+            raise UnpricedPosition(o["id"], currency, obs["currency"])
+        at(o["due_h"], -value)
     for o in obs["outflows"]:
         at(deferred.get(o["id"], o["due_h"]), -o["amount"])
     for hour, amount in advances:
@@ -224,12 +264,21 @@ class NoAction(_Policy):
         return Proposal([], none, none)
 
 
+def _refused(t_h: int, why: UnpricedPosition) -> Proposal:
+    """No plan on a position the policy cannot price: it says so instead of guessing."""
+    none = Projection(0, t_h, 0, None)
+    return Proposal([], none, none, reason="unpriced_obligation", detail=str(why))
+
+
 class FixedReserve(_Policy):
     id = "fixed-reserve"
 
     def propose(self, view: PolicyView) -> Proposal:
         obs = read(view)
-        before = project(obs)
+        try:
+            before = project(obs)
+        except UnpricedPosition as why:
+            return _refused(obs["t_h"], why)
         actions: list[dict] = []
         after, cost = _defer(obs, before, actions, {})
         return Proposal(actions, before, after, cost)
@@ -241,19 +290,20 @@ class Integrated(_Policy):
     def propose(self, view: PolicyView) -> Proposal:
         obs = read(view)
         t = obs["t_h"]
-        before = project(obs)
+        try:
+            before = project(obs)  # every obligation it converts for is priced from here on
+        except UnpricedPosition as why:
+            return _refused(t, why)
         actions: list[dict] = []
         reason = detail = None
-        for o in obs["obligations"]:
+        for o, amount in uncovered(obs):
             currency = o.get("currency", obs["currency"])
-            if currency != obs["currency"] and t < o["due_h"] <= t + CONVERT_LEAD_H:
-                if value_in(o["amount"], currency, obs) is None:  # said, never sold blind
-                    reason = "unpriced_obligation"
-                    detail = f"no {currency}/{obs['currency']} price for {o['id']}"
-                    continue
-                actions.append({"type": "convert", "buy": {"minor": o["amount"],
-                                                           "currency": currency},
-                                "sell_currency": obs["currency"], "for_obligation": o["id"]})
+            if amount and currency != obs["currency"] and t < o["due_h"] <= t + CONVERT_LEAD_H:
+                convert = {"type": "convert", "buy": {"minor": amount, "currency": currency},
+                           "sell_currency": obs["currency"], "for_obligation": o["id"]}
+                if o.get("account", obs.get("account")) != obs.get("account"):
+                    convert["to_account"] = o["account"]
+                actions.append(convert)
         deferred: dict[str, int] = {}
         after, cost = _defer(obs, before, actions, deferred)
         paid_now = cost  # deferral fees leave cash; an advance's fee is owed, not paid
@@ -318,15 +368,29 @@ def _facilities(store: Any, borrower: str, terms: Mapping[str, Mapping[str, Any]
     return out
 
 
+def cash_accounts(store: Any, entity: str, conn: Connection | None = None) -> list[str]:
+    """Every cash account ``entity`` holds, in id order."""
+    return [a["account_id"] for a in store.rows("accounts", conn=conn)
+            if a["entity_id"] == entity and a["kind"] == "cash"]
+
+
+def _free(settled: int | None, pledged: int, known: bool) -> int:
+    """A holding's cash free to pay its own account's obligations: nothing when unknown."""
+    return max(0, (settled or 0) - pledged) if known else 0
+
+
 def branch_observation(world: World, conn: Connection, actor: str, *,
                        terms: Mapping[str, Mapping[str, Any]] | None = None,
                        horizon_h: int = DEFAULT_HORIZON_H) -> dict[str, Any]:
     """What ``actor`` observes of its own position at the current round of ``world``: its
     operating account, the pending flows with their promised hour and status, its open
-    obligations, the advances offered to it, every C2 it has been shown, the public prices."""
+    obligations on every account it holds, its other accounts as holdings, the advances
+    offered to it, every C2 it has been shown, the public prices."""
     t, epoch = world.clock.t_hours, world.clock.epoch
     account = world.operating(actor)
     v = world.store.view(account, conn=conn)
+    others = [world.store.view(a, conn=conn)
+              for a in cash_accounts(world.store, v.entity_id, conn) if a != account]
     c2_seen = []
     for entry in world.state.rounds:  # committed rounds: each C2 shown the round after
         for c in entry["c2"]:
@@ -351,8 +415,13 @@ def branch_observation(world: World, conn: Connection, actor: str, *,
         "pending_out": [{"flow_id": f.flow_id, "amount": f.amount_minor,
                          "due_h": hours_of(f.at, epoch)} for f in v.pending_out],
         "obligations": [{"id": d.obligation_id, "amount": d.amount_minor,
-                         "currency": v.currency, "due_h": hours_of(d.at, epoch),
-                         "reserved": d.reservation_id is not None} for d in v.obligations],
+                         "currency": w.currency, "due_h": hours_of(d.at, epoch),
+                         "reserved": d.reservation_id is not None,
+                         **({} if w.account_id == account else {"account": w.account_id})}
+                        for w in (v, *others) for d in w.obligations],
+        "holdings": [{"id": w.account_id, "currency": w.currency,
+                      "settled": _free(w.settled_minor, w.pledged_minor,
+                                       w.observability == "known")} for w in others],
         "outflows": [],  # this world holds no contract that lets an outflow be deferred
         "facilities": _facilities(world.store, actor, terms or {}, conn),
         "c2_seen": c2_seen, "prices": prices,
@@ -489,12 +558,13 @@ async def evaluate(run_id: str, cp: Checkpoint, scenarios: Mapping[str, Sequence
                     raise BranchMismatch(f"{world.branch_id}: its schedule or seed differs from "
                                          f"the other branches of {sid}")
                 capacity_by_round: dict[str, dict[int, int]] = {}
-                observability: dict[int, str] = {}
+                held = cash_accounts(world.store, actor)
+                observability: dict[str, dict[int, str]] = {a: {} for a in held}
                 c2: list[dict] = []
                 for _ in range(to_round - cp.round):
                     result = await world.coordinator.run_round(world)
-                    observability[result.round] = world.store.view(
-                        world.operating(actor)).observability
+                    for a in held:
+                        observability[a][result.round] = world.store.view(a).observability
                     for pool, k_p in _pools(world).items():
                         capacity_by_round.setdefault(pool, {})[result.round] = k_p
                     c2 += [{"round": result.round, "intent_id": c.intent_id, "type": c.type,
@@ -505,7 +575,9 @@ async def evaluate(run_id: str, cp: Checkpoint, scenarios: Mapping[str, Sequence
                 out.append(Evaluation(
                     scenario=sid, policy=policy.id, branch_id=world.branch_id,
                     feasibility=assess(world, world.operating(actor), from_round=cp.round,
-                                       to_round=to_round, observability=observability),
+                                       to_round=to_round,
+                                       observability=observability[world.operating(actor)],
+                                       observability_of=observability),
                     actions=driver.actions, c2=c2, intents=driver.queued,
                     decisions=driver.decisions, capacity=capacity_by_round,
                     schedule_hash=digest, seed=world.seed,
@@ -535,7 +607,8 @@ def snapshot_observation(snapshot: Snapshot, *, epoch: datetime, account: str | 
     """The treasury's position on an observed C5 snapshot, at ``as_of`` hours after ``epoch``.
 
     A pending inflow promised at or before ``as_of`` that is still pending is overdue.
-    ``account`` defaults to the operating account of the snapshot's treasury entity.
+    ``account`` defaults to the operating account of the snapshot's treasury entity; the
+    entity's other cash accounts are its holdings, and the obligations of every one are read.
     """
     t = hours_of(snapshot.as_of, epoch)
     if t % HOURS_PER_ROUND or snapshot.as_of != epoch + timedelta(hours=t):
@@ -546,7 +619,11 @@ def snapshot_observation(snapshot: Snapshot, *, epoch: datetime, account: str | 
     acct = next(a for a in snapshot.accounts if a.id == account)
     b = acct.buckets
     terms = terms or {}
-    committed = {f.reservation_id for f in b.pending_out if f.reservation_id}  # paid as flows
+    others = [a for a in snapshot.accounts
+              if a.entity == acct.entity and a.kind == "cash" and a.id != account]
+    held = {account, *(a.id for a in others)}
+    committed = {f.reservation_id for a in (acct, *others)  # paid as flows
+                 for f in a.buckets.pending_out if f.reservation_id}
     pending_in = []
     for f in b.pending_in:
         expected_h = due_hour(f.expected_at, epoch)
@@ -564,10 +641,15 @@ def snapshot_observation(snapshot: Snapshot, *, epoch: datetime, account: str | 
         "obligations": [{"id": o.obligation_id, "amount": o.amount.minor,
                          "currency": o.amount.currency, "due_h": hours_of(o.due_at, epoch),
                          "reserved": o.reservation_id is not None,
-                         "reservation_id": o.reservation_id}
+                         "reservation_id": o.reservation_id,
+                         **({} if o.account == account else {"account": o.account})}
                         for o in snapshot.obligations
-                        if o.account == account and o.state in ("open", "missed")
+                        if o.account in held and o.state in ("open", "missed")
                         and (o.reservation_id is None or o.reservation_id not in committed)],
+        "holdings": [{"id": a.id, "currency": a.currency,
+                      "settled": _free(a.buckets.settled.minor if a.buckets.settled else 0,
+                                       a.buckets.pledged.minor, a.observability == "known")}
+                     for a in others],
         "outflows": [],
         "facilities": [{"id": c.contract_id, "state": c.state, "lender": c.lender,
                         "principal": c.principal.minor, "currency": c.principal.currency,
@@ -593,6 +675,8 @@ def plan_for_now(policy: _Policy, observed_snapshot: Snapshot, *, epoch: datetim
                                prices=prices)
     view = PolicyView(view_world(obs), obs["t_h"] // HOURS_PER_ROUND)
     proposal = policy.propose(view)
+    if proposal.reason == "unpriced_obligation":  # a debt it cannot value is not "nothing to do"
+        raise ValueError(f"unpriced_obligation: {proposal.detail}")
     account, currency = obs["account"], obs["currency"]
     entity = next(a.entity for a in observed_snapshot.accounts if a.id == account)
     legs: list[dict] = []
@@ -610,14 +694,16 @@ def plan_for_now(policy: _Policy, observed_snapshot: Snapshot, *, epoch: datetim
                 raise ValueError(f"no observed {buy['currency']}/{currency} price to convert at")
             legs.append({"index": len(legs) + 1, "kind": "fx",
                          "amount": {"minor": sell, "currency": currency},
-                         "source": account, "counterparty": account,
+                         "source": account,
+                         "counterparty": action.get("to_account", account),
                          "to_currency": buy["currency"]})
     if not legs:
         return None
     funding = [leg["index"] for leg in legs]
     short_at = proposal.projected_short.at_h
     for o in sorted(obs["obligations"], key=lambda o: (o["due_h"], o["id"])):
-        if not obs["t_h"] < o["due_h"] <= short_at or o["currency"] != currency:
+        if not obs["t_h"] < o["due_h"] <= short_at or o["currency"] != currency \
+                or o.get("account", account) != account:  # paid from its own account
             continue
         if o["id"] not in beneficiaries:
             raise ValueError(f"no beneficiary for {o['id']}, which this plan's funding protects")
