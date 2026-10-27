@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 from app.execution import outbox as ob
 from app.execution import state
-from app.finance.schemas import BoundApproval, ProviderOp
+from app.finance.schemas import EXPONENT, BoundApproval, ProviderOp
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -442,7 +442,8 @@ def test_a_mismatched_settlement_posts_no_journal(case_id: str, tmp_path: Path) 
     reported = case["provider"]
     world = World(tmp_path / "store.db")
     world.provider.overrides[index] = (
-        {"amount_minor": int(Decimal(reported["amount"]) * 100)} if "amount" in reported
+        {"amount_minor": int(Decimal(reported["amount"]).scaleb(EXPONENT["USD"]))}
+        if "amount" in reported
         else {"currency": reported["currency"]})
     leg = world.run()[index - 1]
     world.run()
@@ -497,4 +498,36 @@ def test_a_busy_commit_rolls_back_and_the_connection_recovers(tmp_path: Path) ->
     reader.execute("COMMIT")
     assert [leg.state for leg in world.legs()] == ["pending", "pending"]
     assert [leg.state for leg in world.run()] == ["settled", "settled"]
+    assert_money_moved_once(world)
+
+
+def test_an_earlier_unsent_claim_does_not_make_a_later_send_resendable(tmp_path: Path) -> None:
+    """Claim 1 dies before its send, claim 2 sends and dies before the answer, the lookup lags:
+    the leg waits as unknown rather than sending a third time."""
+    world = World(tmp_path / "store.db")
+    world.faults.armed |= {("after_submitted_before_send", 1), ("after_send_before_response", 1)}
+    world.provider.stale_finds = 2
+    advance, _ = world.run()
+    assert advance.state == "unknown"
+    assert world.provider.posts[advance.request_id] == 1
+    assert [leg.state for leg in world.run()] == ["settled", "settled"]
+    assert_money_moved_once(world)
+
+
+def test_a_reconciled_payout_that_later_fails_is_caught_by_the_sweep(tmp_path: Path) -> None:
+    """The normal path reconciles at once; the sweep's `reconcile` still sees the later FAILED,
+    and an operator's close of the incident sticks."""
+    world = World(tmp_path / "store.db")
+    _, payout = world.run()
+    assert payout.reconciled
+    world.provider.overrides[2] = {"status": "FAILED"}
+    assert world.outbox.reconcile(payout.leg_id, world.provider)
+    world.rows("UPDATE incidents SET closed_at = 'now', closed_by = 'operator'")
+    for _ in range(2):
+        world.outbox.reconcile(payout.leg_id, world.provider)
+        world.run()
+    payout = world.legs()[1]
+    assert (payout.state, payout.reconciled, world.journals(payout)) == ("settled", False, 1)
+    assert world.rows("SELECT kind, closed_by FROM incidents WHERE leg_id = ?",
+                      payout.leg_id) == [("paid_then_failed", "operator")]
     assert_money_moved_once(world)

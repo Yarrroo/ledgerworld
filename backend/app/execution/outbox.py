@@ -5,8 +5,9 @@ The rules it keeps (design/modules/execution/HANDOFF.md, fixtures/crash-and-retr
 - A leg's `request_id` is fixed when it is queued and never changes; the leg id is the request id.
 - The claim `pending → submitted` is a conditional update committed before the provider is called,
   provider id still empty, so only one worker sends and a crash always leaves a trace.
-- `attempts` counts sends started: it is raised, and committed, just before the provider call,
-  so a restart can tell a claim that never reached the call from one that may have left.
+- `attempts` is the number of the last claim whose send started, written and committed just
+  before the provider call, so a restart can tell the latest claim that never reached the call
+  from one that may have left.
 - An unknown outcome, a restart that finds `submitted` without a provider id, and a duplicate-id
   rejection all resolve by looking the leg up by `request_id`. A leg is sent again only under the
   same id, and only when the lookup found nothing and the attempt could not have left.
@@ -187,6 +188,12 @@ class Outbox:
     def leg(self, leg_id: str) -> Leg:
         return self._legs("leg_id = ?", (leg_id,))[0]
 
+    def _claims(self, leg: Leg) -> int:
+        (claims,) = self.conn.execute(
+            "SELECT count(*) FROM leg_events WHERE leg_id = ? AND cause = 'claimed'",
+            (leg.leg_id,)).fetchone()
+        return claims
+
     def _last_unknown_cause(self, leg: Leg) -> str | None:
         row = self.conn.execute(
             "SELECT cause FROM leg_events WHERE leg_id = ? AND to_state = 'unknown'"
@@ -238,12 +245,16 @@ class Outbox:
         journal: bool = False,
         incident: tuple[str, str] | None = None,
         close: tuple[str, ...] = (),
+        once: bool = False,
         **fields,
     ) -> bool:
         """One transition in one transaction, with the journal and incidents it carries; false
-        when another worker moved the leg first (then nothing of it is written)."""
+        when another worker moved the leg first (then nothing of it is written). With `once`,
+        also false when the leg has ever had the incident, open or closed by the operator."""
         try:
             with self._tx():
+                if once and incident and self._ever(leg, incident[0]):
+                    raise _Lost
                 if journal:
                     fields["journal_id"] = self.post_journal(self.conn, leg)
                 if not self._write(leg, to, cause, obj, **fields):
@@ -263,6 +274,10 @@ class Outbox:
         return self.conn.execute(
             "SELECT 1 FROM incidents WHERE leg_id = ? AND kind = ? AND closed_at IS NULL",
             (leg.leg_id, kind)).fetchone() is not None
+
+    def _ever(self, leg: Leg, kind: str) -> bool:
+        return self.conn.execute("SELECT 1 FROM incidents WHERE leg_id = ? AND kind = ?",
+                                 (leg.leg_id, kind)).fetchone() is not None
 
     def _open_incident(self, leg: Leg, kind: str, detail: str) -> None:
         """Open `kind` on the leg unless one is already open (the schema allows one)."""
@@ -316,17 +331,25 @@ class Outbox:
     def recover(self) -> list[Leg]:
         """At start-up: a leg claimed but never answered is unknown, to be looked up, never resent
         blind. Run it once per process, before any `drive`, never beside a live worker. A claim
-        whose send had not started (`attempts` below the claims) may be sent again; one whose send
-        had started may have left, and waits for the lookup to find it."""
+        whose send had not started (`attempts` short of this claim's number) may be sent again;
+        one whose send had started may have left, and waits for the lookup to find it."""
         stranded = self._legs("state = 'submitted' AND provider_id IS NULL")
         for leg in stranded:
-            (claims,) = self.conn.execute(
-                "SELECT count(*) FROM leg_events WHERE leg_id = ? AND cause = 'claimed'",
-                (leg.leg_id,)).fetchone()
-            sent = leg.attempts >= claims
+            sent = leg.attempts == self._claims(leg)
             self._move(leg, "unknown", "restart_after_send" if sent else "restart",
                        incident=("outcome_unknown", "restart found the leg claimed, unanswered"))
         return [self.leg(leg.leg_id) for leg in stranded]
+
+    def reconcile(self, leg_id: str, provider: Provider) -> bool:
+        """`GET` a settled leg and compare: the sweep's check, which also sees a leg already
+        reconciled turn FAILED. True when it flagged the leg or opened `paid_then_failed`."""
+        leg = self.leg(leg_id)
+        if leg.state != "settled" or leg.ledger_only:
+            return False
+        try:
+            return self._reconcile(leg, provider.get(leg))
+        except LookupFailed:
+            return False
 
     def drive(self, approval_id: str, provider: Provider) -> list[Leg]:
         """Advance every leg of the approval as far as the provider allows, in leg order."""
@@ -349,11 +372,8 @@ class Outbox:
             return self._observe(leg, provider)
         if leg.state == "unknown":
             return self._resolve(leg, provider)
-        if leg.state == "settled" and not leg.reconciled and not leg.ledger_only:
-            try:
-                return self._reconcile(leg, provider.get(leg))
-            except LookupFailed:
-                return False
+        if leg.state == "settled" and not leg.reconciled:
+            return self.reconcile(leg.leg_id, provider)
         # `submitted` without a provider id is in flight on a live worker; `recover` owns restarts.
         return False
 
@@ -375,9 +395,9 @@ class Outbox:
         self._point("after_submitted_before_send", leg)
         with self._tx():  # committed before the call: from here the request may have left
             started = self.conn.execute(
-                "UPDATE execution_legs SET attempts = attempts + 1, updated_at = ?"
+                "UPDATE execution_legs SET attempts = ?, updated_at = ?"
                 " WHERE leg_id = ? AND state = 'submitted' AND provider_id IS NULL",
-                (self.clock(), leg.leg_id)).rowcount
+                (self._claims(leg), self.clock(), leg.leg_id)).rowcount
         if not started:
             return False
         try:
@@ -434,10 +454,8 @@ class Outbox:
         """Flag a settled leg whose provider object still matches it. A later failure is incident
         `paid_then_failed` and unflags it; a mismatch is an incident. The ledger is never
         corrected to fit, and no second journal is posted."""
-        if obj.status in state.FAILED_STATUSES:
-            if self._is_open(leg, "paid_then_failed"):
-                return False
-            return self._move(leg, "settled", "paid_then_failed", obj, reconciled=False,
+        if obj.status in state.FAILED_STATUSES:  # once per leg: the operator's close sticks
+            return self._move(leg, "settled", "paid_then_failed", obj, reconciled=False, once=True,
                               incident=("paid_then_failed", f"provider {obj.status} after settle"))
         if obj.status not in state.SETTLED_STATUSES:
             return False
