@@ -1,6 +1,6 @@
 # T08 · Coupled round coordinator on one clock
 
-> Design output (build stage 2, workflow folded in). Source: `briefs/T08.md`, `00-system.md` §7.2,
+> Design (workflow folded in). Source: `briefs/T08.md`, `00-system.md` §7.2,
 > `design/modules/agent-world/HANDOFF.md` and its fixtures. Next: implement → vet → close.
 
 ## Requirements (from the brief; the accept is the criterion)

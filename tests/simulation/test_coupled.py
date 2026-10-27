@@ -20,7 +20,7 @@ import pytest
 from app.finance.lending import capacity
 from app.finance.schemas import ActionIntent
 from app.simulation.clock import HORIZON_ROUNDS, ROUND_HOURS, Clock, ClockDrift
-from app.simulation.coordinator import Coordinator, clear_intents
+from app.simulation.coordinator import Coordinator, clear_intents, deliver, validate_intents
 from app.simulation.world import World, WorldUnusable, import_oasis
 from app.testing.scripted_model import ScriptedModel, ScriptedPlan
 from oasis_finance.actions import FinancialActionType, IntentQueue, NoActionArgs, submit
@@ -811,8 +811,140 @@ def test_a_model_chosen_reference_the_ledger_refuses_is_a_rejection_not_a_failed
     world, (r1, r2) = run(go())
     assert world.committed_round == 2 and not world.failures
     offer = by_intent(r1)["i-r1-lender-1"]
-    assert (offer.c2.status, offer.c2.reason) == ("rejected", "invalid_reference")
+    assert (offer.c2.status, offer.c2.reason) == ("rejected", "unknown_counterparty")
     assert by_intent(r2)["i-r2-lender-1"].c2.status == "accepted"
     disburse = by_intent(r2)["i-r2-lender-2"]
-    assert (disburse.c2.status, disburse.c2.reason) == ("rejected", "invalid_reference")
+    assert (disburse.c2.status, disburse.c2.reason) == ("rejected", "not_own_account")
     assert settled(world, "lender/operating") == 4_500_000
+
+
+def ledger_world(tmp_path, name, snap=None, scenario=(), epoch=DEFAULT_EPOCH,
+                 tools=None) -> World:
+    """A world with no platform, for the clearing and delivery rules alone."""
+    workdir = tmp_path / name
+    workdir.mkdir()
+    actors = [{**ACTOR_SPECS[a], "llm": False,
+               "tools": ACTOR_SPECS[a]["tools"] + (tools or {}).get(a, [])}
+              for a in MODEL_ACTORS]
+    return World("rules", "shock", snap or snapshot(treasury=True), actors,
+                 model=plan_model(ScriptedPlan(IDLE)), workdir=workdir, scenario=scenario,
+                 epoch=epoch)
+
+
+def clear(world: World, round_: int, *intents: tuple) -> dict:
+    """Clear (actor, type, params[, intent_id]) intents at ``round_``; verdicts by intent id."""
+    world.clock.round = round_
+    built = []
+    for n, (actor, type_, params, *given) in enumerate(intents, 1):
+        built.append(ActionIntent(
+            intent_id=given[0] if given else f"i-r{round_}-{actor}-{n}", branch_id="shock",
+            round=round_, actor_id=actor, type=type_, params=params, evidence_ids=[],
+            obs_hash=HASH, priority_class=ACTOR_SPECS[actor]["priority_class"],
+            sim_minute=round_ * ROUND_HOURS * 60))
+    with world.store.engine.begin() as conn:
+        deliver(world, conn)  # what is observable is refreshed every round
+        valid, rejected = validate_intents(world, built)
+        return {c.intent_id: c for c in clear_intents(world, conn, valid) + rejected}
+
+
+def verdict(cleared) -> tuple:
+    return cleared.c2.status, cleared.c2.reason
+
+
+def test_an_advance_is_never_offered_into_an_account_of_another_currency(tmp_path):
+    snap = snapshot(treasury=False)
+    for acc in snap["accounts"]:
+        if acc["entity"] == "lender":
+            acc["currency"] = "EUR"
+            for bucket in ("settled", "reserved", "pledged"):
+                acc["buckets"][bucket]["currency"] = "EUR"
+    snap["contracts"] = []
+    for acc in snap["accounts"]:
+        acc["buckets"]["reserved"]["minor"] = 0
+    snap["pools"][0]["floor"]["currency"] = "EUR"
+    world = ledger_world(tmp_path, "fx", snap)
+    out = clear(world, 1, ("lender", "offer", {"amount": {"minor": 100_000, "currency": "EUR"},
+                                               "to": "borrower-c"}))
+    assert verdict(out["i-r1-lender-1"]) == ("rejected", "currency_mismatch")
+
+
+def test_a_payment_naming_an_obligation_is_refused_so_it_is_never_paid_twice(tmp_path):
+    world = ledger_world(tmp_path, "ob")
+    out = clear(world, 1, ("treasury", "pay", {"amount": usd(100_000), "to": "payroll",
+                                               "obligation_id": "payroll-1"}))
+    assert verdict(out["i-r1-treasury-1"]) == ("rejected", "obligation_settles_when_due")
+
+
+def test_a_payment_reaches_only_a_cash_account_or_the_outside_world(tmp_path):
+    world = ledger_world(tmp_path, "payee")
+    out = clear(world, 1,
+                ("borrower-b", "pay", {"amount": usd(1_000), "to": "lender/loan:line-b"}),
+                ("borrower-c", "pay", {"amount": usd(1_000), "to": "borrower-b/operating"}))
+    assert verdict(out["i-r1-borrower-b-1"]) == ("rejected", "payee_not_cash")
+    assert verdict(out["i-r1-borrower-c-2"]) == ("accepted", None)
+    assert settled(world, "borrower-b/operating") == 900_000 + 1_000
+
+
+def test_a_pledge_in_another_currency_is_refused(tmp_path):
+    world = ledger_world(tmp_path, "pledge", tools={"borrower-c": ["pledge"]})
+    out = clear(world, 1, ("borrower-c", "pledge", {"amount": {"minor": 50_000,
+                                                               "currency": "JPY"},
+                                                    "to": "lender"}))
+    assert verdict(out["i-r1-borrower-c-1"]) == ("rejected", "currency_mismatch")
+
+
+def test_ids_fit_the_ledger_columns(tmp_path):
+    world = ledger_world(tmp_path, "ids")
+    long_id = "i-r1-borrower-c-" + "7" * 64  # 80 characters: a journal id would not fit
+    too_long = "i-r1-borrower-c-" + "7" * 90  # beyond the journal's source intent column
+    out = clear(world, 1,
+                ("borrower-c", "pay", {"amount": usd(1_000), "to": "supplier-2"}, long_id),
+                ("borrower-c", "pay", {"amount": usd(1_000), "to": "supplier-2"}, too_long))
+    accepted = out[long_id]
+    assert accepted.c2.status == "accepted"
+    assert len(accepted.journal.journal_id) <= 64
+    assert accepted.journal.source_intent_id == long_id
+    assert verdict(out[too_long]) == ("rejected", "intent_id_too_long")
+
+
+def test_a_borrower_drawing_an_accepted_request_closes_the_request(tmp_path):
+    world = ledger_world(tmp_path, "draw")
+    advance = {"amount": usd(100_000), "from": "lender"}
+    clear(world, 1, ("borrower-c", "request_advance", advance))
+    assert verdict(clear(world, 2, ("lender", "accept", {"request": "req:borrower-c:r1"}))[
+        "i-r2-lender-1"]) == ("accepted", None)
+    drawn = clear(world, 3, ("borrower-c", "request_advance",
+                             {**advance, "facility_id": "adv:req:borrower-c:r1"}))
+    assert drawn["i-r3-borrower-c-1"].journal.kind == "advance_disbursal"
+    assert world.state.requests["req:borrower-c:r1"]["status"] == "disbursed"
+    again = clear(world, 4, ("lender", "disburse", {"request": "req:borrower-c:r1",
+                                                    "amount": usd(100_000)}))
+    assert verdict(again["i-r4-lender-1"]) == ("rejected", "request_not_open")
+
+
+def deliver_round(world: World) -> None:
+    with world.store.engine.begin() as conn:
+        world.clock.advance()
+        deliver(world, conn)
+
+
+def test_a_receipt_promised_within_the_hour_is_not_overdue_before_it_is_due(tmp_path):
+    snap = snapshot(treasury=True)
+    tre = next(a for a in snap["accounts"] if a["id"] == "treasury/operating")
+    tre["buckets"]["pending_in"][0]["expected_at"] = "2026-01-01T04:30:00Z"
+    world = ledger_world(tmp_path, "half", snap)
+    deliver_round(world)  # t = 4 h: promised for 04:30, not yet due
+    assert world.state.flow_status["receivable-1"] == "expected"
+    deliver_round(world)  # t = 8 h: landed
+    assert world.state.flow_status["receivable-1"] == "arrived"
+
+
+def test_a_delay_keeps_the_receipt_in_utc_whatever_the_epochs_zone(tmp_path):
+    from datetime import timedelta, timezone
+
+    epoch = DEFAULT_EPOCH.astimezone(timezone(timedelta(hours=4)))
+    delay = [{"round": 1, "kind": "delay_receipt", "flow_id": "receivable-1", "delay_h": 24}]
+    world = ledger_world(tmp_path, "zone", scenario=delay, epoch=epoch)
+    deliver_round(world)
+    (flow,) = [f for f in world.store.rows("expected_flows") if f["flow_id"] == "receivable-1"]
+    assert flow["expected_at"] == (DEFAULT_EPOCH + timedelta(hours=12 + 24)).replace(tzinfo=None)

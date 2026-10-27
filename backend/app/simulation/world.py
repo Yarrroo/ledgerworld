@@ -51,7 +51,8 @@ from .clock import Clock
 from .observations import Observation, build_observation
 from .transcripts import ModelCall, Transcript
 
-__all__ = ["Capture", "World", "WorldState", "WorldUnusable", "hours_of", "import_oasis"]
+__all__ = ["Capture", "World", "WorldState", "WorldUnusable", "due_hour", "hours_of",
+           "import_oasis"]
 
 TRANSIT = "in-transit"  # a borrower's cash account an advance waits in until the next boundary
 ModelFactory = Callable[[str, "World"], Any]
@@ -81,6 +82,12 @@ def import_oasis() -> SimpleNamespace:
 def hours_of(when: datetime, epoch: datetime) -> int:
     """Whole simulated hours from the epoch, rounded down."""
     return (when - epoch) // timedelta(hours=1)
+
+
+def due_hour(when: datetime, epoch: datetime) -> int:
+    """The first whole simulated hour at or after ``when``: a promise for 04:30 is not yet due
+    at 04:00."""
+    return -((epoch - when) // timedelta(hours=1))
 
 
 def _digest(value: Any) -> str:
@@ -164,7 +171,7 @@ class World:
         self.state = WorldState()
         for account in self.snapshot.accounts:
             for flow in account.buckets.pending_in:
-                self.state.expected_h[flow.flow_id] = hours_of(flow.expected_at, epoch)
+                self.state.expected_h[flow.flow_id] = due_hour(flow.expected_at, epoch)
                 self.state.flow_status[flow.flow_id] = "expected"
         model_actors = [a for a in self.actors.values() if a.get("llm")]
         self.agents = {
@@ -222,9 +229,6 @@ class World:
     def operating(self, actor_id: str) -> str:
         return f"{actor_id}/operating"
 
-    def account_exists(self, account_id: str, conn: Connection) -> bool:
-        return any(a["account_id"] == account_id for a in self.store.rows("accounts", conn=conn))
-
     def due_events(self) -> list[dict]:
         """The scheduled events of the current round, advancing the cursor past them."""
         due = []
@@ -259,7 +263,7 @@ class World:
                 "floor_minor": view.floor_minor,
                 "pending_in": [{"flow_id": f.flow_id, "amount_minor": f.amount_minor,
                                 "expected_h": self.state.expected_h.get(
-                                    f.flow_id, hours_of(f.at, epoch)),
+                                    f.flow_id, due_hour(f.at, epoch)),
                                 "status": self.state.flow_status.get(f.flow_id, "expected")}
                                for f in view.pending_in],
                 "pending_out": [{"flow_id": f.flow_id, "amount_minor": f.amount_minor,

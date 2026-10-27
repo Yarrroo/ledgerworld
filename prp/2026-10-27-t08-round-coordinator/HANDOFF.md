@@ -1,4 +1,4 @@
-# HANDOFF · T08 → dev-build
+# T08 · build hand-off
 
 Build `backend/app/simulation/{clock,world,coordinator}.py` and `tests/simulation/test_coupled.py` to `design.md`.
 Accept: `uv run pytest -q tests/simulation/test_coupled.py`; gate `bash checks/merge.sh`.

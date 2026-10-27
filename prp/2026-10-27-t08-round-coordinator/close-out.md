@@ -1,6 +1,6 @@
 # T08 · close-out
 
-> Close-out (dev-build stage 5). Source: design.md. Board item 9.
+> Close-out. Source: design.md.
 
 ## What landed
 

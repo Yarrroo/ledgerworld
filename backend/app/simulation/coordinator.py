@@ -41,17 +41,16 @@ import hashlib
 import inspect
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import UTC, timedelta
 from typing import Any
 
 from oasis_finance.actions import clearing_key
 from pydantic import ValidationError
-from sqlalchemy import Connection
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import Connection, select
 
 from ..finance import ledger, lending
 from ..finance.contracts import facility, pool_facilities, register, set_facility
-from ..finance.models import Journal, LedgerRefusal
+from ..finance.models import Journal, LedgerRefusal, accounts, journals
 from ..finance.schemas import ActionIntent, Amount, ClearedAction, RevenueAdvance
 from .clock import ROUND_HOURS
 from .world import TRANSIT, World, WorldUnusable
@@ -154,6 +153,8 @@ def validate_intents(
             reason = "unknown_actor"
         elif item.type != "no_action" and item.type not in spec["tools"]:
             reason = "not_in_mandate"
+        elif len(item.intent_id) > journals.c.source_intent_id.type.length:
+            reason = "intent_id_too_long"  # its journal could not name it
         if reason is None:
             valid.append(item)
         else:
@@ -178,8 +179,9 @@ def clear_intents(world: World, conn: Connection, intents: Iterable[ActionIntent
     """§7.2 step 7: clear the intents against the ledger in the deterministic order.
 
     Each intent clears in its own savepoint, so a refused one leaves nothing behind and the
-    next is cleared against what the earlier ones did. What the model chose can only be
-    rejected: a ledger refusal, or a reference the ledger cannot resolve, is a C2 reason.
+    next is cleared against what the earlier ones did. Every reference the model chose (an
+    account, a counterparty, a request) is checked before the ledger is asked, so what the
+    model got wrong is a C2 reason, and an exception left over is the coordinator's own fault.
     """
     out = []
     for intent in sorted(intents, key=clearing_key):
@@ -193,12 +195,6 @@ def clear_intents(world: World, conn: Connection, intents: Iterable[ActionIntent
         except LedgerRefusal as refusal:
             out.append(_rejection(intent.intent_id, intent.actor_id, intent.type, intent.round,
                                   refusal.code, _binding(refusal), intent, refusal.detail))
-            continue
-        except (ValueError, LookupError, IntegrityError) as error:
-            # A reference the model chose (an account, a counterparty) that the ledger refuses
-            # to resolve; the savepoint took back whatever the intent had written.
-            out.append(_rejection(intent.intent_id, intent.actor_id, intent.type, intent.round,
-                                  "invalid_reference", str(error)[:400], intent))
             continue
         c2 = ClearedAction(intent_id=intent.intent_id, status="accepted",
                            journal_id=journal.journal_id if journal else None, round=intent.round)
@@ -237,26 +233,72 @@ def _no_action(world: World, c: Connection, intent: ActionIntent) -> None:
     return None
 
 
+def _journal_id(intent_id: str) -> str:
+    """The journal of one intent: ``j:<intent>``, or a stable short id when that would not fit."""
+    jid = f"j:{intent_id}"
+    if len(jid) <= journals.c.journal_id.type.length:
+        return jid
+    return f"j-{hashlib.sha256(intent_id.encode()).hexdigest()[:40]}"
+
+
+def _account(c: Connection, account_id: str) -> Any:
+    return c.execute(select(accounts).where(accounts.c.account_id == account_id)).first()
+
+
+def _cash_of(c: Connection, account_id: str, entity: str, currency: str, what: str) -> None:
+    """A movement leaves from or arrives at a cash account of ``entity`` in ``currency``."""
+    row = _account(c, account_id)
+    if row is None or row.kind != "cash" or row.entity_id != entity \
+            or account_id.endswith(f"/{TRANSIT}"):
+        raise Rejected(what, f"{account_id} is not a cash account of {entity}")
+    if row.currency != currency:
+        raise Rejected("currency_mismatch", f"{account_id} holds {row.currency}, not {currency}")
+
+
 def _pay(world: World, c: Connection, intent: ActionIntent) -> Journal:
+    """A payment to another entity's operating account, to a cash account named by id, or out
+    of the world (a counterparty the world does not hold); never into a loan, payable or
+    in-transit account, and never of an obligation, which settles when due (step 8)."""
     amount, currency = _money(intent)
+    if _param(intent, "obligation_id") is not None:
+        raise Rejected("obligation_settles_when_due",
+                       "a due obligation is paid by the round's mandatory settlement")
     source = world.operating(intent.actor_id)
+    _cash_of(c, source, intent.actor_id, currency, "no_operating_account")
     to = str(_param(intent, "to"))
-    payee = world.operating(to)
-    if not world.account_exists(payee, c):
-        payee = to if world.account_exists(to, c) else world.store.external_account(currency,
-                                                                                   conn=c)
+    if _account(c, world.operating(to)) is not None:
+        payee = world.operating(to)
+        _cash_of(c, payee, to, currency, "payee_not_cash")
+    elif (row := _account(c, to)) is not None:
+        payee = to
+        _cash_of(c, payee, row.entity_id, currency, "payee_not_cash")
+    else:
+        payee = world.store.external_account(currency, conn=c)
     if payee == source:
         raise Rejected("payee_is_payer")
-    for account in (source, payee):
-        if world.store.view(account, conn=c).currency != currency:
-            raise Rejected("currency_mismatch", f"{account} does not hold {currency}")
     return ledger.pay(world.store, source, amount, to_account=payee, now=world.clock.now,
-                      journal_id=f"j:{intent.intent_id}", round=intent.round,
+                      journal_id=_journal_id(intent.intent_id), round=intent.round,
                       source_intent_id=intent.intent_id, conn=c)
 
 
-def _pools(world: World, c: Connection) -> set[str]:
-    return {p["pool_entity_id"] for p in world.store.rows("lending_pools", conn=c)}
+def _pools(world: World, c: Connection) -> dict[str, str]:
+    """Each lending pool and the currency it lends."""
+    return {p["pool_entity_id"]: p["currency"]
+            for p in world.store.rows("lending_pools", conn=c)}
+
+
+def _advance_parties(world: World, c: Connection, lender: str, borrower: str,
+                     currency: str) -> None:
+    """An advance runs from a pool in its currency to a borrower's operating account in the
+    same currency, so its arrival can land."""
+    pools = _pools(world, c)
+    if lender not in pools:
+        raise Rejected("unknown_lender", f"{lender} is not a lending pool")
+    if pools[lender] != currency:
+        raise Rejected("currency_mismatch", f"{lender} lends {pools[lender]}, not {currency}")
+    if borrower == lender:
+        raise Rejected("unknown_counterparty", "a pool does not lend to itself")
+    _cash_of(c, world.operating(borrower), borrower, currency, "unknown_counterparty")
 
 
 def _facility_id(base: str) -> str:
@@ -283,11 +325,14 @@ def _disburse(world: World, c: Connection, facility_id: str, intent: ActionInten
     borrower's operating account at the next round boundary (step 2 of the next round)."""
     f = facility(world.store, facility_id, conn=c)
     store, now = world.store, world.clock.now
+    _advance_parties(world, c, f.pool, f.borrower, f.currency)
+    if from_account is not None:
+        _cash_of(c, from_account, f.pool, f.currency, "not_own_account")
     transit = f"{f.borrower}/{TRANSIT}"
-    if not world.account_exists(transit, c):
+    if _account(c, transit) is None:
         store.open_account(transit, f.borrower, f.currency, as_of=now, conn=c)
     journal = lending.disburse(store, facility_id, now=now, from_account=from_account,
-                               borrower_account=transit, journal_id=f"j:{intent.intent_id}",
+                               borrower_account=transit, journal_id=_journal_id(intent.intent_id),
                                round=intent.round, source_intent_id=intent.intent_id, conn=c)
     lands = intent.round + 1
     flow_id = store.expect(world.operating(f.borrower), "in", f.limit_minor,
@@ -307,8 +352,7 @@ def _offered(world: World, c: Connection, lender: str, borrower: str) -> list[An
 def _request_advance(world: World, c: Connection, intent: ActionIntent) -> Journal | None:
     amount, currency = _money(intent)
     lender = str(_param(intent, "from"))
-    if lender not in _pools(world, c):
-        raise Rejected("unknown_lender", f"{lender} is not a lending pool")
+    _advance_parties(world, c, lender, intent.actor_id, currency)
     wanted = _param(intent, "facility_id")
     offers = _offered(world, c, lender, intent.actor_id)
     if wanted is not None:
@@ -319,7 +363,12 @@ def _request_advance(world: World, c: Connection, intent: ActionIntent) -> Journ
     if wanted is not None and not offers:
         raise Rejected("amount_differs_from_offer")
     if offers:
-        return _disburse(world, c, offers[0].facility_id, intent)
+        facility_id = offers[0].facility_id
+        journal = _disburse(world, c, facility_id, intent)
+        for request in world.state.requests.values():  # an accepted request it answers
+            if request["facility_id"] == facility_id:
+                request["status"] = "disbursed"
+        return journal
     base = f"req:{intent.actor_id}:r{intent.round}"
     request_id, n = base, 1
     while request_id in world.state.requests:
@@ -347,6 +396,7 @@ def _request(world: World, intent: ActionIntent, *statuses: str) -> tuple[str, d
 
 def _accept(world: World, c: Connection, intent: ActionIntent) -> None:
     request_id, request = _request(world, intent, "open")
+    _advance_parties(world, c, intent.actor_id, request["borrower"], request["currency"])
     facility_id = _facility_id(request_id)
     _offer_advance(world, c, facility_id=facility_id, lender=intent.actor_id,
                    borrower=request["borrower"], amount=request["amount_minor"],
@@ -360,8 +410,7 @@ def _accept(world: World, c: Connection, intent: ActionIntent) -> None:
 def _offer(world: World, c: Connection, intent: ActionIntent) -> None:
     amount, currency = _money(intent)
     borrower = str(_param(intent, "to"))
-    if borrower not in world.actors or borrower == intent.actor_id:
-        raise Rejected("unknown_counterparty", f"{borrower} is not a borrower of this world")
+    _advance_parties(world, c, intent.actor_id, borrower, currency)
     facility_id = _facility_id(intent.intent_id)
     fee = _param(intent, "fee_bps")
     _offer_advance(world, c, facility_id=facility_id, lender=intent.actor_id, borrower=borrower,
@@ -378,9 +427,8 @@ def _disburse_request(world: World, c: Connection, intent: ActionIntent) -> Jour
     if (amount, currency) != (request["amount_minor"], request["currency"]):
         raise Rejected("amount_differs_from_facility")
     source = _param(intent, "from_account")
-    if source is not None and not str(source).startswith(f"{intent.actor_id}/"):
-        raise Rejected("not_own_account", f"{source} is not an account of {intent.actor_id}")
-    journal = _disburse(world, c, request["facility_id"], intent, source)
+    journal = _disburse(world, c, request["facility_id"], intent,
+                        None if source is None else str(source))
     request["status"] = "disbursed"
     return journal
 
@@ -398,9 +446,10 @@ def _release(world: World, c: Connection, intent: ActionIntent) -> None:
 
 
 def _pledge(world: World, c: Connection, intent: ActionIntent) -> None:
-    amount, _ = _money(intent)
-    world.store.pledge(world.operating(intent.actor_id), amount, f"pledge:{intent.intent_id}",
-                       conn=c)
+    amount, currency = _money(intent)
+    account = world.operating(intent.actor_id)
+    _cash_of(c, account, intent.actor_id, currency, "no_operating_account")
+    world.store.pledge(account, amount, f"pledge:{intent.intent_id}", conn=c)
 
 
 def _refuse(reason: str, binding: str) -> Callable[..., None]:
@@ -448,7 +497,7 @@ def deliver(world: World, conn: Connection) -> tuple[list[dict], list[Journal]]:
                          if f["flow_id"] == event["flow_id"]), None)
             if flow is None:
                 raise ValueError(f"scheduled event {event_id} delays no flow {event['flow_id']}")
-            store.reschedule(event["flow_id"], flow["expected_at"].replace(tzinfo=now.tzinfo)
+            store.reschedule(event["flow_id"], flow["expected_at"].replace(tzinfo=UTC)
                              + timedelta(hours=event["delay_h"]), conn=conn)
         elif kind == "message":
             _message(world, {"id": event["id"], "to": event["to"], "text": event["text"]})
