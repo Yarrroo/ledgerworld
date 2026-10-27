@@ -14,7 +14,7 @@ an upstream path is modified or deleted and not listed in the second table.
 | `NOTICE` | upstream and Apache-2.0 dependency notices |
 | `CLAUDE.md` | rules for coding agents working on this repo |
 | `pyproject.toml`, `uv.lock` | the root uv workspace (`backend`, `packages/oasis-finance`) and its lock |
-| `packages/oasis-finance/` | finance extensions of camel-oasis (empty package for now) |
+| `packages/oasis-finance/` | finance extensions of camel-oasis: the finance tool boundary (typed tools that queue C1 intents, scoped observations, one-repair guardrail) |
 | `checks/` | the merge gate and its checks |
 | `tests/test_skeleton.py` | tests of the merge gate and its checks |
 | `.github/workflows/ci.yml` | CI: merge gate, PostgreSQL tests |

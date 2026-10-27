@@ -7,14 +7,14 @@
   "keyword": "enum"
  },
  "instance": {
-  "leg_id": "2072516a1b79-1-advance",
-  "request_id": "2072516a1b79-1-advance",
+  "leg_id": "8a1b733f575b-1-advance",
+  "request_id": "8a1b733f575b-1-advance",
   "kind": "advance",
   "provider_id": "dep-0001",
   "state": "SETTLED",
   "receipt": {
    "provider_id": "dep-0001",
-   "request_id": "2072516a1b79-1-advance",
+   "request_id": "8a1b733f575b-1-advance",
    "kind": "advance",
    "status": "SETTLED",
    "amount": "10000.00",
