@@ -1,0 +1,227 @@
+{
+  "fixture": "lf1_treasury",
+  "about": "LF-1 (system brief 6): the treasury of borrower-a as a C5 snapshot plus the expected results. USD minor units; t in simulated hours from t0 (12 h is 2026-01-05T12:00Z). The expected block is the ledger design fixture lf1-treasury.json unchanged; fixtures/README.md does the arithmetic by hand.",
+  "t0": "2026-01-05T00:00:00Z",
+  "horizon_h": 72,
+  "snapshot": {
+    "snapshot_id": "lf1",
+    "as_of": "2026-01-05T00:00:00Z",
+    "entities": [
+      {
+        "entity_id": "borrower-a",
+        "name": "Northwind Parts (synthetic)",
+        "kind": "treasury",
+        "escalation": "treasury operator"
+      }
+    ],
+    "accounts": [
+      {
+        "id": "borrower-a/operating",
+        "entity": "borrower-a",
+        "currency": "USD",
+        "floor": {
+          "minor": 3000000,
+          "currency": "USD"
+        },
+        "observability": "known",
+        "as_of": "2026-01-05T00:00:00Z",
+        "buckets": {
+          "settled": {
+            "minor": 7000000,
+            "currency": "USD"
+          },
+          "reserved": {
+            "minor": 5000000,
+            "currency": "USD"
+          },
+          "pledged": {
+            "minor": 0,
+            "currency": "USD"
+          },
+          "pending_in": [
+            {
+              "flow_id": "rcv-1",
+              "amount": {
+                "minor": 2000000,
+                "currency": "USD"
+              },
+              "expected_at": "2026-01-05T12:00:00Z",
+              "kind": "receivable"
+            },
+            {
+              "flow_id": "wd-1",
+              "amount": {
+                "minor": 1500000,
+                "currency": "USD"
+              },
+              "expected_at": "2026-01-07T00:00:00Z",
+              "kind": "exchange withdrawal"
+            }
+          ],
+          "pending_out": []
+        }
+      }
+    ],
+    "obligations": [
+      {
+        "obligation_id": "payroll-1",
+        "entity": "borrower-a",
+        "account": "borrower-a/operating",
+        "amount": {
+          "minor": 5000000,
+          "currency": "USD"
+        },
+        "due_at": "2026-01-06T16:00:00Z",
+        "kind": "payroll",
+        "reservation_id": "res-payroll-1"
+      }
+    ],
+    "contracts": [],
+    "exposures": [
+      {
+        "exposure_id": "venue-1",
+        "venue": "exchange-venue",
+        "shared_with": [
+          "lender"
+        ],
+        "flow_id": "wd-1"
+      }
+    ],
+    "pools": []
+  },
+  "definitions": {
+    "S(t)": "settled - reserved - pledged - sum(all pending_out, whatever their due time) + sum(pending_in expected <= t); unknown and stale add nothing and set authority=reduced. A committed outflow is spoken for from the moment of commit.",
+    "P(t)": "settled + sum(pending_in expected <= t) - sum(pending_out due <= t) - sum(obligations due <= t, reserved or not); unknown and stale add nothing",
+    "feasible": "P(t) >= floor for every t in [now, horizon] and every obligation met at its due time",
+    "headroom(now)": "min over t in [now, horizon] of (P(t) - floor), floored at 0; a discretionary outflow clears only if amount <= S(now) and amount <= headroom(now)"
+  },
+  "expected": {
+    "no_shock": {
+      "S": {
+        "0": 2000000,
+        "12": 4000000,
+        "40": 4000000,
+        "48": 5500000,
+        "72": 5500000
+      },
+      "P": {
+        "0": 7000000,
+        "11": 7000000,
+        "12": 9000000,
+        "39": 9000000,
+        "40": 4000000,
+        "48": 5500000,
+        "72": 5500000
+      },
+      "min_P": {
+        "value": 4000000,
+        "at_h": 40
+      },
+      "headroom_0": 1000000,
+      "feasible": true,
+      "hand": "P(40) = 70,000 + 20,000 - 50,000 = 40,000 >= 30,000; the 15,000 withdrawal lands at 48, after the deadline, and is not counted"
+    },
+    "shock_receipt_delayed_240h": {
+      "P": {
+        "0": 7000000,
+        "12": 7000000,
+        "40": 2000000,
+        "48": 3500000
+      },
+      "min_P": {
+        "value": 2000000,
+        "at_h": 40
+      },
+      "feasible": false,
+      "breach": {
+        "at_h": 40,
+        "short_minor": 1000000,
+        "binding": "reserve floor 30,000.00 on borrower-a/operating"
+      },
+      "hand": "P(40) = 70,000 - 50,000 = 20,000 < 30,000: short 10,000"
+    },
+    "integrated_plan": {
+      "actions": [
+        {
+          "type": "request_advance",
+          "amount": 1000000,
+          "arrives_h": 16,
+          "deadline_h": 18
+        }
+      ],
+      "P": {
+        "16": 8000000,
+        "40": 3000000,
+        "48": 4500000
+      },
+      "min_P": {
+        "value": 3000000,
+        "at_h": 40
+      },
+      "feasible": true,
+      "hand": "P(40) = 70,000 + 10,000 - 50,000 = 30,000 = floor: kept, the floor holds when >="
+    },
+    "rejections": [
+      {
+        "id": "pay-80k",
+        "intent": {
+          "type": "pay",
+          "amount": 8000000,
+          "at_h": 0
+        },
+        "status": "rejected",
+        "reason": "insufficient_spendable",
+        "S_0": 2000000
+      },
+      {
+        "id": "pay-20k-breaks-floor",
+        "intent": {
+          "type": "pay",
+          "amount": 2000000,
+          "at_h": 0
+        },
+        "status": "rejected",
+        "reason": "breaks_floor",
+        "detail": "S(0) allows 20,000 but P(40) would be 20,000 < floor; headroom(0) = 10,000"
+      },
+      {
+        "id": "pay-10k-keeps-floor",
+        "intent": {
+          "type": "pay",
+          "amount": 1000000,
+          "at_h": 0
+        },
+        "status": "accepted",
+        "detail": "P(40) = 30,000 = floor"
+      },
+      {
+        "id": "double-pledge",
+        "intents": [
+          {
+            "type": "pledge",
+            "amount": 500000,
+            "collateral_ref": "borrower-a/operating#lot-1"
+          },
+          {
+            "type": "pledge",
+            "amount": 500000,
+            "collateral_ref": "borrower-a/operating#lot-1"
+          }
+        ],
+        "status": [
+          "accepted",
+          "rejected"
+        ],
+        "reason": "already_pledged"
+      },
+      {
+        "id": "inaction-keeps-obligation",
+        "intent": {
+          "type": "no_action",
+          "rounds": 18
+        },
+        "expect": "payroll-1 still open until t=40, then settled from the reservation; it is never removed by inaction"
+      }
+    ]
+  }
+}
