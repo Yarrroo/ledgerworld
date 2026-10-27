@@ -41,7 +41,10 @@ const routes = [
     name: 'Interaction',
     component: InteractionView,
     props: true
-  }
+  },
+  { path: '/overview', name: 'Overview', component: () => import('../views/Overview.vue') },
+  { path: '/treasury', name: 'Treasury', component: () => import('../views/Treasury.vue') },
+  { path: '/lending', name: 'Lending', component: () => import('../views/Lending.vue') }
 ]
 
 const router = createRouter({

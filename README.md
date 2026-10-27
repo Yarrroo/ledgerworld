@@ -11,7 +11,7 @@ Built on [MiroFish](https://github.com/666ghj/MiroFish) (AGPL-3.0); see `UPSTREA
 
 ## Setup
 
-Requirements: Python 3.12 and [uv](https://docs.astral.sh/uv/); Node 18+ for the frontend.
+Requirements: Python 3.12 and [uv](https://docs.astral.sh/uv/); Node 20+ for the frontend.
 
 ```bash
 uv sync                      # backend, packages/oasis-finance and dev tools
@@ -23,7 +23,8 @@ The merge gate runs fully offline: no real provider, model or hosted graph memor
 Tests marked `live` or `pg` are skipped by default; `uv run pytest -m pg` runs the PostgreSQL
 tests against `LEDGER_DATABASE_URL`.
 
-Frontend: `npm --prefix frontend install && npm --prefix frontend run dev`.
+Frontend: `npm --prefix frontend install && npm --prefix frontend run dev`; the observed-state
+screens are `/overview`, `/treasury` and `/lending`. Unit tests: `npm --prefix frontend run test:unit`.
 Backend: `cd backend && uv run python run.py`.
 
 ## Licence
