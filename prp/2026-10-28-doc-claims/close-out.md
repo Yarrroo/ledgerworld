@@ -19,3 +19,11 @@ receipt is committed" is left as is: it is still true until a live receipt is co
 **Guard:** `checks/tests/test_doc_claims.py` fails if a retired claim reappears in any of the
 three docs, or if a doc stops naming `find_deposit`/`wait_for_deposit` or either method leaves
 the client.
+
+**Verification:** `uv run pytest -q checks/tests/test_doc_claims.py checks/tests/test_submission.py`
+80 passed (7 failed before the doc fix); ruff, `checks/no_secrets.py`, `checks/attribution.py` clean.
+The full `bash checks/merge.sh` runs on the landing train, not in this slot. Repo-wide grep finds no
+other copy of the retired claim.
+
+**Not done here:** board item 116 (commit a live sandbox receipt) is parked: this run had no
+Airwallex sandbox credentials, and a receipt cannot be produced without a real run.
