@@ -441,11 +441,11 @@ class Outbox:
         return False
 
     def _start(self, leg: Leg, provider: Provider) -> bool:
-        by_index = {other.index: other.state for other in self.legs(leg.approval_id)}
+        by_index = {other.index: other for other in self.legs(leg.approval_id)}
         waits_for = [by_index[i] for i in leg.after]
-        if "failed" in waits_for:
+        if any(other.state == "failed" for other in waits_for):
             return self._move(leg, "failed", "dependency_failed")
-        if any(s != "settled" for s in waits_for):
+        if any(other.state != "settled" or not other.reconciled for other in waits_for):
             return False
         if leg.ledger_only:
             return self._move(leg, "settled", "ledger_only", journal=True, reconciled=True)

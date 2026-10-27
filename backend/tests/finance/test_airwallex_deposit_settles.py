@@ -334,3 +334,66 @@ def test_a_funding_wait_failure_keeps_every_accepted_setup_deposit(monkeypatch):
                     beneficiary="ben-payroll-1", connected_account=None, into=into)
     assert [entry["provider_id"] for entry in into["setup"]] == calls
     assert len(calls) == 2
+
+
+def test_reversed_funding_blocks_a_dependent_payout_after_a_crash():
+    from test_gateway import OBSERVED, Crash
+
+    world = World(leg_mode="B", armed={("after_journal_before_reconciled_flag", 1)})
+    approval = bind_terms(BASE)
+    world.gateway.record(approval)
+    with pytest.raises(Crash):
+        world.gateway.execute(approval.model_dump(mode="json"), current_snapshot_id=OBSERVED)
+    advance = world.legs()[0]
+    world.fake.objects["deposits"][advance.provider_id]["status"] = "REVERSED"
+    world.restart()
+    world.gateway.run(BASE["approval_id"])
+    advance, payout = world.legs()
+    assert not advance.reconciled
+    assert payout.state == "pending" and payout.provider_id is None
+    assert len(world.journals(advance.leg_id)) == 1
+    assert not world.posts(payout.request_id)
+
+
+@pytest.mark.parametrize("refused", [False, True])
+def test_a_setup_create_failure_keeps_a_run_bound_attempt(monkeypatch, refused):
+    from app.decisions import candidates
+    from app.demo import run
+
+    fake = FakeTransport()
+    fake.balances[PLATFORM]["USD"] = 0
+    client = client_for(fake)
+    create = client.simulate_deposit
+
+    def lose_answer(**terms):
+        if refused:
+            raise ProviderError("invalid_argument", 400)
+        create(**terms)
+        raise OutcomeUnknown(None, "timeout after send")
+
+    monkeypatch.setattr(client, "simulate_deposit", lose_answer)
+    monkeypatch.setattr(candidates, "plan_for_now", lambda *a, **k: {"legs": [
+        {"kind": "payout", "amount": {"minor": 100, "currency": "USD"}}]})
+    into = {}
+    with pytest.raises(ProviderError if refused else OutcomeUnknown):
+        run.execute("integrated", "sandbox", client=client, leg_mode="B", run_id="lost-funding",
+                    beneficiary="ben-payroll-1", connected_account=None, into=into)
+    assert len(into["setup"]) == 1
+    assert len(fake.objects["deposits"]) == (0 if refused else 1)
+    entry = into["setup"][0]
+    assert entry["provider_id"] is None
+    assert entry["status"] == ("FAILED" if refused else "UNKNOWN")
+    assert "lost-funding" in entry["reference"] and "USD" in entry["reference"]
+
+
+@pytest.mark.parametrize("status,different", [("SETTLED", False), ("FAILED", True)])
+def test_contract_diff_checks_valid_initial_deposit_statuses(status, different):
+    from copy import copy
+    from dataclasses import replace
+
+    fake = check.ContractPass(client_for(FakeTransport()), "status", "ben-payroll-1").run()
+    assert fake.ok
+    sandbox = copy(fake)
+    sandbox.checks = [replace(c, shape=replace(c.shape, status=status))
+                      if c.name == "advance" else c for c in fake.checks]
+    assert bool(check.diff(sandbox, fake)[0]) is different

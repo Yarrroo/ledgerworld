@@ -410,7 +410,10 @@ def diff(sandbox: ContractPass, fake: ContractPass) -> tuple[list[str], list[str
         if real.http != double.http:
             failing.append(f"{check.name}: http sandbox {real.http}, fake {double.http}")
         # A status only one side carries is a key difference, reported below.
-        if None not in (real.status, double.status) and real.status != double.status:
+        initial_deposit = (check.name == "advance" and sandbox.mode == fake.mode == "B"
+                           and {real.status, double.status} <= {"PENDING", "SETTLED"})
+        if None not in (real.status, double.status) and real.status != double.status \
+                and not initial_deposit:
             failing.append(f"{check.name}: status sandbox {real.status}, fake {double.status}")
         if invented := sorted(double.keys - real.keys):
             failing.append(f"{check.name}: only the fake returns {', '.join(invented)}")
