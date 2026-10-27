@@ -54,9 +54,10 @@ def h(hours: float) -> datetime:
     return T0 + timedelta(hours=hours)
 
 
-def world(snapshot: dict | None = None, borrower_cash: int = 0) -> LedgerStore:
+def world(snapshot: dict | None = None, borrower_cash: int = 0,
+          url: str = "sqlite://") -> LedgerStore:
     """LF-2 loaded from its snapshot, plus the borrowers' operating accounts it lends to."""
-    store = LedgerStore("sqlite://")
+    store = LedgerStore(url)
     from_snapshot(store, snapshot or lf2()["snapshot"])
     for borrower in ("borrower-a", "borrower-b"):
         account = f"{borrower}/operating"

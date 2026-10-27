@@ -39,11 +39,14 @@
   the overview API are later tasks. `check_outflow`, `settle_due` and `AccountView` are their
   entry points.
 - Concurrent writers on PostgreSQL: fixed after review (finding F3). Every free-funds check
-  locks the account row (`FOR NO KEY UPDATE`, id order) under a pinned READ COMMITTED, and
-  `pay` and the lending payments lock their accounts before the view they check;
-  `test_two_connections_never_claim_more_than_settled` is the two-connection regression.
-  `max(seq)+1` is still unlocked: two journals on disjoint accounts committing at once collide
-  on the unique `seq` and one fails with an integrity error, which moves no money.
+  locks the cash account's row (`FOR NO KEY UPDATE`, id order) under a pinned READ COMMITTED;
+  `pay` and the lending payments lock their accounts, and lending its facility row, before the
+  checks they rely on; commit, release and settlement are guarded UPDATEs. The `pg` tests named
+  `test_two_connections_*` are the two-connection regressions. Still open: K_p is a pool-wide
+  total, so two disbursals from different cash accounts of one pool (or a pay from another pool
+  account) are not serialized against it; `max(seq)+1` makes two concurrent journals collide on
+  the unique `seq` (one fails, nothing moves); and a transaction that locks in several steps
+  (`settle_due`) can deadlock with another, which PostgreSQL aborts.
 - A negative hold, pledge or outflow amount is refused as `zero_amount`. The closed code set has
   no separate code for it.
 - Kinds and purposes are cut to the 32-character columns of the design schema; `schemas.Kind`

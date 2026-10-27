@@ -140,12 +140,17 @@ def check_draw(store: LedgerStore, pool: str, amount_minor: int, now: datetime,
 
 # ----------------------------------------------------------------------------- disbursal
 
-def _cash_of(c: Connection, account_id: str, entity: str, currency: str) -> None:
-    """Money moves only from and to an entity's own cash account in the facility's currency."""
-    row = c.execute(select(accounts.c.entity_id, accounts.c.currency, accounts.c.kind)
-                    .where(accounts.c.account_id == account_id)).first()
-    if row is None or tuple(row) != (entity, currency, "cash"):
-        raise ValueError(f"{account_id} is not a {currency} cash account of {entity}")
+def _lock_cash(store: LedgerStore, c: Connection, currency: str,
+               *owned: tuple[str, str]) -> None:
+    """Lock the (account, entity) pairs money moves between, before any check reads them.
+
+    Money moves only from and to an entity's own cash account in the facility's currency.
+    """
+    rows = store.lock(*(account_id for account_id, _ in owned), conn=c)
+    for account_id, entity in owned:
+        row = rows.get(account_id)
+        if row is None or (row.entity_id, row.currency) != (entity, currency):
+            raise ValueError(f"{account_id} is not a {currency} cash account of {entity}")
 
 
 def _payable_from(store: LedgerStore, c: Connection, account_id: str, amount: int,
@@ -182,13 +187,11 @@ def disburse(store: LedgerStore, facility_id: str, *, now: datetime,
     open at principal + fee.
     """
     with store.transaction(conn) as c:
-        f = facility(store, facility_id, conn=c)
+        f = facility(store, facility_id, conn=c, lock=True)
         _kind(f, "revenue_advance", "offered")
         source = from_account or f"{f.pool}/operating"
         payee = borrower_account or f"{f.borrower}/operating"
-        _cash_of(c, source, f.pool, f.currency)
-        _cash_of(c, payee, f.borrower, f.currency)
-        store.lock(source, payee, conn=c)
+        _lock_cash(store, c, f.currency, (source, f.pool), (payee, f.borrower))
         refusal = (check_draw(store, f.pool, f.limit_minor, now, horizon, conn=c)
                    or check_outflow(store.view(source, conn=c), f.limit_minor, now, horizon))
         if refusal is not None:
@@ -223,7 +226,7 @@ def draw_line(store: LedgerStore, facility_id: str, amount_minor: int, *, now: d
     """
     amount = minor_amount(amount_minor, positive=True)
     with store.transaction(conn) as c:
-        f = facility(store, facility_id, conn=c)
+        f = facility(store, facility_id, conn=c, lock=True)
         _kind(f, "committed_line", "active")
         undrawn = f.limit_minor - outstanding_minor(store, f, conn=c)
         if amount > undrawn:
@@ -235,9 +238,7 @@ def draw_line(store: LedgerStore, facility_id: str, amount_minor: int, *, now: d
             reservations.c.state == "held")).first() if f.reservation_id else None
         source = held.account_id if held is not None else f"{f.pool}/operating"
         payee = borrower_account or f"{f.borrower}/operating"
-        _cash_of(c, source, f.pool, f.currency)
-        _cash_of(c, payee, f.borrower, f.currency)
-        store.lock(source, payee, conn=c)
+        _lock_cash(store, c, f.currency, (source, f.pool), (payee, f.borrower))
         if held is not None:
             store.release(held.reservation_id, conn=c)
         _payable_from(store, c, source, amount, now)  # the released hold is free again
@@ -310,7 +311,7 @@ def repay(store: LedgerStore, facility_id: str, period_end: datetime, *, now: da
     outstanding. No observation, no repayment; a period is repaid at most once, which its
     journal id (`repay_journal_id`, never the caller's) enforces."""
     with store.transaction(conn) as c:
-        f = facility(store, facility_id, conn=c)
+        f = facility(store, facility_id, conn=c, lock=True)
         _kind(f, "revenue_advance", "active", "repaid")
         journal_id = repay_journal_id(f.facility_id, period_end)
         if c.execute(select(journals.c.journal_id)
@@ -324,9 +325,7 @@ def repay(store: LedgerStore, facility_id: str, period_end: datetime, *, now: da
             return Repayment(f.facility_id, period_end, revenue, 0, owed, None)
         payer = from_account or f"{f.borrower}/operating"
         payee = to_account or f"{f.pool}/operating"
-        _cash_of(c, payer, f.borrower, f.currency)
-        _cash_of(c, payee, f.pool, f.currency)
-        store.lock(payer, payee, conn=c)
+        _lock_cash(store, c, f.currency, (payer, f.borrower), (payee, f.pool))
         _payable_from(store, c, payer, amount, now)
         journal = store.apply(Journal(
             journal_id=journal_id, kind="advance_repayment", round=round, sim_time=now,

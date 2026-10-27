@@ -8,15 +8,21 @@ from __future__ import annotations
 import os
 import threading
 import time
+from collections.abc import Callable
+from datetime import datetime, timedelta
 
 import pytest
+from app.finance import contracts
 from app.finance.ledger import pay
+from app.finance.lending import disburse, draw_line, observe_revenue, repay
 from app.finance.models import Journal, LedgerRefusal, Posting, metadata
 from app.finance.store import LedgerStore
-from sqlalchemy import create_engine, text
+from sqlalchemy import Connection, create_engine, make_url, text
 from test_fixtures import assert_paths, lf1
 from test_fixtures import world as lf1_world
 from test_ledger import T0, design, run_case, run_path
+from test_lending import unheld_line
+from test_lending import world as lending_world
 
 pytestmark = pytest.mark.pg
 
@@ -46,7 +52,56 @@ def test_lf1_on_postgres(url):
     assert_paths(lf1_world(url), lf1()["expected"]["no_shock"])
 
 
-# ------------------------------------------------------------------- concurrent fund claims
+# ------------------------------------------------------------------------- concurrent writers
+#
+# Each race runs claim A inside an open transaction on one connection, then claim B on a second
+# connection, and commits A only once B has either finished or is blocked on a lock A holds.
+# Unserialized, B reads what A has not committed yet and acts on it; serialized, B waits and
+# then reads A's committed write.
+
+Claim = Callable[[LedgerStore, str, Connection | None], object]
+
+
+def race(url: str, first: Claim, second: Claim) -> dict[str, str]:
+    """{"a": outcome, "b": outcome}: "committed", a refusal code, or the escaped error's name."""
+    b_url = make_url(url).update_query_dict({"application_name": "race-b"})
+    stores = {"a": LedgerStore(url),
+              "b": LedgerStore(b_url.render_as_string(hide_password=False))}
+    probe = create_engine(url)
+    outcome: dict[str, str] = {}
+
+    def run(name: str, claim: Claim, conn: Connection | None) -> None:
+        try:
+            claim(stores[name], name, conn)
+            outcome[name] = "committed"
+        except LedgerRefusal as refusal:
+            outcome[name] = refusal.code
+        except Exception as exc:  # noqa: BLE001 - the outcome names what escaped
+            outcome[name] = type(exc).__name__
+
+    def b_waits_on_a_lock() -> bool:
+        with probe.connect() as c:
+            return bool(c.execute(text(
+                "SELECT count(*) FROM pg_stat_activity"
+                " WHERE application_name = 'race-b' AND wait_event_type = 'Lock'")).scalar())
+
+    try:
+        with stores["a"].engine.connect() as conn, conn.begin():
+            run("a", first, conn)
+            b = threading.Thread(target=run, args=("b", second, None))
+            b.start()
+            deadline = time.monotonic() + 20
+            while b.is_alive() and not b_waits_on_a_lock():
+                assert time.monotonic() < deadline, "claim B neither finished nor blocked"
+                time.sleep(0.02)
+        b.join(30)
+    finally:
+        probe.dispose()
+        for store in stores.values():
+            store.engine.dispose()
+    assert set(outcome) == {"a", "b"}, outcome
+    return outcome
+
 
 def funded(url: str) -> LedgerStore:
     """One known cash account holding 1,000 settled, paid in from an opening account."""
@@ -60,77 +115,73 @@ def funded(url: str) -> LedgerStore:
     return store
 
 
-CLAIMS = {
-    "hold": lambda s, n: s.hold("a/cash", 700, now=T0, reservation_id=f"res-{n}"),
-    "pledge": lambda s, n: s.pledge("a/cash", 700, f"collateral-{n}", pledge_id=f"pledge-{n}"),
-    "pay": lambda s, n: pay(s, "a/cash", 700, to_account="a/payee", now=T0,
-                            journal_id=f"pay-{n}"),
+CLAIMS: dict[str, Claim] = {
+    "hold": lambda s, n, c: s.hold("a/cash", 700, now=T0, reservation_id=f"res-{n}", conn=c),
+    "pledge": lambda s, n, c: s.pledge("a/cash", 700, f"collateral-{n}", pledge_id=f"pledge-{n}",
+                                       conn=c),
+    "pay": lambda s, n, c: pay(s, "a/cash", 700, to_account="a/payee", now=T0,
+                               journal_id=f"pay-{n}", conn=c),
 }
 
 
 @pytest.mark.parametrize("first,second", [("hold", "hold"), ("pledge", "hold"),
-                                          ("pay", "pay"), ("pay", "hold")])
+                                          ("hold", "pledge"), ("pay", "pay"), ("hold", "pay")])
 def test_two_connections_never_claim_more_than_settled(url, first, second):
-    """Two 700 claims on 1,000 settled, from two connections with distinct ids: one commits.
+    """Two 700 claims on 1,000 settled, with distinct ids: one commits, one is refused by name."""
+    store = funded(url)
+    outcome = race(url, CLAIMS[first], CLAIMS[second])
+    assert outcome["a"] == "committed"
+    assert outcome["b"] in ("reserved_exceeds_settled", "pledge_exceeds_free",
+                            "insufficient_spendable"), outcome
+    assert store.view("a/cash").free_minor == 300
 
-    Every read of an account's funds is a rendezvous: a claim that has read waits until the
-    other has read as often, has finished, or is blocked on a lock. Unserialized, both read
-    1,000 and both commit (a hold or pledge), or the second dies on a raw integrity error (a
-    payment); serialized, the second reads after the first commits and is refused by name.
-    """
-    funded(url)
-    stores = {"a": LedgerStore(url), "b": LedgerStore(url)}
-    reads = {name: 0 for name in stores}
-    done = {name: threading.Event() for name in stores}
-    probe = create_engine(url)
 
-    def someone_waits_on_a_lock() -> bool:
-        with probe.connect() as c:
-            return bool(c.execute(text(
-                "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'"
-                " AND datname = current_database()")).scalar())
+def test_two_connections_settle_one_flow_once(url):
+    store = funded(url)
+    store.hold("a/cash", 400, now=T0, reservation_id="res")
+    flow = store.commit("res", due_at=T0)
 
-    def rendezvous(name: str, method: str) -> None:
-        inner, other = getattr(stores[name], method), "b" if name == "a" else "a"
+    def settle(s: LedgerStore, n: str, c: Connection | None) -> None:
+        s.settle_flow(flow, counterparty="a/payee", at=T0, journal_id=f"settle-{n}", conn=c)
 
-        def wrapped(*args, **kwargs):
-            got = inner(*args, **kwargs)
-            reads[name] += 1
-            deadline = time.monotonic() + 20
-            while (reads[other] < reads[name] and not done[other].is_set()
-                   and not someone_waits_on_a_lock()):
-                assert time.monotonic() < deadline, f"claim {other} neither read nor blocked"
-                time.sleep(0.02)
-            return got
-        setattr(stores[name], method, wrapped)
+    assert race(url, settle, settle) == {"a": "committed", "b": "ValueError"}
+    assert store.view("a/cash").settled_minor == 600
 
-    outcome: dict[str, str] = {}
 
-    def claim(name: str, kind: str) -> None:
-        try:
-            CLAIMS[kind](stores[name], name)
-            outcome[name] = "committed"
-        except LedgerRefusal as refusal:
-            outcome[name] = refusal.code
-        except Exception as exc:  # noqa: BLE001 - the outcome names what escaped
-            outcome[name] = type(exc).__name__
-        finally:
-            done[name].set()
+def test_two_connections_disburse_one_advance_once(url):
+    store = lending_world(url=url)
 
-    for name in stores:
-        rendezvous(name, "view")
-        rendezvous(name, "_free")
-    threads = [threading.Thread(target=claim, args=(name, kind))
-               for name, kind in (("a", first), ("b", second))]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(60)
-    probe.dispose()
+    def disbursal(s: LedgerStore, n: str, c: Connection | None) -> None:
+        disburse(s, "adv-a", now=T0, journal_id=f"disburse-{n}", conn=c)
 
-    assert sorted(outcome.values()).count("committed") == 1, outcome
-    refused = next(v for v in outcome.values() if v != "committed")
-    assert refused in ("reserved_exceeds_settled", "pledge_exceeds_free",
-                       "insufficient_spendable"), outcome
-    view = LedgerStore(url).view("a/cash")
-    assert view.settled_minor - view.reserved_minor - view.pledged_minor == 300
+    assert race(url, disbursal, disbursal) == {"a": "committed", "b": "ValueError"}
+    adv = contracts.facility(store, "adv-a")
+    assert contracts.outstanding_minor(store, adv) == adv.owed_minor
+
+
+def test_two_connections_never_draw_a_line_past_its_limit(url):
+    store = lending_world(unheld_line(), url=url)
+
+    def draw(s: LedgerStore, n: str, c: Connection | None) -> None:
+        draw_line(s, "line-b", 600000, now=T0, journal_id=f"draw-{n}", conn=c)
+
+    assert race(url, draw, draw) == {"a": "committed", "b": "beyond_capacity"}
+    line = contracts.facility(store, "line-b")
+    assert contracts.outstanding_minor(store, line) == 600000
+
+
+def test_two_connections_never_repay_more_than_is_owed(url):
+    store = lending_world(borrower_cash=10000000, url=url)
+    disburse(store, "adv-a", now=T0)
+    week_1, week_2 = T0 + timedelta(days=7), T0 + timedelta(days=14)
+    for end in (week_1, week_2):  # each period's share alone would repay the whole advance
+        observe_revenue(store, "adv-a", end, 100000000, observed_at=end, source="sales ledger")
+    store.observe("borrower-a/operating", "known", week_2)
+
+    def repayment(end: datetime) -> Claim:
+        return lambda s, n, c: repay(s, "adv-a", end, now=week_2, conn=c)
+
+    assert race(url, repayment(week_1), repayment(week_2)) == {"a": "committed",
+                                                               "b": "committed"}
+    adv = contracts.facility(store, "adv-a")
+    assert (adv.state, contracts.outstanding_minor(store, adv)) == ("repaid", 0)

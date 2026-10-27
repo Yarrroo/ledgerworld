@@ -206,10 +206,13 @@ def _facility(row: Any) -> Facility:
         receivable_account=row.receivable_account)
 
 
-def facility(store: LedgerStore, facility_id: str, conn: Connection | None = None) -> Facility:
+def facility(store: LedgerStore, facility_id: str, conn: Connection | None = None,
+             lock: bool = False) -> Facility:
+    """One facility; `lock` holds its row until `conn`'s transaction ends, so a writer reads its
+    state, outstanding and undrawn only after a concurrent writer of the same facility commits."""
+    query = select(facilities).where(facilities.c.facility_id == facility_id)
     with store.reading(conn) as c:
-        row = c.execute(select(facilities)
-                        .where(facilities.c.facility_id == facility_id)).first()
+        row = c.execute(query.with_for_update(key_share=True) if lock else query).first()
     if row is None:
         raise LookupError(f"no facility {facility_id}")
     return _facility(row)
