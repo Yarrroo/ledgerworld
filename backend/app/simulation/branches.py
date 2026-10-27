@@ -5,8 +5,8 @@
 memory records, both clocks, the RNG, the scheduled-event cursor, the pending C2 deliveries, the
 (empty) intent queue and the transcript calls, plus the branch's graph-memory snapshot when it
 has one. All of it is copied, so a parent that runs or remembers on cannot change a checkpoint.
-The RNG is OASIS's module-global one: a fork sets it from the checkpoint, and a parent that goes
-on after a fork has run draws from where the fork left it.
+The RNG is the world's own: a fork sets its own from the checkpoint, so neither the parent nor a
+sibling draws differently for it, whatever order the branches run in.
 
 ``fork(checkpoint, branch_id, model=...)`` builds a new ``World``: every ``FinanceAgent`` is
 rebuilt from its persona (camel's ``ChatAgent.clone()`` would return a plain agent without the

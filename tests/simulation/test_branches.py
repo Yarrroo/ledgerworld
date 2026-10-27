@@ -17,6 +17,7 @@ import copy
 import dataclasses
 import hashlib
 import json
+import random
 import re
 import sqlite3
 from pathlib import Path
@@ -268,11 +269,7 @@ def test_checkpoint_continuation(played):
 def test_parent_unchanged(played):
     assert "byte-identical to the checkpoint" in EXPECT["parent_unchanged"]
     before, after = played["parent_before"], played["parent_after"]
-    # The RNG is OASIS's module-global one, which every world in the process draws from; it is
-    # a checkpoint component, not a per-world one, so a parent going on restores it itself.
-    rng = "RNG state"
-    assert {k: v for k, v in after["fingerprint"].items() if k != rng} == \
-        {k: v for k, v in before["fingerprint"].items() if k != rng}
+    assert after["fingerprint"] == before["fingerprint"]  # its RNG included: each world owns one
     for component in ("ledger", "sqlite_file", "memory"):
         assert after[component] == before[component], component
     assert after["ledger"] == played["cp"].ledger_digest
@@ -629,3 +626,71 @@ def test_a_failed_replay_can_be_retried_in_the_same_workdir(played, tmp_path):
         return journal_bytes(branch.world)
 
     assert asyncio.run(go()) == played["integrated"]["journals"]
+
+
+# ----------------------------------------------- correction: each world draws from its own RNG
+
+# More posts than OASIS recommends to a user (2), so every round's recommendations are drawn.
+FEED = [{"round": 1, "kind": "public_post", "post_id": f"p-r1-{n}", "author": "feed",
+         "text": f"Market note {n}."} for n in range(1, 4)]
+
+
+def drawn(world) -> tuple[list[tuple], str]:
+    """What a world's random stream decided: its recommendations, and where the stream is."""
+    rec = world.platform.db.execute("SELECT user_id, post_id FROM rec").fetchall()
+    return rec, world.fingerprint()["RNG state"]
+
+
+def test_a_late_fork_does_not_move_the_parents_random_stream(tmp_path):
+    """A parent that went on past its checkpoint draws on from where it was: a fork of the
+    earlier checkpoint leaves its stream alone, and its next round recommends what a parent
+    that was never forked recommends."""
+    async def go():
+        (tmp_path / "control").mkdir()
+        control, _ = await small_parent(tmp_path / "control", scenario=FEED)
+        await control.run(2)
+        unforked = drawn(control)
+        await control.close()
+        parent, cp = await small_parent(tmp_path, scenario=FEED)
+        await parent.run(1)
+        before = parent.fingerprint()
+        (tmp_path / "late").mkdir()
+        late = await fork(cp, "late", model=idle_model(), workdir=tmp_path / "late")
+        after = parent.fingerprint()
+        await parent.run(1)
+        forked = drawn(parent)
+        await late.world.close()
+        await parent.close()
+        return unforked, before, after, forked
+
+    unforked, before, after, forked = asyncio.run(go())
+    assert after == before
+    assert unforked[0], "the round drew recommendations"
+    assert forked == unforked
+
+
+@pytest.mark.parametrize("order", ["aabb", "bbaa", "abba"])
+def test_siblings_draw_alike_whatever_order_they_run_in(tmp_path, order):
+    """Two siblings with one plan, forked from one checkpoint, draw the same recommendations
+    round by round however their rounds interleave; the process-global RNG is not drawn."""
+    async def go():
+        parent, cp = await small_parent(tmp_path, scenario=FEED)
+        siblings = {}
+        for b in "ab":
+            (tmp_path / b).mkdir()
+            siblings[b] = await fork(cp, b, model=idle_model(), workdir=tmp_path / b)
+        process = random.getstate()
+        seen: dict[str, list] = {"a": [], "b": []}
+        for b in order:
+            await siblings[b].world.run(1)
+            seen[b].append(drawn(siblings[b].world))
+        untouched = random.getstate() == process
+        for sibling in siblings.values():
+            await sibling.world.close()
+        await parent.close()
+        return seen, untouched
+
+    seen, untouched = asyncio.run(go())
+    assert all(rec for rec, _ in seen["a"]), "every round drew recommendations"
+    assert seen["a"] == seen["b"]
+    assert untouched
