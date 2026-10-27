@@ -67,7 +67,8 @@ def build(text: str) -> list[dict]:
             "subtitle": one_line(voice).strip("“”\""),
             "note": NOTES.get(shot[5], ""),
         })
-    assert tuple(b["beat"] for b in beats) == BEATS
+    if tuple(b["beat"] for b in beats) != BEATS:
+        raise ValueError(f"the beats are not {', '.join(BEATS)}")
     return beats
 
 

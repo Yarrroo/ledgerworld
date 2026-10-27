@@ -62,13 +62,25 @@ async function caption (page: Page, beat: Beat): Promise<void> {
 
 /** Scroll from one fraction of the page to another, evenly over the time left in the beat. */
 async function hold (page: Page, until: number, now: () => number, from: number, to: number): Promise<void> {
-  const steps = Math.max(1, Math.floor(until - now()))
+  const steps = Math.max(1, Math.ceil(until - now()))
   for (let i = 1; i <= steps && now() < until; i++) {
     const at = from + (to - from) * i / steps
     await page.evaluate((f) => window.scrollTo({ top: f * (document.documentElement.scrollHeight - innerHeight) }), at)
       .catch(() => {})
     await page.waitForTimeout(Math.max(0, Math.min(1000, (until - now()) * 1000)))
   }
+}
+
+/** Each beat's place in the run of consecutive beats on its route: [index, length]. */
+function runs (beats: Beat[]): [number, number][] {
+  const out: [number, number][] = []
+  for (let i = 0; i < beats.length;) {
+    let j = i
+    while (j < beats.length && beats[j].route === beats[i].route) j++
+    for (let k = i; k < j; k++) out.push([k - i, j - i])
+    i = j
+  }
+  return out
 }
 
 test('walkthrough rehearsal: seven timed beats, captioned and recorded', async ({ page }) => {
@@ -81,13 +93,21 @@ test('walkthrough rehearsal: seven timed beats, captioned and recorded', async (
     return route.abort('blockedbyclient')
   })
 
+  // the prepared demonstration run, as Overview names it: the other screens open on it, as the
+  // judge path's clicks do; without one they open bare and the screen's own error marks them unreached
+  let run: string | null = null
+  page.on('response', async (r) => {
+    if (new URL(r.url()).pathname !== '/api/v1/overview' || !r.ok()) return
+    run = (await r.json().catch(() => null))?.demo?.run_id ?? run
+  })
+
   const results: Result[] = []
   const started = performance.now()
   const now = (): number => (performance.now() - started) / 1000
+  const places = runs(BEATS)
   let shown = ''
   for (const [i, beat] of BEATS.entries()) {
-    const shared = BEATS.filter((b) => b.route === beat.route && Math.abs(BEATS.indexOf(b) - i) <= 1)
-    const part = shared.length > 1 ? shared.indexOf(beat) / shared.length : 0
+    const [k, n] = places[i]
     const result: Result = {
       beat: beat.beat, route: beat.route, planned_start: beat.start, planned_end: beat.end,
       ready: null, left: 0, reached: false, error: ''
@@ -95,18 +115,22 @@ test('walkthrough rehearsal: seven timed beats, captioned and recorded', async (
     try {
       if (beat.route !== shown) {
         shown = ''
-        await page.goto(beat.route, { timeout: 30_000 })
+        const query = run && beat.route !== '/overview' ? `?run_id=${encodeURIComponent(run)}` : ''
+        await page.goto(beat.route + query, { timeout: 30_000 })
         shown = beat.route
       }
       await expect(page.locator('h1')).toBeVisible({ timeout: 30_000 })
       await expect(page.locator('main.lw-main')).toHaveAttribute('aria-busy', 'false', { timeout: 30_000 })
+      // loaded means the screen's reading arrived: a source label and no load error
+      await expect(page.locator('[data-test="error"]'), 'the screen shows a load error').toHaveCount(0)
+      await expect(page.locator('[data-test="source"]').first()).not.toBeEmpty({ timeout: 5_000 })
       result.reached = true
     } catch (error) {
       result.error = String((error as Error).message ?? error).split('\n')[0]
     }
     result.ready = result.reached ? now() : null
     await caption(page, beat).catch(() => {})
-    await hold(page, beat.end, now, part, part + 1 / Math.max(1, shared.length))
+    await hold(page, beat.end, now, k / n, (k + 1) / n)
     result.left = now()
     results.push(result)
     writeFileSync(join(OUT, 'beats.json'), JSON.stringify({ writes, beats: results }, null, 2))

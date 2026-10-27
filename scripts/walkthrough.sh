@@ -36,7 +36,11 @@ fail() { echo "walkthrough: $1; output kept in $out" >&2; exit 1; }
 table() {
   node -e '
     const fs = require("fs"), [plan, beats] = process.argv.slice(1)
-    const t = (s) => s == null ? "  -  " : `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, "0")}`
+    const t = (s) => {
+      if (s == null) return "  -  "
+      const d = Math.round(s * 10)  // tenths, rounded once, so 59.96 reads 1:00.0, never 0:60.0
+      return `${Math.floor(d / 600)}:${((d % 600) / 10).toFixed(1).padStart(4, "0")}`
+    }
     const done = fs.existsSync(beats) ? JSON.parse(fs.readFileSync(beats, "utf-8")).beats : []
     console.log("beat     route         planned        ready    left     over   reached")
     for (const b of JSON.parse(fs.readFileSync(plan, "utf-8")).beats) {
