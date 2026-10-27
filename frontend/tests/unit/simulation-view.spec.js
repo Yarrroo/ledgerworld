@@ -35,28 +35,35 @@ const GraphStub = defineComponent({
   }
 })
 
-/** An intent of the fixture's chain: each cites the step before it (post → request → disbursal). */
-function intent (id, round, actor, evidence) {
+/** An intent of the fixture's chain, citing what its actor saw (a post, then a request). */
+function intent (id, round, actor, evidence, type = actor === 'lender' ? 'disburse' : 'request_advance') {
   return {
-    intent_id: id, branch_id: ctx.branch_id, round, actor_id: actor,
-    type: actor === 'lender' ? 'disburse' : 'request_advance',
+    intent_id: id, branch_id: ctx.branch_id, round, actor_id: actor, type,
     params: { amount: { minor: 1200000, currency: 'USD' } },
     evidence_ids: evidence, obs_hash: '0'.repeat(64)
   }
 }
 
+// The chain as the coordinator clears it (agent-world coupled-chain.json): borrower-c's request
+// posts no journal and becomes the message req:borrower-c:r4; the lender cites that request id,
+// accepts it and disburses against it (one journal).
+const CHAIN = {
+  'i-r4-borrower-c-1': { evidence: ['p-r3-1'], journal: false },
+  'i-r5-lender-1': { evidence: ['req:borrower-c:r4'], type: 'accept', journal: false },
+  'i-r5-lender-2': { evidence: ['req:borrower-c:r4'], type: 'disburse', journal: true }
+}
+
 /** A C6 RunResponse holding exactly the fixture's rounds: round 1 and 2 were not returned. */
 function run (change = {}) {
   const c = { ...ctx, ...change }
-  const previous = new Map()
   const rounds = scrubber.rounds.map((r) => {
     const intents = r.feed_ids.filter((id) => id.startsWith('i-'))
-      .map((id) => intent(id, r.round, r.highlight_actor, previous.get(r.round - 1) ?? []))
-    previous.set(r.round, [...r.feed_ids])
+      .map((id) => intent(id, r.round, r.highlight_actor, CHAIN[id].evidence, CHAIN[id].type))
+    const journal = (i) => (CHAIN[i.intent_id].journal ? `j-${i.intent_id}` : null)
     return {
       round: r.round, branch_id: c.branch_id, t_hours: r.t_h, intents,
-      cleared: intents.map((i) => ({ intent_id: i.intent_id, status: 'accepted', journal_id: `j-${i.intent_id}`, round: r.round })),
-      journal_ids: intents.map((i) => `j-${i.intent_id}`)
+      cleared: intents.map((i) => ({ intent_id: i.intent_id, status: 'accepted', journal_id: journal(i), round: r.round })),
+      journal_ids: intents.map(journal).filter(Boolean)
     }
   })
   const feed = scrubber.rounds.flatMap((r) => r.feed_ids.filter((id) => id.startsWith('p-')).map((id) => ({
@@ -158,6 +165,28 @@ describe('scrubber fixture', () => {
     expect(text(w, 'cash-value')).toBe('USD 30,000.00')
     expect(feedIds(w)).toEqual(scrubber.rounds[2].feed_ids)
     expect(text(w, 'inspector')).toContain('lender · acted this round')
+  })
+
+  it('the graph links the lender to borrower-c through the request id it cites', async () => {
+    const { wrapper: w } = await open(run())
+    const links = (g) => g.edges.filter((e) => e.fact.endsWith('cites req:borrower-c:r4'))
+      .map((e) => [e.name, e.source_node_uuid, e.target_node_uuid])
+    expect(links(graphs[graphs.length - 1])).toEqual([
+      ['ACCEPT', 'actor:lender', 'actor:borrower-c'],
+      ['DISBURSE', 'actor:lender', 'actor:borrower-c']
+    ])
+    await scrubTo(w, 4) // the lender has not cited the request yet
+    expect(links(graphs[graphs.length - 1])).toEqual([])
+  })
+
+  it('a request id draws no link unless a shown request_advance minted it', async () => {
+    const body = run()
+    const r4 = body.rounds.find((r) => r.round === 4)
+    r4.cleared[0].journal_id = 'j-drawn' // drawn on an offer: no request message was minted
+    const lender = body.rounds.find((r) => r.round === 5).intents[0]
+    lender.evidence_ids = ['req:borrower-c:r4', 'req:borrower-c:r4-2', 'req:lender:r4']
+    await open(body)
+    expect(graphs[graphs.length - 1].edges.filter((e) => e.fact.includes('cites req:'))).toEqual([])
   })
 
   it('pause: playback stops locally and no request asks the server to stop', async () => {
