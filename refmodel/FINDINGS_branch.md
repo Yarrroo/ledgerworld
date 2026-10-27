@@ -1,7 +1,7 @@
 # Branch / replay / scenario-family reference model — findings
 
 `refmodel/branch_ref.py` (stdlib only), checked by `python -m unittest discover -s refmodel -p test_branch_ref.py`
-(30 tests, green). Fixtures `branch-isolation.json`, `scenario-families.json`, `coupled-chain.json`,
+(37 tests, green). Fixtures `branch-isolation.json`, `scenario-families.json`, `coupled-chain.json`,
 `actors.json`, `lf1-treasury.json` are read unchanged (the suite fails if their bytes change).
 
 ## Reproduced
@@ -56,8 +56,10 @@ namespace guard each turns the suite red.
    actor with 10+ calls clears out of order (a disburse ahead of its accept). Sort on the call
    index `n`, as the model does.
 9. **Step 6 must check authority, not only schema** (medium · high). The model rejects, before
-   clearing: a type outside the actor's mandate, a non-positive amount, a disburse from an
-   account the lender does not own, a repay by anyone but the borrower or of less than the due
-   installment, and a release by anyone but the facility's lender. Each has a test. A foreign
-   `pending_in` with no settled rate becomes `unknown`, never a crash mid-round; `pending_out`
-   counts in P(t) and S.
+   clearing: a type outside the actor's mandate; a missing or non-positive amount; a disburse
+   from an account the lender does not own, in another currency, or without the balance; a repay
+   by anyone but the borrower or of any amount but the due installment (no partial or early
+   payoff); a release by anyone but the facility's lender. Each has a test. Two calls in one
+   response get two request ids (`req:<actor>:r<round>-<n>` from n=2). A foreign `pending_in`
+   with no settled rate is `unknown` (adds nothing) and settles once a rate is published;
+   `pending_out` counts in P(t), S, K_p (lender accounts) and the owner's observation.

@@ -39,6 +39,7 @@ OPERATING = {
     "venue": "exchange-venue/operating",
 }
 OWNER_PREFIX = {a: acc.split("/")[0] + "/" for a, acc in OPERATING.items()}
+NEEDS_AMOUNT = {"request_advance", "offer", "disburse", "repay", "pay", "convert"}
 FINANCIAL_TYPES = {"request_advance", "offer", "accept", "disburse", "repay", "convert",
                    "pay", "release", "defer"}
 
@@ -249,6 +250,12 @@ def validate_c5(snap: dict) -> None:
         for f in a["buckets"].get("pending_in", []) + a["buckets"].get("pending_out", []):
             if not isinstance(f["amount"], int):
                 raise ValueError(f"C5: flow {f['flow_id']} is not integer minor units")
+        for f in a["buckets"].get("pending_out", []):
+            if not isinstance(f.get("due_h", f.get("expected_h")), int):
+                raise ValueError(f"C5: pending_out {f['flow_id']} has no due time")
+    for c in snap["contracts"]:
+        if c.get("kind") == "committed_line" and not {"lender", "borrower", "undrawn"} <= set(c):
+            raise ValueError(f"C5: committed line {c.get('contract_id')} lacks lender/borrower/undrawn")
 
 
 def toy_snapshot() -> dict:
@@ -320,14 +327,17 @@ def arrives_by(flow: dict, t: int) -> bool:
 
 def k_p(ledger: dict) -> int:
     """Lender usable capacity: settled (known) - committed undrawn - pledged - pool
-    obligations due within the horizon - pool floor (system brief 6, LF-2)."""
+    obligations due within the horizon - pool floor (system brief 6, LF-2). An open
+    pending_out on a lender account is committed money and counts with the pool obligations."""
     accs = [a for i, a in ledger["accounts"].items() if i.startswith("lender/")]
+    out = sum(f["amount"] for f in ledger["flows_out"]
+              if f["account"].startswith("lender/") and f["status"] == "open")
     settled = sum(a["settled"] for a in accs if not a["unknown"])
     pledged = sum(a["pledged"] for a in accs)
     committed = sum(c["amount"] for c in ledger["committed_undrawn"].values())
     due = sum(o["amount"] for o in ledger["pool_obligations"].values()
               if o["status"] == "open" and o["due_h"] <= HORIZON_H)
-    return settled - committed - pledged - due - ledger["pool_floor"]
+    return settled - committed - pledged - due - out - ledger["pool_floor"]
 
 
 def projected_cash(ledger: dict, account: str, t: int) -> int:
@@ -556,6 +566,8 @@ class World:
             obs["own_flows"] = [{k: f[k] for k in ("flow_id", "amount", "currency",
                                                    "expected_h", "status")} for f in mine]
             seen |= {f"overdue:{f['flow_id']}" for f in mine if f["status"] == "overdue"}
+            obs["own_flows_out"] = [{k: f[k] for k in ("flow_id", "amount", "due_h", "status")}
+                                    for f in L["flows_out"] if f["account"].startswith(prefix)]
         if "own_contracts" in sees:
             reqs = {k: v for k, v in L["requests"].items() if aid in (v["from"], v["to"])}
             facs = {k: v for k, v in L["facilities"].items() if aid in (v["lender"], v["to"])}
@@ -612,8 +624,12 @@ class World:
         if any(isinstance(v, float) for v in p.values()):
             return "rejected", "non_integer_amount", None
         amt = p.get("amount_minor", p.get("buy_amount_minor"))
+        if amt is None and typ in NEEDS_AMOUNT:
+            return "rejected", "missing_amount", None
         if amt is not None and (type(amt) is not int or amt <= 0):
             return "rejected", "non_positive_amount", None
+        n = intent.get("n", 1)
+        suffix = "" if n == 1 else f"-{n}"  # one id per call; n=1 keeps the fixture's ids
         if typ in ("no_action", "defer"):
             return "accepted", None, None
         if typ == "request_advance":
@@ -628,7 +644,7 @@ class World:
                                    "status": "expected"})
                 return self._book(r, intent, "disburse",
                                   [{"account": OPERATING[f["lender"]], "amount": -amt}])
-            L["requests"][f"req:{aid}:r{r}"] = {
+            L["requests"][f"req:{aid}:r{r}{suffix}"] = {
                 "from": aid, "to": p["from"], "amount": amt, "currency": p["currency"],
                 "status": "open", "intent_id": intent["intent_id"],
                 "evidence_ids": intent["evidence_ids"]}
@@ -643,8 +659,12 @@ class World:
             req = L["requests"].get(p["request"])
             if not req or req["to"] != aid or req["status"] != "accepted" or req["amount"] != amt:
                 return "rejected", "request_not_accepted", None
-            if not p["from_account"].startswith(OWNER_PREFIX[aid]):
+            src = L["accounts"].get(p["from_account"])
+            if not p["from_account"].startswith(OWNER_PREFIX[aid]) or src is None \
+                    or src["currency"] != req["currency"]:
                 return "rejected", "not_own_account", None
+            if spendable(L, p["from_account"]) < amt:
+                return "rejected", "insufficient_spendable", None
             cap = k_p(L)
             if amt > cap:
                 return "rejected", f"K_p = {cap}", None
@@ -653,7 +673,7 @@ class World:
                               [{"account": p["from_account"], "amount": -amt},
                                {"account": OPERATING[req["from"]], "amount": amt}])
         if typ == "offer":
-            L["facilities"][f"fac-{p['to']}-r{r}"] = {"lender": aid, "to": p["to"],
+            L["facilities"][f"fac-{p['to']}-r{r}{suffix}"] = {"lender": aid, "to": p["to"],
                                                       "amount": amt, "state": "offered"}
             return "accepted", None, None
         if typ == "release":
@@ -704,7 +724,8 @@ class World:
     def _settle(self, r: int, t: int) -> list:
         L, out = self.ledger, []
         for f in L["flows"]:
-            if not arrives_by(f, t):
+            # an unpriced arrival stays unknown (adds nothing) and is retried each round
+            if not (arrives_by(f, t) or f["status"] == "unknown"):
                 continue
             extra = {"flow_id": f["flow_id"]}
             if f["currency"] == "USD":

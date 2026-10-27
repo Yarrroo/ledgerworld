@@ -340,6 +340,78 @@ class Validation(unittest.TestCase):
                          [f"i-r1-lender-{n}" for n in range(1, 12)])
 
 
+class ValidationRound2(unittest.TestCase):
+    def accepted_request(self, w, amount=100000):
+        w.ledger["requests"]["req:borrower-c:r1"] = {
+            "from": "borrower-c", "to": "lender", "amount": amount, "currency": "USD",
+            "status": "accepted", "intent_id": "i-r1-borrower-c-1", "evidence_ids": []}
+
+    def test_disburse_from_a_missing_or_short_account_is_rejected(self):
+        w = toy_world()
+        self.accepted_request(w)
+        st, _, _ = w._clear(intent("lender", "disburse", {
+            "request": "req:borrower-c:r1", "amount_minor": 100000, "currency": "USD",
+            "from_account": "lender/typo"}), 1, 4)
+        self.assertEqual(st, "rejected")
+        self.accepted_request(w, 2000000)  # lender/venue holds 1,500,000
+        st, reason, _ = w._clear(intent("lender", "disburse", {
+            "request": "req:borrower-c:r1", "amount_minor": 2000000, "currency": "USD",
+            "from_account": "lender/venue"}), 1, 4)
+        self.assertEqual((st, reason), ("rejected", "insufficient_spendable"))
+
+    def test_missing_amount_is_rejected(self):
+        w = toy_world()
+        for aid, typ, params in (("treasury", "pay", {}), ("lender", "offer", {"to": "borrower-c"}),
+                                 ("borrower-c", "request_advance",
+                                  {"currency": "USD", "from": "lender"})):
+            st, reason, _ = w._clear(intent(aid, typ, params), 1, 4)
+            self.assertEqual((st, reason), ("rejected", "missing_amount"), typ)
+
+    def test_two_requests_in_one_response_keep_both(self):
+        w = toy_world()
+        for n in (1, 2):
+            w._clear(intent("treasury", "request_advance", {
+                "amount_minor": 1000 * n, "currency": "USD", "from": "lender"}, n=n), 1, 4)
+        self.assertEqual({k: v["amount"] for k, v in w.ledger["requests"].items()},
+                         {"req:treasury:r1": 1000, "req:treasury:r1-2": 2000})
+
+    def test_lender_pending_out_lowers_k_p(self):
+        snap = br.toy_snapshot()
+        lender = next(a for a in snap["accounts"] if a["id"] == "lender/operating")
+        lender["buckets"]["pending_out"] = [{"flow_id": "po-l", "amount": 800000, "due_h": 60}]
+        self.assertEqual(br.k_p(br.ledger_from_c5(snap)), 4200000 - 800000)
+
+    def test_c5_rejects_untimed_pending_out_and_lenderless_line(self):
+        snap = br.toy_snapshot()
+        snap["accounts"][0]["buckets"]["pending_out"] = [{"flow_id": "po-1", "amount": 5}]
+        with self.assertRaises(ValueError):
+            br.validate_c5(snap)
+        snap = br.toy_snapshot()
+        del snap["contracts"][0]["lender"]
+        with self.assertRaises(ValueError):
+            br.validate_c5(snap)
+
+    def test_unpriced_arrival_settles_once_a_rate_appears(self):
+        w = toy_world([{"event_id": "px", "round": 2, "kind": "price", "symbol": "USDCUSD",
+                        "value": 9900}])
+        w.ledger["accounts"]["borrower-a/usdc-in"] = br.new_account("borrower-a", "USD")
+        w.ledger["flows"].append({"flow_id": "usdc-x", "account": "borrower-a/usdc-in",
+                                  "amount": 1000, "currency": "USDC", "expected_h": 4,
+                                  "arrival_h": 4, "status": "expected"})
+        w.run(2)
+        self.assertEqual(w.ledger["accounts"]["borrower-a/usdc-in"]["settled"], 990)
+
+    def test_observation_shows_own_pending_out(self):
+        snap = br.toy_snapshot()
+        snap["accounts"][0]["buckets"]["pending_out"] = [
+            {"flow_id": "po-1", "amount": 600000, "due_h": 60}]
+        w = br.World("t", "b", br.ledger_from_c5(snap), [],
+                     br.ScriptedModel(CC["plan"][-1:]), br.MemoryStore(), 1)
+        w.round = 1
+        obs, _ = w._observe(w.agents["treasury"], 4, [])
+        self.assertEqual([f["flow_id"] for f in obs["own_flows_out"]], ["po-1"])
+
+
 class LedgerAndTrace(unittest.TestCase):
     def test_pending_out_counts_in_projection_and_spendability(self):
         snap = br.toy_snapshot()
