@@ -22,8 +22,10 @@
   recommends what an unforked control does) and
   `test_siblings_draw_alike_whatever_order_they_run_in` [aabb, bbaa, abba, ab|ab] (siblings
   draw identical recommendations in any order, under one gather too; the global RNG is not
-  drawn). `test_parent_unchanged` no longer excludes the RNG.
-- `uv run pytest -q tests/simulation tests/execution`: 366 passed, 1 skipped. ruff clean,
+  drawn). `test_parent_unchanged` no longer excludes the RNG. The five new cases ran 20 times:
+  20 of 20 green.
+- `uv run pytest -q tests/simulation tests/execution`: 366 passed, 1 skipped; after vet round 2,
+  `test_branches`, `test_coupled`, `test_interview`, `test_scenarios`: 96 passed. ruff clean,
   `checks/no_secrets.py` and `checks/attribution.py` ok. The full gate is the landing train's.
 
 ## Follow-ups / known gaps
