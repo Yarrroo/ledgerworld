@@ -644,3 +644,48 @@ def test_a_repayment_pays_exactly_what_the_observed_period_owes():
     verdict = world.gateway.execute(approval, current_snapshot_id=OBSERVED)
     assert isinstance(verdict, Refusal) and verdict.code == "reservation_mismatch"
     assert world.posts() == []
+
+
+def test_a_period_with_no_revenue_does_not_block_the_next():
+    from app.finance.lending import disburse, observe_revenue
+
+    world = World()
+    disburse(world.store, "adv-a", now=NOW, journal_id="j-adv-a-disburse")
+    for weeks_ago, revenue in ((2, 0), (1, 2_400_000)):
+        end = NOW - timedelta(days=7 * weeks_ago - 6)
+        observe_revenue(world.store, "adv-a", end, revenue, observed_at=end, source="sales")
+    (leg,) = world.execute(legs_of("apr-week-2", REPAY)).legs
+    assert leg.state == "settled" and leg.journal_id.startswith("repay:adv-a:")
+
+
+def test_one_period_is_never_repaid_by_two_legs():
+    world = World()
+    repayable(world)
+    twice = legs_of("apr-twice", REPAY, REPAY)
+    world.gateway.record(twice)
+    verdict = world.gateway.execute(twice, current_snapshot_id=OBSERVED)
+    assert isinstance(verdict, Refusal) and verdict.code == "reservation_mismatch"
+    # Nor by two approvals, while the first repayment is still on its way.
+    world.fake.arm("timeout_after_accept", times=None)
+    first = legs_of("apr-first", REPAY)
+    assert isinstance(world.execute(first), Execution)
+    assert world.legs("apr-first")[0].state == "unknown"
+    # (the same plan twice on one snapshot is refused by the store itself: another plan here)
+    second = legs_of("apr-second", REPAY, {"kind": "payout", "amount": 100,
+                                           "source": "borrower-a/operating",
+                                           "counterparty": "ben-payroll-1"})
+    world.gateway.record(second)
+    verdict = world.gateway.execute(second, current_snapshot_id=OBSERVED)
+    assert isinstance(verdict, Refusal) and verdict.code == "reservation_mismatch"
+
+
+def test_a_fault_in_posting_a_journal_is_raised_not_filed_as_a_refusal():
+    world = World()
+
+    def broken(_conn, _leg):
+        raise RuntimeError("a bug, not a ledger refusal")
+
+    world.gateway.outbox.post_journal = broken
+    with pytest.raises(RuntimeError):
+        world.execute(bind_terms(BASE))
+    assert world.gateway.incidents() == []

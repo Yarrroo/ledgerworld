@@ -62,8 +62,9 @@ class _Lost(Exception):
     """Another worker changed the leg between the read and the conditional write."""
 
 
-class _JournalRefused(Exception):
-    """The ledger refused the leg's journal; the settle transaction rolled back whole."""
+class JournalRefused(Exception):
+    """Raised by a `PostJournal` when the ledger refuses the leg's journal as it stands; the
+    settle transaction rolls back whole. Anything else it raises is a fault and propagates."""
 
 
 @dataclass(frozen=True)
@@ -272,10 +273,7 @@ class Outbox:
                 if once and incident and self._ever(leg, incident[0]):
                     raise _Lost
                 if journal:
-                    try:
-                        fields["journal_id"] = self.post_journal(self.conn, leg)
-                    except Exception as refused:
-                        raise _JournalRefused(f"{type(refused).__name__}: {refused}") from refused
+                    fields["journal_id"] = self.post_journal(self.conn, leg)
                     close = (*close, "ledger_refused")
                 if not self._write(leg, to, cause, obj, **fields):
                     raise _Lost
@@ -288,7 +286,7 @@ class Outbox:
                         (self.clock(), leg.leg_id, kind))
         except _Lost:
             return False
-        except _JournalRefused as refused:
+        except JournalRefused as refused:
             return self._incident(leg, "ledger_refused", f"the ledger refused the journal: {refused}")
         return True
 

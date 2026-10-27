@@ -43,6 +43,7 @@ from app.finance.models import (
     Journal,
     LedgerRefusal,
     Posting,
+    UnknownAccount,
     expected_flows,
     journals,
     reservations,
@@ -50,7 +51,7 @@ from app.finance.models import (
 )
 from app.finance.schemas import EXPONENT, ApprovalLeg, BoundApproval, Mode, Money
 from app.finance.spendability import AccountView, spendability, state_of
-from app.finance.store import LedgerStore
+from app.finance.store import LedgerStore, _naive
 from sqlalchemy import Connection, select, update
 
 # Beside the design's `approvals`: the bound terms, to compare a presented approval against and
@@ -377,9 +378,10 @@ class Gateway:
         (`check_outflow`), and with the repayments, which are owed, against S(now) alone."""
         spend: dict[str, int] = defaultdict(int)
         owed: dict[str, int] = defaultdict(int)
+        repaying: set[str] = set()  # facilities this approval already repays
         wallet: dict[tuple[str, bool], int] = defaultdict(int)
         for leg in approval.legs:
-            if refusal := self._check_leg(approval.entity, leg, now, spend, owed):
+            if refusal := self._check_leg(approval.entity, leg, now, spend, owed, repaying):
                 return refusal
             if (leg.kind, self.leg_mode) in DEBITS_WALLET:
                 on_behalf = self.leg_mode == "A" and leg.kind == "payout"
@@ -397,7 +399,8 @@ class Gateway:
         return self._wallet(wallet) if self.mode == "sandbox" else None
 
     def _check_leg(self, entity: str, leg: ApprovalLeg, now: datetime,
-                   spend: dict[str, int], owed: dict[str, int]) -> binding.Refusal | None:
+                   spend: dict[str, int], owed: dict[str, int],
+                   repaying: set[str]) -> binding.Refusal | None:
         source, other = self._view(leg.source), self._view(leg.counterparty)
         owner = source.entity_id if source else None
         other_owner = other.entity_id if other else None
@@ -431,9 +434,14 @@ class Gateway:
             refusal = lending.check_draw(self.store, f.pool, leg.amount.minor, now)
             if refusal is not None:
                 return _from_ledger(refusal, f"K_p of {f.pool}")
-        elif leg.kind == "repayment" and self.period(f, leg.amount.minor, now) is None:
-            return binding.Refusal("reservation_mismatch", f"leg {leg.index} pays exactly what "
-                                   f"the oldest observed, unrepaid period of {f.facility_id} owes")
+        elif leg.kind == "repayment":
+            if f.facility_id in repaying or self._repaying(f.facility_id):
+                return binding.Refusal("reservation_mismatch", f"{f.facility_id} repays one "
+                                       "period at a time; one is already on its way")
+            repaying.add(f.facility_id)
+            if self.period(f, leg.amount.minor, now) is None:
+                return binding.Refusal("reservation_mismatch", f"leg {leg.index} pays exactly "
+                                       f"what the oldest unrepaid period of {f.facility_id} owes")
         if leg.funded_by and leg.funded_by.startswith("reservation:"):
             return self._held(leg)
         # A repayment is owed, not chosen: it needs S(now), and the floor does not apply.
@@ -469,25 +477,33 @@ class Gateway:
 
     def period(self, f: Facility, amount: int, now: datetime,
                conn: Connection | None = None) -> datetime | None:
-        """The facility's oldest observed, unrepaid period, when it owes exactly `amount`."""
+        """The facility's oldest observed, unrepaid period that owes anything, when it owes
+        exactly `amount`. A period that owes nothing (no revenue) never blocks the next."""
         if f.state != "active":
             return None
         with self.store.reading(conn) as c:
-            periods = c.execute(select(revenue_observations.c.period_end).where(
+            rows = c.execute(select(revenue_observations.c.period_end,
+                                    revenue_observations.c.revenue_minor).where(
                 revenue_observations.c.facility_id == f.facility_id,
-                revenue_observations.c.observed_at <= now.astimezone(UTC).replace(tzinfo=None))
-                .order_by(revenue_observations.c.period_end)).scalars().all()
+                revenue_observations.c.observed_at <= _naive(now))
+                .order_by(revenue_observations.c.period_end)).all()
+            ends = {contracts.repay_journal_id(f.facility_id, end.replace(tzinfo=UTC)): end
+                    for end, _ in rows}
             repaid = set(c.execute(select(journals.c.journal_id).where(
-                journals.c.kind == "advance_repayment")).scalars())
-            for period in periods:
-                end = period.replace(tzinfo=UTC)
-                if contracts.repay_journal_id(f.facility_id, end) in repaid:
-                    continue
-                revenue = lending.observed_revenue(self.store, f.facility_id, end, now, conn=c)
-                due = contracts.repayment_minor(revenue, f.repay_share_bps,
-                                                contracts.outstanding_minor(self.store, f, conn=c))
-                return end if due == amount else None
+                journals.c.journal_id.in_(ends))).scalars())
+            outstanding = contracts.outstanding_minor(self.store, f, conn=c)
+        for end, revenue in rows:
+            if contracts.repay_journal_id(f.facility_id, end.replace(tzinfo=UTC)) in repaid:
+                continue
+            due = contracts.repayment_minor(revenue, f.repay_share_bps, outstanding)
+            if due:
+                return end.replace(tzinfo=UTC) if due == amount else None
         return None
+
+    def _repaying(self, facility_id: str) -> bool:
+        """A repayment of the facility is already queued and not finished."""
+        return any(self.bound(leg).facility_id == facility_id for leg in self.outbox._legs(
+            "kind = 'repayment' AND state IN ('pending', 'submitted', 'unknown')"))
 
     def _view(self, account_id: str) -> AccountView | None:
         try:
@@ -521,7 +537,14 @@ class Gateway:
                               kind="advance_in_flight", flow_id=row.leg_id, conn=c)
 
     def _post_journal(self, _conn: object, leg: ob.Leg) -> str:
-        """The leg's journal, inside the settle transaction; returns its id."""
+        """The leg's journal, inside the settle transaction; returns its id. A refusal by the
+        ledger is the outbox's `JournalRefused` (an incident); any other error propagates."""
+        try:
+            return self._journal(leg)
+        except (LedgerRefusal, UnknownAccount, ValueError) as refused:
+            raise ob.JournalRefused(f"{type(refused).__name__}: {refused}") from refused
+
+    def _journal(self, leg: ob.Leg) -> str:
         c, now, mode = self.sa, self.clock(), self._journal_mode()
         bound = self.bound(leg)
         if leg.kind == "payout":  # the committed flow pays out: reservation and obligation close
@@ -559,6 +582,9 @@ class Gateway:
         paid = lending.repay(self.store, f.facility_id, end, now=now, from_account=leg.source,
                              to_account=leg.counterparty, mode=mode, source_leg_id=leg.leg_id,
                              conn=self.sa)
+        if paid.journal is None or paid.amount_minor != leg.amount_minor:
+            raise ValueError(f"{leg.leg_id}: the period repays {paid.amount_minor}, the leg "
+                             f"{leg.amount_minor}")
         return paid.journal.journal_id
 
     def _journal_mode(self) -> str:
