@@ -298,6 +298,11 @@ def test_conversion_paths():
     assert transport.available("USD") == created["USD_available_minor"]
     assert transport.available("EUR") == created["EUR_available_minor"]
 
+    transport, client = make()  # an amount in the sell currency goes out as sell_amount
+    client.create_conversion("leg-fx-2", sell_currency="USD", buy_currency="EUR",
+                             amount=usd(100000))
+    assert posts(transport, "/api/v1/fx/conversions/create")[0].body["sell_amount"] == "1000.00"
+
 
 def test_deposit_simulation_sends_a_number_from_the_converter():
     sim = fixture("fake-lifecycles")["deposit_simulation"]
