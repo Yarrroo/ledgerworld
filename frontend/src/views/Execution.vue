@@ -41,7 +41,7 @@
         <template v-else>Execution {{ activeId }} is unavailable: the server has no record of it.</template>
       </p>
       <p v-if="pollError" class="lw-note" data-test="poll-error">
-        {{ STATES.error.icon }} {{ execution ? STATES.error.word : 'Could not read' }}: {{ pollError }}. Reading again.
+        {{ STATES.error.icon }} {{ execution ? STATES.error.word : 'Could not read' }}: {{ pollError }}.<template v-if="retrying"> Reading again.</template>
       </p>
       <p v-if="!execution && !notFound && !pollError" class="lw-time" data-test="no-execution">
         Unavailable: no execution to show for this run.
@@ -203,12 +203,13 @@ const enc = encodeURIComponent
 const unreadable = () => new ApiError(null, 'unreadable', 'the answer could not be read')
 const isText = (x) => typeof x === 'string' && x !== ''
 const isTextOrNull = (x) => x == null || isText(x)
-// C6 times are RFC 3339 date-times; Date.parse alone also takes "1" or "Nov 5"
-const RFC3339 = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?([Zz]|[+-]\d{2}:\d{2})$/
-const isTime = (iso) => RFC3339.test(iso) && !Number.isNaN(Date.parse(iso))
+// C6 times in the one form the server emits and every browser parses alike; Date.parse alone also
+// takes "1" or "Nov 5", and only some engines take a space separator
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
+const isTime = (iso) => ISO.test(iso) && !Number.isNaN(Date.parse(iso))
 
 /** A C6 execution leg and incident as the receipts and the incident view draw them. */
-const isExecutionLeg = (l) => isText(l?.leg_id) && isText(l.kind) && isText(l.state) &&
+const isExecutionLeg = (l) => isText(l?.leg_id) && isText(l.kind) && Object.hasOwn(WORD, l.state) &&
   typeof l.reconciled === 'boolean' &&
   (l.receipt == null || (isText(l.receipt.status) && Array.isArray(l.receipt.raw_keys)))
 const isIncident = (i) => isText(i?.leg_id) && isText(i.kind) && isText(i.state) && isTime(i.opened_at)
@@ -224,10 +225,13 @@ async function readExecution (id) {
   return body
 }
 
-/** GET /decisions/:run; an answer with no status is unreadable, never "no decision". */
+/** GET /decisions/:run; one without its status, results' costs or selected policy is unreadable. */
 async function readDecisions (runId) {
   const body = await request(`/decisions/${enc(runId)}`)
-  if (!isText(body?.status)) throw unreadable()
+  const readable = isText(body?.status) && Array.isArray(body.results) &&
+    body.results.every((r) => Number.isSafeInteger(r?.funding_cost?.minor) && isText(r.funding_cost.currency)) &&
+    (body.status !== 'selected' || isText(body.selected))
+  if (!readable) throw unreadable()
   return body
 }
 
@@ -252,13 +256,13 @@ const { state, refresh } = useReading(async () => {
   const demo = !asked || asked === overview.demo.run_id
   const executionId = route.query.execution_id || (demo ? overview.demo.execution_id : null) || null
   let decisionsError = ''
-  let executionError = ''
+  let executionError = null
   const { generation } = guard.issue()
   const [decisions, execution] = await Promise.all([
     // the receipts still read when this fails; only the review needs the decision
     runId ? optional(readDecisions(runId)).catch((error) => { decisionsError = error.message; return null }) : null,
     // and the review still opens when the receipts cannot be read
-    executionId ? optional(readExecution(executionId)).catch((error) => { executionError = error.message; return null }) : null
+    executionId ? optional(readExecution(executionId)).catch((error) => { executionError = error; return null }) : null
   ])
   const head = execution ?? overview
   return {
@@ -461,6 +465,8 @@ const activeId = shallowRef(null)
 const execution = shallowRef(null)
 const notFound = shallowRef(false)
 const pollError = shallowRef('')
+const retrying = shallowRef(false) // the failed read is read again: anything but a 4xx refusal
+let alive = true // an unmounted screen schedules nothing, whatever a read in flight returns
 let failedAt = 0 // generation of the newest failed read: only a later answer clears its error
 let timer = null
 const followedId = shallowRef(null)
@@ -479,9 +485,17 @@ const moving = (body) => !body.legs.length ||
  */
 function schedule () {
   clearTimeout(timer)
+  if (!alive) return
   const body = execution.value
-  const keep = Boolean(pollError.value) || (followed ? (!body || moving(body)) : Boolean(body && moving(body)))
+  const keep = Boolean(pollError.value && retrying.value) || (followed ? (!body || moving(body)) : Boolean(body && moving(body)))
   timer = keep ? setTimeout(poll, POLL_MS) : null
+}
+
+/** A failed read: said, kept as the newest failure, and read again unless refused outright. */
+function failed (error, generation) {
+  pollError.value = error.message
+  retrying.value = unanswered(error)
+  failedAt = Math.max(failedAt, generation)
 }
 
 /** An answer to a read issued after the newest failure clears its error; an older one does not. */
@@ -509,8 +523,7 @@ async function poll () {
     } else {
       // a failed read is no answer: it never discards a reading issued before it
       if (!guard.current(ticket, id)) return
-      pollError.value = error.message
-      failedAt = ticket.generation
+      failed(error, ticket.generation)
     }
   }
   schedule()
@@ -529,6 +542,7 @@ function follow (id) {
   guard.select(id)
   execution.value = null
   notFound.value = false
+  pollError.value = '' // another execution's failure is not this one's
   poll()
 }
 
@@ -555,6 +569,7 @@ watch(() => state.body, (body) => {
   if (activeId.value !== body.execution_id) { // another execution: nothing read for the last stands
     execution.value = null
     notFound.value = false
+    pollError.value = ''
   }
   activeId.value = body.execution_id
   guard.select(body.execution_id)
@@ -563,10 +578,7 @@ watch(() => state.body, (body) => {
   // it shows its error and discards nothing read before it.
   const ticket = { generation: body.generation, context: body.execution_id }
   if (body.executionError) {
-    if (guard.current(ticket)) {
-      pollError.value = body.executionError
-      failedAt = body.generation
-    }
+    if (guard.current(ticket)) failed(body.executionError, body.generation)
   } else if (guard.accept(ticket)) {
     execution.value = body.execution
     notFound.value = Boolean(body.execution_id && !body.execution)
@@ -588,12 +600,14 @@ watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
     followedId.value = null
     activeId.value = null
     execution.value = null
+    pollError.value = ''
     clearTimeout(timer)
   }
   refresh()
 })
 
 onUnmounted(() => {
+  alive = false
   clearTimeout(timer)
   clearInterval(clock)
 })

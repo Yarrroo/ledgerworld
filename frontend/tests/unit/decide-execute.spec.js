@@ -712,7 +712,7 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
     'a leg whose after holds no leg index': approvalBody({ legs: legs({ after: [{}] }) }),
     'a leg funded by something that is not a source': approvalBody({ legs: legs({ funded_by: {} }) }),
     'an approval with no readable expiry': approvalBody({ expires_at: 'soon' }),
-    'an expiry that is not RFC 3339': approvalBody({ expires_at: '1' }),
+    'an expiry that is not ISO-8601': approvalBody({ expires_at: '1' }),
     'no server time': { ...approvalBody(), as_of: undefined }
   }
   for (const [what, answer] of Object.entries(approvals)) {
@@ -760,7 +760,8 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
     'another execution': { ...paid(), execution_id: 'apr-9' },
     'no provider mode': { ...paid(), mode: undefined },
     'a leg with no state': executionBody({ legs: [{ ...paidPayout(), state: undefined }] }),
-    'an incident with no kind': { ...paid(), incidents: [openIncident] }
+    'an incident with no kind': { ...paid(), incidents: [openIncident] },
+    'a leg in a state C6 does not have': executionBody({ legs: [{ ...paidPayout(), state: 'cancelled' }] })
   }
   for (const [what, first] of Object.entries(reads)) {
     it(`a status read answered with ${what} is not a state: it says so and reads again`, async () => {
@@ -832,18 +833,70 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
     expect(w.find('[data-test="poll-error"]').exists()).toBe(false)
   })
 
-  it('an unreadable decision is said so, not "no decision is available"', async () => {
-    serve({ 'GET /overview': overview(), 'GET /decisions/run-1': UNREADABLE })
-    const w = await open(Execution, '/execution')
-    expect(disabled(w, 'review-plan')).toBe(true)
-    expect(text(w, 'review-why')).toBe('Decision unavailable: the answer could not be read')
-  })
+  const decisionsAnswers = {
+    'an unparseable body': UNREADABLE,
+    'a selected decision naming no policy': { ...decisionsBody(), selected: null },
+    'a result with no funding cost': { ...decisionsBody(), results: [{ ...decisionsBody().results[0], funding_cost: undefined }] }
+  }
+  for (const [what, answer] of Object.entries(decisionsAnswers)) {
+    it(`a decision answered with ${what} is said so, not "no decision", and nothing can be reviewed`, async () => {
+      serve({ 'GET /overview': overview(), 'GET /decisions/run-1': answer })
+      const w = await open(Execution, '/execution')
+      expect(disabled(w, 'review-plan')).toBe(true)
+      expect(text(w, 'review-why')).toBe('Decision unavailable: the answer could not be read')
+    })
+  }
 
-  it('an RFC 3339 time with a space separator is a readable expiry', async () => {
+  it('a space-separated time is not read: browsers disagree on it, so it fails closed everywhere', async () => {
     const { w } = await reviewReady({ 'POST /approvals': approvalBody({ expires_at: '2026-11-05 10:15:00+00:00' }) })
     await approve(w)
-    expect(w.find('[data-test="blocked"]').exists()).toBe(false)
-    expect(disabled(w, 'execute')).toBe(false)
+    expect(text(w, 'blocked')).toBe(kase('approval-post-timeout').expect.message)
+  })
+
+  it('a read that fails after the screen is left schedules nothing', async () => {
+    fakeTimers()
+    const calls = serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': UNREADABLE
+    })
+    const w = await open(Execution, '/execution')
+    vi.advanceTimersByTime(5000) // the re-read is in flight
+    mounted.splice(mounted.indexOf(w), 1)
+    w.unmount()
+    await flushPromises()
+    await tick()
+    await tick()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
+  })
+
+  it('a read refused outright (4xx) is said, and not read again', async () => {
+    fakeTimers()
+    const calls = serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': refuse(403, 'forbidden', 'not yours')
+    })
+    const w = await open(Execution, '/execution')
+    expect(text(w, 'poll-error')).toContain('not yours')
+    expect(text(w, 'poll-error')).not.toContain('Reading again')
+    await tick()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(1)
+  })
+
+  it('a failed read of the linked execution is not shown against the one this tab then sends', async () => {
+    const { w } = await reviewReady({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-0' }),
+      'GET /executions/apr-0': UNREADABLE,
+      'POST /executions': accepted(),
+      'GET /executions/apr-1': () => new Promise(() => {}) // still being read
+    })
+    expect(text(w, 'poll-error')).toContain('the answer could not be read')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'context')).toContain('execution apr-1')
+    expect(w.find('[data-test="poll-error"]').exists()).toBe(false)
   })
 })
 
