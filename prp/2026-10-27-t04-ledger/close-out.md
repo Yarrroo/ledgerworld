@@ -53,3 +53,24 @@
   allows 64. Widening the columns is a schema change for the ledger design's owner.
 - On an unknown cash account, `apply` and `expect` are not bounded by a balance (none is
   observable); `hold`, `pledge` and `check_outflow` refuse `unknown_balance`.
+
+## Correction — concurrent writers (review finding F3, board item 68)
+> Close-out (/dev-close), 2026-10-27. Source: the cross-family review of this task, finding F3.
+
+- **What broke:** on PostgreSQL two transactions could each read the same free units and each
+  commit a hold, pledge or payment against them (1,400 spoken for out of 1,000). The vet of the
+  fix found the same read-then-write shape one level up: a flow settled twice, a hold expired
+  under a concurrent commit, an advance disbursed twice, a line drawn past its limit, two
+  periods repaid past what was owed, and a settle/pay deadlock.
+- **The guard:** cash account rows are locked (`FOR NO KEY UPDATE`, id order) before any
+  free-funds check under a pinned READ COMMITTED; lending locks its facility row first; every
+  move out of `held` or `pending` is a guarded UPDATE. Files: `store.py`, `ledger.py`,
+  `lending.py`, `contracts.py`.
+- **Proof:** the eleven `pg` tests named `test_two_connections_*` and
+  `test_settling_against_a_cash_account_never_deadlocks_a_payment` run two connections in a
+  fixed order (A's transaction held open, B on a second connection). Every one fails on the
+  pre-fix code and passes after it, 20 of 20 runs. Run with `pytest -m pg` and
+  `LEDGER_DATABASE_URL` naming a PostgreSQL database (CI's postgres job). The default gate
+  deselects them; `tests/finance` (79) stays green on SQLite.
+- **Backfill:** none needed. Nothing calls the ledger on PostgreSQL yet, so no stored state was
+  written under the race.
