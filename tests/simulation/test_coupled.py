@@ -799,24 +799,33 @@ class RestoreBroke(Exception):
     pass
 
 
-def test_an_abort_that_raises_leaves_the_world_unusable_and_reaches_the_caller(tmp_path):
+@pytest.mark.parametrize("cause", ["fault", "cancel"])
+def test_an_abort_that_raises_leaves_the_world_unusable_and_reaches_the_caller(tmp_path, cause):
+    """A failed abort is named on the world; it reaches the caller in place of a round fault,
+    and as a note on a cancellation, which still propagates."""
     def fault(world, ctx):
-        raise InjectedFault("fault-in-commit")
+        raise InjectedFault("fault-in-commit") if cause == "fault" else asyncio.CancelledError()
 
     def broken_restore(capture):
         raise RestoreBroke("restore broke")
 
     async def go():
-        world = rollback_world(tmp_path, "abort-raises")
+        world = rollback_world(tmp_path, f"abort-raises-{cause}")
         try:
             await to_round_start(world)
             world.coordinator.hooks["before_transcript"] = fault
             world.restore = broken_restore
-            with pytest.raises(RestoreBroke) as raised:
-                await world.coordinator.run_round(world)
-            assert isinstance(raised.value.__context__, InjectedFault)
+            if cause == "fault":
+                with pytest.raises(RestoreBroke) as raised:
+                    await world.coordinator.run_round(world)
+                assert isinstance(raised.value.__context__, InjectedFault)
+            else:
+                with pytest.raises(asyncio.CancelledError) as raised:
+                    await world.coordinator.run_round(world)
+                assert "the abort failed: RestoreBroke" in "".join(raised.value.__notes__)
             assert "abort did not finish" in world.unusable
             assert "abort_failed" in [e for e, _ in world.lifecycle]
+            assert world.failures[-1]["round"] == ROLLBACK_ROUND
             with pytest.raises(WorldUnusable):
                 await world.coordinator.run_round(world)
         finally:
@@ -836,7 +845,7 @@ def test_an_abort_cancelled_itself_still_closes_the_ledger_and_refuses_a_retry(t
         barriers.cleanup_gate = asyncio.Event()
         world = rollback_world(tmp_path, "abort-cancelled", barriers, fail=True)
         try:
-            await to_round_start(world)
+            capture = await to_round_start(world)
             world.coordinator.hooks["advanced"] = advanced
             task = asyncio.create_task(world.coordinator.run_round(world))
             await barriers.in_cleanup.wait()
@@ -847,13 +856,55 @@ def test_an_abort_cancelled_itself_still_closes_the_ledger_and_refuses_a_retry(t
                 await task
             conn = seen["conn"]
             assert conn.closed and not conn.in_transaction()
+            assert world.fingerprint()["ledger"] == capture.fingerprint["ledger"]
             assert "abort did not finish (cancelled)" in world.unusable
+            assert (world.failures[-1]["round"], world.failures[-1]["status"]) == (
+                ROLLBACK_ROUND, "failed")
             with pytest.raises(WorldUnusable):
                 await world.coordinator.run_round(world)
         finally:
             barriers.cleanup_gate.set()
             barriers.release.set()
             await settle()
+            await world.close()
+
+    run(go())
+
+
+def test_an_abort_cancelled_before_its_first_step_still_closes_the_round(tmp_path):
+    seen = {}
+
+    def fault(world, ctx):
+        seen["conn"] = ctx.conn
+        loop = asyncio.get_running_loop()
+
+        def cancel_the_abort_before_it_starts():
+            aborts = [t for t in asyncio.all_tasks()
+                      if t.get_name() == f"round-{ROLLBACK_ROUND}-abort"]
+            if aborts:  # created, its first step still queued
+                aborts[0].cancel()
+            else:
+                loop.call_soon(cancel_the_abort_before_it_starts)
+
+        loop.call_soon(cancel_the_abort_before_it_starts)
+        raise InjectedFault("fault-in-commit")
+
+    async def go():
+        world = rollback_world(tmp_path, "abort-cancelled-early")
+        try:
+            capture = await to_round_start(world)
+            world.coordinator.hooks["before_transcript"] = fault
+            with pytest.raises(InjectedFault):
+                await world.coordinator.run_round(world)
+            conn = seen["conn"]
+            assert conn.closed and not conn.in_transaction()
+            assert world.fingerprint()["ledger"] == capture.fingerprint["ledger"]
+            assert ("admission_closed", f"round {ROLLBACK_ROUND}") in world.lifecycle
+            assert "abort did not finish (cancelled)" in world.unusable
+            assert world.failures[-1]["round"] == ROLLBACK_ROUND
+            with pytest.raises(WorldUnusable):
+                await world.coordinator.run_round(world)
+        finally:
             await world.close()
 
     run(go())

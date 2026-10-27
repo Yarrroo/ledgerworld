@@ -638,9 +638,12 @@ class Coordinator:
                 conn.close()
                 raise
             world.unusable = f"round {round_} is aborting"
+            world.close_admission()
+            status = "cancelled" if isinstance(error, asyncio.CancelledError) else "failed"
+            world.failures.append({"round": round_, "status": status, "error": repr(error)})
             # The abort is bounded and runs to its end in its own task: a cancellation that
             # arrives meanwhile waits for it, then propagates.
-            cleanup = asyncio.create_task(self._abort(world, token, conn, trans, capture, error),
+            cleanup = asyncio.create_task(self._abort(world, token, conn, trans, capture, status),
                                           name=f"round-{round_}-abort")
             again = None
             while not cleanup.done():
@@ -648,24 +651,30 @@ class Coordinator:
                     await asyncio.wait({cleanup})
                 except asyncio.CancelledError as cancel:
                     again = cancel
-            broken = None if cleanup.cancelled() else cleanup.exception()
-            if cleanup.cancelled() or broken is not None:
-                why = "cancelled" if broken is None else repr(broken)
+            if cleanup.cancelled():  # perhaps before its first step: stop what it never reached
+                broken, why = None, "cancelled"
+                for task in self.round_tasks(token):
+                    task.cancel()
+                conn.close()  # rolls back a transaction the abort left open
+            else:
+                broken = cleanup.exception()
+                why = None if broken is None else repr(broken)
+            if why is not None:
                 world.unusable = f"round {round_}: the abort did not finish ({why})"
                 world.lifecycle.append(("abort_failed", world.unusable))
+            if broken is not None and (again is not None or not isinstance(error, Exception)):
+                (again or error).add_note(f"the abort failed: {broken!r}")
             if again is not None:
                 raise again from error
-            if broken is not None:
+            if broken is not None and isinstance(error, Exception):
                 raise broken
             raise
         conn.close()
         return result
 
     async def _abort(self, world: World, token: object, conn: Connection, trans: Any,
-                     capture: Any, error: BaseException) -> None:
-        status = "cancelled" if isinstance(error, asyncio.CancelledError) else "failed"
+                     capture: Any, status: str) -> None:
         round_ = capture.round + 1
-        world.close_admission()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.quiesce_timeout_s
         pending = self.round_tasks(token)
@@ -684,8 +693,6 @@ class Coordinator:
                 trans.rollback()
             finally:
                 conn.close()
-        failure = {"round": round_, "status": status, "error": repr(error)}
-        world.failures.append(failure)
         if pending:
             world.unusable = (f"round {round_}: {len(pending)} round task(s) outlived their "
                               "cancellation")
