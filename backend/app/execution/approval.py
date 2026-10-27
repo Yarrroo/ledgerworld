@@ -111,7 +111,7 @@ def bind(
     digest = plan_hash(entity=plan["entity"], account=plan["account"], legs=legs,
                        snapshot_id=snapshot_id, mode=mode)
     return BoundApproval(
-        approval_id=approval_id or f"apr-{digest[:12]}",
+        approval_id=f"apr-{digest[:12]}" if approval_id is None else approval_id,
         entity=plan["entity"],
         account=plan["account"],
         legs=legs,
@@ -124,14 +124,10 @@ def bind(
 
 
 def _as_approval(value: object) -> BoundApproval | None:
-    if isinstance(value, BoundApproval):
-        return value
-    if isinstance(value, Mapping):
-        try:
-            return BoundApproval.model_validate(value)
-        except ValidationError:
-            return None
-    return None
+    try:
+        return BoundApproval.model_validate(value)
+    except ValidationError:
+        return None
 
 
 def verify(
@@ -156,8 +152,7 @@ def verify(
             return Refusal("not_observed_snapshot", f"{sid} is a branch's snapshot")
     if stored.plan_hash != _terms_hash(stored):
         return Refusal("approval_altered", "the stored approval no longer matches its hash")
-    if _terms_hash(shown) != stored.plan_hash:
-        return Refusal("approval_altered", "the bound hash no longer matches the terms presented")
+    # The stored terms match their hash, so any presented term that differs is outside the bound.
     changed = [f for f in BoundApproval.model_fields if getattr(shown, f) != getattr(stored, f)]
     if changed:
         return Refusal("approval_altered", f"terms outside the bound: {', '.join(changed)}")

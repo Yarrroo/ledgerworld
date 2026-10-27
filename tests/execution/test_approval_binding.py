@@ -23,7 +23,8 @@ from app.finance.schemas import BoundApproval
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "prp/2026-10-20-ledgerworld/design/modules/execution/fixtures/approval-binding.json"
-DATA = json.loads(FIXTURE.read_text())
+DATA = json.loads(FIXTURE.read_text(encoding="utf-8"))
+EXAMPLES = ROOT / "contracts/examples"
 BASE = DATA["base"]
 CASES = {case["id"]: case for case in DATA["cases"]}
 LEG_TERM = re.compile(r"^legs\[(\d+)\]\.(\w+)$")
@@ -74,7 +75,8 @@ def setup(case_id: str) -> Setup:
     """The stored approval and what is presented, after the case's change."""
     change = CASES[case_id]["change"] or {}
     terms = copy.deepcopy(BASE)
-    now, current, gateway_mode = DATA["now"], DATA["current_observed_snapshot_id"], BASE["mode"]
+    env = {"now": DATA["now"], "current_observed_snapshot_id": DATA["current_observed_snapshot_id"],
+           "gateway_mode": BASE["mode"]}
     for key, value in change.items():
         if match := LEG_TERM.match(key):
             terms["legs"][int(match[1])][match[2]] = value
@@ -82,23 +84,19 @@ def setup(case_id: str) -> Setup:
             terms["legs"].append(value)
         elif key == "snapshot_id":
             terms["snapshot_id"] = value
-        elif key == "now":
-            now = value
-        elif key == "current_observed_snapshot_id":
-            current = value
-        elif key == "gateway_mode":
-            gateway_mode = value
+        elif key in env:
+            env[key] = value
         elif key not in ("rehash", "execute_twice"):
             raise KeyError(f"{case_id}: {key} is not a binding-level change")
     stored = bind_terms(terms if change.get("rehash") else BASE)
     presented = stored.model_dump(mode="json") | {
         "legs": plan_of(terms)["legs"], "snapshot_id": terms["snapshot_id"]}
-    return Setup(stored, presented, at(now), current, gateway_mode)
+    return Setup(stored, presented, at(env["now"]), env["current_observed_snapshot_id"],
+                 env["gateway_mode"])
 
 
 def refused(verdict, code: str) -> None:
     assert isinstance(verdict, Refusal), verdict
-    assert not verdict.ok
     assert verdict.code == code, verdict
 
 
@@ -120,10 +118,30 @@ def test_bind_reproduces_the_fixture_approval_and_its_canonical_hash():
     assert bind_terms(BASE).plan_hash == approval.plan_hash
 
 
+def test_the_contract_examples_carry_the_bound_hash_and_request_ids():
+    """C3's valid example is the fixture base; C4 and C6 name its legs by `request_id`."""
+    example = json.loads((EXAMPLES / "c3_bound_approval/valid-lf1-integrated.json")
+                         .read_text(encoding="utf-8"))["instance"]
+    approval = BoundApproval.model_validate(example)
+    assert approval.plan_hash == bind_terms(BASE).plan_hash
+    assert verify(approval, example, at(DATA["now"]), approval.snapshot_id, approval.mode) is OK
+    ids = {request_id(approval, leg) for leg in approval.legs}
+    named = set()
+    for path in [*EXAMPLES.glob("c4_provider_op/*.json"), EXAMPLES / "c6_api/valid-execution.json"]:
+        named |= set(re.findall(r'"request_id": "([^"]+)"', path.read_text(encoding="utf-8")))
+    assert named and named <= ids
+
+
+def test_an_empty_approval_id_is_refused_not_replaced():
+    with pytest.raises(ValueError):
+        bind(plan_of(BASE), BASE["snapshot_id"], BASE["approver"], BASE["mode"],
+             now=at(DATA["now"]), approval_id="")
+
+
 def test_ok_approval_verifies_and_fixes_its_request_ids():
     case = CASES["ok"]
     run = setup("ok")
-    assert run.verify() is OK and run.verify().ok
+    assert run.verify() is OK
     ids = [request_id(run.stored, leg) for leg in run.stored.legs]
     expect = case["expect"]
     assert len(ids) == expect["legs_queued"]
