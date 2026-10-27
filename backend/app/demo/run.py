@@ -9,25 +9,34 @@
 4. **fork** — the world runs to its checkpoint, then the three policies each run in a fresh
    branch on the same shock (``decisions.candidates.evaluate``) and are ranked.
 5. **break** — reverse stress is not built (the cut line, §15), so this beat is the failure
-   conditions of the policies that did not hold: their earliest breach in their own branch.
+   conditions of the policies that did not hold: their floor breach and unmet obligations.
 6. **execute** — the selected policy decides again on the observed snapshot at t = 12 h
    (``plan_for_now``), the plan is bound (C3) and crosses the gateway: the advance, then the
    payroll payout after it.
-7. **reconcile** — the payout is moved to ``PAID`` and the sweep closes both legs against the
-   ledger; the receipt is written.
+7. **reconcile** — the payout is moved to ``PAID`` and each leg is reconciled by its own ``GET``
+   against the ledger; the receipt is written.
 
 The simulation runs in a child process (``python -m app.demo.run simulate``) whose environment
-has no ``AIRWALLEX_*`` variable and no demo token, under ``LEDGERWORLD_ROLE=sim``; it never
-imports the live connector or the gateway, and says so in its output, which the parent checks.
-Its branches live in a new temporary directory, so every run simulates them afresh.
+has no ``AIRWALLEX_*`` variable and no demo token, under ``LEDGERWORLD_ROLE=sim``, with
+``PYTHON_DOTENV_DISABLED`` set so the app's ``.env`` loading cannot put them back; the child
+scrubs its own environment again before any world work. It never imports the live connector or
+the gateway, and says so in its output, which the parent checks. Its branches live in a new
+temporary directory, so every run simulates them afresh.
+
+Each run observes its own snapshot id (it carries the run id), so a leg's ``request_id`` is new
+on every run and a second sandbox run never adopts the first one's transfer. The demo's ledger
+is fresh per run, so it reconciles its own legs and does not sweep the shared sandbox account
+for orphans: every older object there would read as one.
 
 Fake mode: the connector's ``FakeTransport`` (never the process's Airwallex variables) and the
 confidence-rumour family's ``ScriptedModel`` plan. Sandbox mode: the Airwallex sandbox from the
 environment and the configured model (``LLM_BASE_URL=scripted://…`` is a scripted plan, anything
 else a live OpenAI-compatible model); its payroll beneficiary is ``--beneficiary`` and a Mode A
-run needs ``--connected-account``. In Mode B a short sandbox wallet is funded first by one
-deposit listed under ``setup``, never as a checkpoint. The payout is walked along the transfer
-statuses the fake accepts (``PROCESSING → SENT → PAID``); a live run (T31) confirms the sandbox's.
+run needs ``--connected-account``. The provider is reached, and Mode A or B decided, before the
+simulation spends any model budget. In Mode B a short sandbox wallet is funded first by one
+deposit per currency, listed under ``setup``, never as a checkpoint. The payout is walked along
+the transfer statuses the fake accepts (``PROCESSING → SENT → PAID``); a live run (T31) confirms
+the sandbox's.
 
 Receipt timestamps are wall-clock UTC; the ledger and the gateway run on the world's simulated
 clock, which ``story.execute.simulated_now`` names. Exit 0 when the run finished and its receipt
@@ -44,19 +53,23 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import UTC, datetime, timedelta
+import uuid
+from collections import defaultdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from oasis_finance.observation import iso_utc
+
 from ..finance.schemas import Money, Snapshot, to_provider_decimal
 from ..finance.spendability import grouped
+from ..simulation.clock import ROUND_HOURS
 from ..simulation.scenarios import DemoWorld, load_family, load_world
 
 BEATS = ["state", "world", "shock", "fork", "break", "execute", "reconcile"]
-FAMILIES = ("delayed-receipt", "confidence-rumour")  # the shock; the rumour's script drives
+DELAY, RUMOUR = FAMILIES = ("delayed-receipt", "confidence-rumour")  # the rumour's script drives
 TREASURY, LENDER = "treasury", "lender"
 CP_ROUND = 2  # the committed boundary the branches fork from; the shock lands in round 3
-HORIZON_H = 72
 OBSERVED_T_H = 12  # the selected policy decides again on the world as observed then
 TERMS = {"adv-a": {"arrive_by_h": 18}}  # LF-1: the advance is eligible when it lands by t = 18
 ADVANCE = {  # LF-2's advance to borrower-a: 10,000.00, flat fee 8 %, repaid at 15 % of revenue
@@ -69,6 +82,7 @@ APPROVER = "demo operator"
 PAYOUT_PATH = ("PROCESSING", "SENT", "PAID")
 SETUP_LABEL = "sandbox wallet funding (setup, not part of the plan)"
 SIM_ROLE = "sim"
+SCRUBBED_TOKEN = "LEDGERWORLD_DEMO_TOKEN"
 LIVE_CONNECTOR = "app.connectors.airwallex.live"
 GATEWAY = "app.execution.gateway"
 ROOT = Path(__file__).resolve().parents[3]
@@ -100,11 +114,12 @@ def demo_snapshot(world: DemoWorld) -> Snapshot:
     return snap
 
 
-def observed_snapshot(world: DemoWorld) -> Snapshot:
-    """The world as observed at t = 12 h: the receivable still pending past its promise."""
+def observed_snapshot(world: DemoWorld, run_id: str) -> Snapshot:
+    """The world as this run observes it at t = 12 h: the receivable still pending past its
+    promise. The id carries the run, so the plan hash and every leg's request id are new."""
     data = demo_snapshot(world).model_dump(mode="json")
-    as_of = (world.epoch + timedelta(hours=OBSERVED_T_H)).isoformat().replace("+00:00", "Z")
-    data["snapshot_id"] = f"obs-{world.world_id}-r{OBSERVED_T_H // 4}"
+    as_of = iso_utc(OBSERVED_T_H, world.epoch)
+    data["snapshot_id"] = f"obs-{world.world_id}-r{OBSERVED_T_H // ROUND_HOURS}-{run_id}"
     data["as_of"] = as_of
     for account in data["accounts"]:
         account["as_of"] = as_of
@@ -113,6 +128,17 @@ def observed_snapshot(world: DemoWorld) -> Snapshot:
 
 def shock_events() -> list[dict]:
     return [event for family_id in FAMILIES for event in load_family(family_id).events]
+
+
+def market_hooks() -> dict:
+    """The coordinator hook that delivers every shock family's market events in its round."""
+    families = [load_family(family_id) for family_id in FAMILIES]
+
+    def delivered(world: Any, ctx: Any) -> None:
+        for family in families:
+            family.deliver_market(world, ctx)
+
+    return {"delivered": delivered}
 
 
 def describe(event: dict) -> str:
@@ -126,14 +152,23 @@ def describe(event: dict) -> str:
 # ----------------------------------------------------------------- the simulation (child)
 
 
-def model_factory(source: str) -> tuple[str, Any]:
-    """(``scripted|live``, a ``World`` model factory). ``family`` is the rumour's script;
-    ``configured`` is ``LLM_BASE_URL``'s plan or a live OpenAI-compatible model."""
+def scripted_plan(source: str) -> Any:
+    """The scripted plan a run's agents answer from, or None for a live model. ``family`` is
+    the rumour's script; ``configured`` is the plan ``LLM_BASE_URL`` names, if it names one."""
     from ..testing.scripted_model import ScriptedPlan
 
-    plan = load_family(FAMILIES[1]).plan() if source == "family" else ScriptedPlan.from_env()
+    return load_family(RUMOUR).plan() if source == "family" else ScriptedPlan.from_env()
+
+
+def model_kind(source: str) -> str:
+    return "live" if scripted_plan(source) is None else "scripted"
+
+
+def model_factory(source: str) -> Any:
+    """A ``World`` model factory: the scripted plan, or a live OpenAI-compatible model."""
+    plan = scripted_plan(source)
     if plan is not None:
-        return "scripted", lambda actor_id, w: plan.model(actor_id, lambda: w.clock.round)
+        return lambda actor_id, w: plan.model(actor_id, lambda: w.clock.round)
     missing = [n for n in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL_NAME") if not os.environ.get(n)]
     if missing:
         raise DemoFailed(f"a live model needs {', '.join(missing)}")
@@ -146,7 +181,7 @@ def model_factory(source: str) -> tuple[str, Any]:
             model_type=os.environ["LLM_MODEL_NAME"], api_key=os.environ["LLM_API_KEY"],
             url=os.environ["LLM_BASE_URL"])
 
-    return "live", live
+    return live
 
 
 async def simulate(run_id: str, seed: int, source: str, workdir: Path) -> dict:
@@ -161,9 +196,10 @@ async def simulate(run_id: str, seed: int, source: str, workdir: Path) -> dict:
     world = load_world()
     snap = demo_snapshot(world)
     events = shock_events()
-    kind, model = model_factory(source)
+    model = model_factory(source)
+    hooks = market_hooks()
     base = World(world.world_id, "base", snap, world.actors, model=model, workdir=workdir,
-                 seed=seed, epoch=world.epoch, coordinator=Coordinator())
+                 seed=seed, epoch=world.epoch, coordinator=Coordinator(hooks))
     k_p0 = capacity(base.store, LENDER, base.clock.now).K_p
     async with base:
         await base.run(CP_ROUND)
@@ -176,15 +212,16 @@ async def simulate(run_id: str, seed: int, source: str, workdir: Path) -> dict:
         return model(actor_id, w)
 
     evaluations = await evaluate(run_id, cp, {"shock": events}, ALL, model=branch_model,
-                                 workdir=workdir, terms=TERMS, horizon_h=HORIZON_H)
+                                 workdir=workdir, terms=TERMS, hooks=hooks)
     escalate_to = next(e.escalation for e in snap.entities if e.entity_id == TREASURY)
-    result = rank(evaluations, order=[p.id for p in ALL], run_id=run_id,
-                  checkpoint={"branch": cp.branch_id, "round": cp.round,
-                              "snapshot_id": cp.snapshot.snapshot_id},
+    cp_ref = {"branch": cp.branch_id, "round": cp.round, "snapshot_id": cp.snapshot.snapshot_id}
+    result = rank(evaluations, order=[p.id for p in ALL], run_id=run_id, checkpoint=cp_ref,
                   escalate_to=escalate_to)
     fresh = next((e for e in evaluations if e.policy == result.selected), None)
     fresh_branch = None
     if fresh is not None:
+        if fresh.branch_id not in created:
+            raise DemoFailed(f"{fresh.branch_id} built no model actor to time its creation by")
         at, w = created[fresh.branch_id]
         fresh_branch = {
             "branch_id": fresh.branch_id, "created_at": at, "rounds": w.clock.round - cp.round,
@@ -194,7 +231,7 @@ async def simulate(run_id: str, seed: int, source: str, workdir: Path) -> dict:
     names = {e.entity_id: e.name for e in snap.entities}
     operating = next(a for a in snap.accounts if a.id == f"{TREASURY}/operating")
     return {
-        "run_id": run_id, "seed": seed, "model": kind,
+        "run_id": run_id, "seed": seed, "model": model_kind(source),
         "state": {
             "snapshot_id": snap.snapshot_id, "as_of": snap.as_of.isoformat(),
             "accounts": [{"id": a.id, "settled": a.buckets.settled.minor,
@@ -207,7 +244,7 @@ async def simulate(run_id: str, seed: int, source: str, workdir: Path) -> dict:
             "actors": [{"actor_id": a["actor_id"], "name": names[a["actor_id"]],
                         "on_model": bool(a.get("llm"))} for a in world.actors],
             "focus": {k: treasury[k] for k in ("actor_id", "objective", "tools", "sees")}},
-        "shock": {"events": events, "checkpoint": {"branch": cp.branch_id, "round": cp.round}},
+        "shock": {"events": events, "checkpoint": cp_ref},
         "fork": {
             "policies": [{"id": e.policy, "branch_id": e.branch_id,
                           "feasible": e.feasibility.feasible, "actions": e.actions,
@@ -223,18 +260,28 @@ async def simulate(run_id: str, seed: int, source: str, workdir: Path) -> dict:
         "isolation": {
             "role": os.environ.get("LEDGERWORLD_ROLE"),
             "airwallex_vars": sorted(k for k in os.environ if k.startswith("AIRWALLEX_")),
-            "demo_token": "LEDGERWORLD_DEMO_TOKEN" in os.environ,
+            "demo_token": SCRUBBED_TOKEN in os.environ,
             "imported": sorted(m for m in (LIVE_CONNECTOR, GATEWAY) if m in sys.modules)},
     }
 
 
+def scrubbed(env: dict[str, str]) -> dict[str, str]:
+    """``env`` without any provider variable or the demo token, under the sim role."""
+    keep = {k: v for k, v in env.items() if not k.startswith("AIRWALLEX_") and k != SCRUBBED_TOKEN}
+    return keep | {"LEDGERWORLD_ROLE": SIM_ROLE}
+
+
 def sim_env(env: dict[str, str]) -> dict[str, str]:
-    """The child's environment: no provider variable, no demo token, the sim role, and this
-    tree's own sources first on its path."""
-    scrubbed = {k: v for k, v in env.items()
-                if not k.startswith("AIRWALLEX_") and k != "LEDGERWORLD_DEMO_TOKEN"}
+    """The child's environment: scrubbed, no ``.env`` loading, this tree's sources first."""
     path = [str(SOURCES[0]), str(SOURCES[1]), *filter(None, [env.get("PYTHONPATH")])]
-    return scrubbed | {"LEDGERWORLD_ROLE": SIM_ROLE, "PYTHONPATH": os.pathsep.join(path)}
+    return scrubbed(env) | {"PYTHON_DOTENV_DISABLED": "1", "PYTHONPATH": os.pathsep.join(path)}
+
+
+def isolate() -> None:
+    """In the child, before any world work: whatever reached ``os.environ`` on import goes."""
+    clean = scrubbed(dict(os.environ))
+    os.environ.clear()
+    os.environ.update(clean)
 
 
 def run_simulation(run_id: str, seed: int, source: str, scratch: Path) -> dict:
@@ -257,50 +304,56 @@ def run_simulation(run_id: str, seed: int, source: str, scratch: Path) -> dict:
 # ------------------------------------------------------------- execution (parent process)
 
 
-def provider(mode: str) -> Any:
-    """The Airwallex client: the fake from an environment of its own, or the sandbox's."""
-    from ..connectors.airwallex.client import client_from_env
+def connect(mode: str, connected_account: str | None) -> tuple[Any, str]:
+    """(the Airwallex client, leg mode A|B), settled before any simulation runs: the fake from
+    an environment of its own, or the sandbox the process's environment names."""
+    from ..connectors.airwallex.client import client_from_env, connected_setting
 
     if mode == "fake":
-        return client_from_env({"AIRWALLEX_MODE": "fake"})
+        client = client_from_env({"AIRWALLEX_MODE": "fake"})
+        return client, client.probe_connected(connected_setting({}))
     if os.environ.get("AIRWALLEX_MODE") != "sandbox":
         raise DemoFailed("--mode sandbox needs AIRWALLEX_MODE=sandbox in the environment")
-    return client_from_env()
+    client = client_from_env()
+    leg_mode = client.probe_connected()
+    if leg_mode == "A" and not connected_account:
+        raise DemoFailed("Mode A needs --connected-account")
+    return client, leg_mode
 
 
-def fund_wallet(client: Any, plan: dict, global_account_id: str | None) -> list[dict]:
-    """Mode B, sandbox: top the platform wallet up to the payouts with one setup deposit."""
-    need = sum(leg["amount"]["minor"] for leg in plan["legs"] if leg["kind"] == "payout")
+def fund_wallet(client: Any, plan: dict, global_account: Any) -> list[dict]:
+    """Mode B, sandbox: top the platform wallet up to the payouts, one setup deposit for each
+    currency it is short in; ``global_account(currency)`` names the account to deposit into."""
+    need: dict[str, int] = defaultdict(int)
+    for leg in plan["legs"]:
+        if leg["kind"] == "payout":
+            need[leg["amount"]["currency"]] += leg["amount"]["minor"]
     held = {b.currency: b.available.minor for b in client.balances()}
-    short = need - held.get("USD", 0)
-    if short <= 0:
-        return []
-    if not global_account_id:
-        found = [a["id"] for a in client.global_accounts()
-                 if isinstance(a, dict) and a.get("currency") == "USD"]
-        if not found:
-            raise DemoFailed("no USD Global Account to fund the sandbox wallet from")
-        global_account_id = found[0]
-    amount = Money(minor=short, currency="USD")
-    obj = client.simulate_deposit(amount=amount, global_account_id=global_account_id,
-                                  reference=SETUP_LABEL)
-    return [{"kind": "wallet_funding", "label": SETUP_LABEL, "provider_id": obj.provider_id,
-             "amount": to_provider_decimal(amount)}]
+    setup = []
+    for currency, minor in sorted(need.items()):
+        short = minor - held.get(currency, 0)
+        if short <= 0:
+            continue
+        amount = Money(minor=short, currency=currency)
+        obj = client.simulate_deposit(amount=amount, global_account_id=global_account(currency),
+                                      reference=SETUP_LABEL)
+        setup.append({"kind": "wallet_funding", "label": SETUP_LABEL,
+                      "provider_id": obj.provider_id, "amount": to_provider_decimal(amount)})
+    return setup
 
 
-def pay(client: Any, leg: Any) -> None:
-    """Walk a submitted payout to ``PAID`` from whatever status it shows now."""
+def pay(client: Any, provider_id: str, status: str) -> None:
+    """Walk a submitted payout to ``PAID`` from ``status``, what the provider shows now."""
     path = list(PAYOUT_PATH)
-    if leg.provider_status in path:
-        path = path[path.index(leg.provider_status) + 1:]
-    for status in path:
-        client.simulate_transition(leg.provider_id, status)
+    if status in path:
+        path = path[path.index(status) + 1:]
+    for step in path:
+        client.simulate_transition(provider_id, step)
 
 
-def execute(selected: str, mode: str, *, beneficiary: str,
-            connected_account: str | None) -> dict:
+def execute(selected: str, mode: str, *, client: Any, leg_mode: str, run_id: str,
+            beneficiary: str, connected_account: str | None) -> dict:
     """The selected policy's plan on the observed snapshot, bound, executed and reconciled."""
-    from ..connectors.airwallex.client import connected_setting
     from ..decisions.candidates import ALL, plan_for_now
     from ..execution import reconcile
     from ..execution.approval import bind
@@ -309,74 +362,79 @@ def execute(selected: str, mode: str, *, beneficiary: str,
     from ..finance.store import LedgerStore
 
     world = load_world()
-    observed = observed_snapshot(world)
+    observed = observed_snapshot(world, run_id)
     now = observed.as_of
     policy = next(p for p in ALL if p.id == selected)
     plan = plan_for_now(policy, observed, epoch=world.epoch, terms=TERMS,
                         beneficiaries={PAYROLL: beneficiary})
     if plan is None:
         raise DemoFailed(f"{selected} proposes nothing on {observed.snapshot_id}")
-    client = provider(mode)
-    leg_mode = client.probe_connected(connected_setting({} if mode == "fake" else None))
-    if leg_mode == "A" and not connected_account:
-        raise DemoFailed("Mode A needs --connected-account")
-    global_account_id = os.environ.get("AIRWALLEX_GLOBAL_ACCOUNT_ID") or None
-    setup = fund_wallet(client, plan, global_account_id) \
-        if mode == "sandbox" and leg_mode == "B" else []
     store = LedgerStore("sqlite://")
     from_snapshot(store, observed)
     gateway = Gateway(store, client, mode=mode, leg_mode=leg_mode, beneficiaries=[beneficiary],
                       clock=lambda: now, connected_account=connected_account,
-                      global_account_id=global_account_id)
+                      global_account_id=os.environ.get("AIRWALLEX_GLOBAL_ACCOUNT_ID") or None)
+    setup = fund_wallet(client, plan, gateway.provider._global_account) \
+        if mode == "sandbox" and leg_mode == "B" else []
     approval = bind(plan, observed, APPROVER, mode, now=now)
     gateway.record(approval)
     done = gateway.execute(approval.model_dump(mode="json"),
                            current_snapshot_id=observed.snapshot_id)
-    story = {"simulated_now": now.isoformat(), "observed_snapshot_id": observed.snapshot_id,
-             "leg_mode": leg_mode, "approval": {
-                 "approval_id": approval.approval_id, "plan_hash": approval.plan_hash,
-                 "legs": [leg.model_dump(mode="json", exclude_none=True)
-                          for leg in approval.legs]}}
     if not done.ok:
         raise DemoFailed(f"the gateway refused the approval: {done.code} ({done.detail})")
     stamps: dict[str, str] = {}
 
-    def stamp_settled() -> None:
-        for leg in gateway.legs(done.execution_id):
+    def stamp_settled() -> list[Any]:
+        legs = gateway.legs(done.execution_id)
+        for leg in legs:
             if leg.state == "settled" and leg.reconciled:
                 stamps.setdefault(leg.leg_id, utc_now())
+        return legs
 
-    stamp_settled()
-    for leg in gateway.legs(done.execution_id):
+    for leg in stamp_settled():
         if leg.kind == "payout" and leg.state == "submitted":
-            pay(client, leg)
-    reconcile.sweep(gateway)
-    stamp_settled()
-    legs = {leg.kind: leg for leg in gateway.legs(done.execution_id)}
+            pay(client, leg.provider_id, gateway.provider.get(leg).status)
+        reconcile.reconcile_leg(gateway, leg.leg_id)
+    legs = [{"kind": leg.kind, "leg_id": leg.leg_id, "request_id": leg.request_id,
+             "provider_id": leg.provider_id, "label": leg.receipt_label,
+             "status": leg.provider_status, "journal_id": leg.journal_id,
+             "reconciled": leg.reconciled, "mode": mode,
+             "at": stamps.get(leg.leg_id, utc_now()), "state": leg.state}
+            for leg in stamp_settled()]
+    return {"connected": leg_mode == "A", "setup": setup, "legs": legs,
+            "incidents_open": len(gateway.incidents(open_only=True)),
+            "story": {"simulated_now": now.isoformat(), "observed_snapshot_id": observed.snapshot_id,
+                      "leg_mode": leg_mode, "approval": {
+                          "approval_id": approval.approval_id, "plan_hash": approval.plan_hash,
+                          "legs": [leg.model_dump(mode="json", exclude_none=True)
+                                   for leg in approval.legs]}}}
 
-    def checkpoint(kind: str) -> dict | None:
-        leg = legs.get(kind)
-        if leg is None:
-            return None
-        return {"leg_id": leg.leg_id, "request_id": leg.request_id,
-                "provider_id": leg.provider_id, "label": leg.receipt_label,
-                "status": leg.provider_status, "journal_id": leg.journal_id,
-                "reconciled": leg.reconciled, "mode": mode,
-                "at": stamps.get(leg.leg_id, utc_now()), "state": leg.state}
 
-    return {"connected": leg_mode == "A", "setup": setup, "story": story,
-            "advance": checkpoint("advance"), "payout": checkpoint("payout"),
-            "incidents_open": len(gateway.incidents(open_only=True))}
+def first_leg(done: dict, kind: str) -> dict | None:
+    return next((leg for leg in done.get("legs", []) if leg["kind"] == kind), None)
 
 
 # ----------------------------------------------------------------------------- the receipt
 
 
 def say(beat: str, text: str) -> None:
-    print(f"[{BEATS.index(beat) + 1}/7 {beat}] {text}", flush=True)
+    print(f"[{BEATS.index(beat) + 1}/{len(BEATS)} {beat}] {text}", flush=True)
+
+
+def failure_of(entry: dict) -> str:
+    """Why a policy did not hold in its branch: its floor breach and its unmet obligations."""
+    floor, why = entry["floor"], []
+    if floor["short_minor"]:
+        why.append(f"cash {usd(floor['min_cash'])} at t={floor['at_h']} h, "
+                   f"{usd(floor['short_minor'])} under the floor")
+    why += [f"{o['id']} unmet at t={o['due_h']} h"
+            + (f", short {usd(o['short_minor'])}" if o.get("short_minor") else "")
+            for o in entry["obligations"]]
+    return f"{entry['policy']}: " + ("; ".join(why) or "infeasible")
 
 
 def tell(sim: dict) -> None:
+    """Beats 1-5, from the simulation's output."""
     state, world, fork = sim["state"], sim["world"], sim["fork"]
     cash = ", ".join(f"{a['id']} {usd(a['settled'])}" for a in state["accounts"])
     owed = ", ".join(f"{o['id']} {usd(o['amount'])} due {o['due_at']}"
@@ -398,27 +456,40 @@ def tell(sim: dict) -> None:
         rows.append(f"{p['id']} {'feasible' if p['feasible'] else 'infeasible'} in "
                     f"{p['branch_id']}{low}")
     say("fork", "; ".join(rows) + f" -> {fork['label']}")
-    breaks = [f"{b['policy']}: cash {usd(b['floor']['min_cash'])} at t={b['floor']['at_h']} h, "
-              f"{usd(b['floor']['short_minor'])} under the floor" for b in sim["break"]]
-    say("break", "; ".join(breaks) or "every policy held on this shock")
+    say("break", "; ".join(failure_of(b) for b in sim["break"])
+        or "every policy held on this shock")
 
 
-def receipt_of(sim: dict | None, done: dict | None, *, mode: str, seed: int, run_id: str,
-               started: str, failed: str | None) -> dict:
+def tell_execution(done: dict, mode: str) -> None:
+    """Beats 6-7, from what the gateway did."""
+    story = done["story"]
+    approval = story["approval"]
+    say("execute", f"approval {approval['approval_id']} ({len(approval['legs'])} legs, "
+                   f"mode {mode}, leg mode {story['leg_mode']}) on "
+                   f"{story['observed_snapshot_id']}"
+                   + "".join(f"; setup {s['label']} {s['amount']}" for s in done["setup"]))
+    say("reconcile", "; ".join(
+        f"{leg['kind']} {leg['status']} {leg['provider_id']} -> {leg['journal_id']} "
+        f"({leg['label']})" for leg in done["legs"])
+        + f"; incidents open {done['incidents_open']}")
+
+
+def receipt_of(sim: dict | None, done: dict | None, *, mode: str, model: str, seed: int,
+               run_id: str, started: str, failed: str | None) -> dict:
     done = done or {}
     checkpoints = {}
     if sim and sim.get("fresh_branch"):
         checkpoints["fresh_branch"] = sim["fresh_branch"] | {"mode": mode}
     for name, kind in (("advance_reconciled", "advance"), ("payout_reconciled", "payout")):
-        if done.get(kind):
-            checkpoints[name] = {k: v for k, v in done[kind].items() if k != "state"}
+        leg = first_leg(done, kind)
+        if leg:
+            checkpoints[name] = {k: v for k, v in leg.items() if k not in ("kind", "state")}
     story = {k: sim[k] for k in ("state", "world", "shock", "fork", "break")} if sim else {}
     if "story" in done:
         story["execute"] = done["story"]
     receipt = {
         "run_id": run_id, "started_at": started, "finished_at": utc_now(), "mode": mode,
-        "connected": done.get("connected", False),
-        "model": sim["model"] if sim else ("scripted" if mode == "fake" else "live"),
+        "connected": done.get("connected", False), "model": sim["model"] if sim else model,
         "seed": seed, "beats": BEATS, "setup": done.get("setup", []),
         "checkpoints": checkpoints, "incidents_open": done.get("incidents_open", 0),
         "story": story,
@@ -431,40 +502,35 @@ def receipt_of(sim: dict | None, done: dict | None, *, mode: str, seed: int, run
 def demo(mode: str, out: Path, seed: int | None, *, beneficiary: str | None,
          connected_account: str | None) -> int:
     started = utc_now()
-    run_id = "demo-" + started.replace("-", "").replace(":", "")
-    seed = load_family(FAMILIES[0]).seed if seed is None else seed
+    run_id = f"demo-{started.replace('-', '').replace(':', '')}-{uuid.uuid4().hex[:4]}"
+    seed = load_family(DELAY).seed if seed is None else seed
+    source = "family" if mode == "fake" else "configured"
     sim = done = None
     failed = None
     try:
         if mode == "sandbox" and not beneficiary:
             raise DemoFailed("--mode sandbox needs --beneficiary (the sandbox payroll "
                              "beneficiary id)")
+        client, leg_mode = connect(mode, connected_account)
         with tempfile.TemporaryDirectory(prefix="ledgerworld-demo-") as scratch:
-            sim = run_simulation(run_id, seed, "family" if mode == "fake" else "configured",
-                                 Path(scratch))
+            sim = run_simulation(run_id, seed, source, Path(scratch))
         tell(sim)
         if sim["fork"]["selected"] is None:
             raise DemoFailed(f"no feasible plan: {sim['fork']['escalation']}")
-        done = execute(sim["fork"]["selected"], mode, beneficiary=beneficiary or FAKE_BENEFICIARY,
+        done = execute(sim["fork"]["selected"], mode, client=client, leg_mode=leg_mode,
+                       run_id=run_id, beneficiary=beneficiary or FAKE_BENEFICIARY,
                        connected_account=connected_account)
-        approval = done["story"]["approval"]
-        say("execute", f"approval {approval['approval_id']} ({len(approval['legs'])} legs, "
-                       f"mode {mode}, leg mode {done['story']['leg_mode']}) on "
-                       f"{done['story']['observed_snapshot_id']}"
-                       + "".join(f"; setup {s['label']} {s['amount']}" for s in done["setup"]))
-        for kind in ("advance", "payout"):
-            leg = done[kind]
-            if leg is None or leg["state"] != "settled" or not leg["reconciled"]:
-                raise DemoFailed(f"the {kind} leg did not settle: {leg}")
-        say("reconcile", "; ".join(
-            f"{k} {done[k]['status']} {done[k]['provider_id']} -> {done[k]['journal_id']} "
-            f"({done[k]['label']})" for k in ("advance", "payout"))
-            + f"; incidents open {done['incidents_open']}")
-    except DemoFailed as failure:
-        failed = str(failure)
+        tell_execution(done, mode)
+        open_legs = [leg["leg_id"] for leg in done["legs"]
+                     if leg["state"] != "settled" or not leg["reconciled"]]
+        if open_legs or not first_leg(done, "advance") or not first_leg(done, "payout"):
+            raise DemoFailed(f"not every leg settled and reconciled: {open_legs or done['legs']}")
+    except Exception as failure:  # noqa: BLE001 - any step: the receipt names it, exit 1
+        failed = str(failure) if isinstance(failure, DemoFailed) \
+            else f"{type(failure).__name__}: {failure}"
         print(f"demo: failed: {failed}", file=sys.stderr)
-    receipt = receipt_of(sim, done, mode=mode, seed=seed, run_id=run_id, started=started,
-                         failed=failed)
+    receipt = receipt_of(sim, done, mode=mode, model=model_kind(source), seed=seed,
+                         run_id=run_id, started=started, failed=failed)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(receipt, indent=1, default=str) + "\n", encoding="utf-8")
     print(f"receipt: {out}")
@@ -473,6 +539,7 @@ def demo(mode: str, out: Path, seed: int | None, *, beneficiary: str | None,
 
 def main(argv: list[str]) -> int:
     if argv[:1] == ["simulate"]:
+        isolate()
         parser = argparse.ArgumentParser(prog="app.demo.run simulate")
         parser.add_argument("--run-id", required=True)
         parser.add_argument("--seed", type=int, required=True)
