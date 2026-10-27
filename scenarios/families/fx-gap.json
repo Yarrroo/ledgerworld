@@ -1,0 +1,85 @@
+{
+ "id": "fx-gap",
+ "about": "A EUR supplier invoice the treasury owes moves against it on the market-maker's EUR/USD prices. The round world has no FX quote, so the treasury's conversion is refused and it asks the lender for an advance to cover the gap.",
+ "seed": 106,
+ "starts_round": 4,
+ "rounds": 3,
+ "params": {
+  "currency": "EUR",
+  "amount_minor": 1000000,
+  "due_h": 36,
+  "eurusd_path": [
+   "1.08",
+   "1.11",
+   "1.14"
+  ],
+  "path_from_round": 4
+ },
+ "expect_cleared": "treasury convert (quote then conversion) or defer",
+ "cleared": [
+  [
+   "treasury",
+   "request_advance"
+  ],
+  [
+   "lender",
+   "accept"
+  ]
+ ],
+ "refused": {
+  "convert": "no_fx_quote"
+ },
+ "script": [
+  {
+   "actor_id": "treasury",
+   "round": 4,
+   "when_seen": [
+    "px-eurusd-r4"
+   ],
+   "tool_calls": [
+    {
+     "name": "convert",
+     "args": {
+      "amount_minor": 1080000,
+      "currency": "USD",
+      "to_currency": "EUR",
+      "reason": "buy the invoice's euros before the rate moves"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "treasury",
+   "round": 5,
+   "when_seen": [
+    "px-eurusd-r5"
+   ],
+   "tool_calls": [
+    {
+     "name": "request_advance",
+     "args": {
+      "amount_minor": 1200000,
+      "currency": "USD",
+      "reason": "cover the EUR invoice at the moving rate",
+      "from": "lender"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "lender",
+   "round": 6,
+   "when_seen": [
+    "req:treasury:r5"
+   ],
+   "tool_calls": [
+    {
+     "name": "accept",
+     "args": {
+      "request": "req:treasury:r5"
+     }
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,72 @@
+{
+ "id": "confidence-rumour",
+ "about": "The public feed posts a rumour that the venue may pause withdrawals; borrower-c reads it and requests an advance, which the lender accepts and disburses, so K_p falls (coupled-chain.json).",
+ "seed": 102,
+ "starts_round": 3,
+ "rounds": 3,
+ "params": {
+  "post_round": 3,
+  "author": "feed",
+  "audience": "public",
+  "text": "Unconfirmed: the exchange venue may pause withdrawals this week."
+ },
+ "expect_cleared": "borrower-c request_advance (see coupled-chain.json)",
+ "cleared": [
+  [
+   "borrower-c",
+   "request_advance"
+  ],
+  [
+   "lender",
+   "accept"
+  ],
+  [
+   "lender",
+   "disburse"
+  ]
+ ],
+ "script": [
+  {
+   "actor_id": "borrower-c",
+   "round": 4,
+   "when_seen": [
+    "p-r3-1"
+   ],
+   "tool_calls": [
+    {
+     "name": "request_advance",
+     "args": {
+      "amount_minor": 1200000,
+      "currency": "USD",
+      "reason": "precaution after the venue rumour",
+      "from": "lender"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "lender",
+   "round": 5,
+   "when_seen": [
+    "req:borrower-c:r4"
+   ],
+   "tool_calls": [
+    {
+     "name": "accept",
+     "args": {
+      "request": "req:borrower-c:r4"
+     }
+    },
+    {
+     "name": "disburse",
+     "args": {
+      "request": "req:borrower-c:r4",
+      "amount_minor": 1200000,
+      "currency": "USD",
+      "from_account": "lender/operating"
+     }
+    }
+   ]
+  }
+ ]
+}

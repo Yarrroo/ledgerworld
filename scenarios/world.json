@@ -1,0 +1,409 @@
+{
+ "world_id": "demo",
+ "about": "The demo world (system brief 7.1): eight synthetic actors on one C5 snapshot. The treasury's account is LF-1 and the lender pool is LF-2 (system brief 6) with the coupled-chain borrowers; every name is invented. Money in USD minor units; times from the epoch 2026-01-01T00:00:00Z, rounds of 4 h. An actor's ledger entity is its actor_id; an actor's `entity` names the organisation it models.",
+ "synthetic": true,
+ "epoch": "2026-01-01T00:00:00Z",
+ "round_hours": 4,
+ "horizon_hours": 72,
+ "actors": [
+  {
+   "actor_id": "treasury",
+   "entity": "borrower-a",
+   "role": "treasury",
+   "llm": true,
+   "priority_class": 1,
+   "objective": "meet every obligation and keep the 30,000.00 reserve floor at least cost",
+   "tools": [
+    "request_advance",
+    "convert",
+    "pay",
+    "defer",
+    "no_action"
+   ],
+   "sees": [
+    "own_accounts",
+    "own_contracts",
+    "messages_to_me",
+    "public_posts",
+    "public_prices",
+    "memory"
+   ]
+  },
+  {
+   "actor_id": "lender",
+   "entity": "lender-pool",
+   "role": "lender pool",
+   "llm": true,
+   "priority_class": 1,
+   "objective": "lend within usable capacity K_p and the 8,000.00 pool floor; protect repayment",
+   "tools": [
+    "offer",
+    "accept",
+    "disburse",
+    "release",
+    "no_action"
+   ],
+   "sees": [
+    "own_accounts",
+    "own_contracts",
+    "messages_to_me",
+    "public_posts",
+    "public_prices",
+    "memory"
+   ]
+  },
+  {
+   "actor_id": "borrower-b",
+   "entity": "borrower-b",
+   "role": "borrower",
+   "llm": true,
+   "priority_class": 2,
+   "objective": "keep its business running; holds a committed undrawn line of 10,000.00",
+   "tools": [
+    "request_advance",
+    "repay",
+    "pay",
+    "defer",
+    "no_action"
+   ],
+   "sees": [
+    "own_accounts",
+    "own_contracts",
+    "messages_to_me",
+    "public_posts",
+    "public_prices",
+    "memory"
+   ]
+  },
+  {
+   "actor_id": "borrower-c",
+   "entity": "borrower-c",
+   "role": "borrower",
+   "llm": true,
+   "priority_class": 2,
+   "objective": "keep its business running; no committed line",
+   "tools": [
+    "request_advance",
+    "repay",
+    "pay",
+    "defer",
+    "no_action"
+   ],
+   "sees": [
+    "own_accounts",
+    "own_contracts",
+    "messages_to_me",
+    "public_posts",
+    "public_prices",
+    "memory"
+   ]
+  },
+  {
+   "actor_id": "payroll",
+   "entity": "payroll-counterparty",
+   "role": "payroll counterparty",
+   "llm": false,
+   "priority_class": 0,
+   "objective": "receive payroll when due (mandatory settlement, not a choice)",
+   "tools": [],
+   "sees": [
+    "messages_to_me"
+   ]
+  },
+  {
+   "actor_id": "venue",
+   "entity": "exchange-venue",
+   "role": "exchange / settlement venue",
+   "llm": true,
+   "priority_class": 0,
+   "objective": "settle withdrawals; may freeze them under stress",
+   "tools": [
+    "defer",
+    "no_action"
+   ],
+   "sees": [
+    "own_accounts",
+    "messages_to_me",
+    "public_posts",
+    "memory"
+   ]
+  },
+  {
+   "actor_id": "market-maker",
+   "entity": "market-maker",
+   "role": "market-maker of public prices",
+   "llm": false,
+   "priority_class": 3,
+   "objective": "publish prices from the scenario's seeded factor path",
+   "tools": [],
+   "sees": []
+  },
+  {
+   "actor_id": "feed",
+   "entity": "public-feed",
+   "role": "public feed account",
+   "llm": true,
+   "priority_class": 3,
+   "objective": "post public news and rumours the scenario schedules, and react to public events",
+   "tools": [
+    "create_post",
+    "no_action"
+   ],
+   "sees": [
+    "public_posts",
+    "public_prices"
+   ]
+  }
+ ],
+ "snapshot": {
+  "snapshot_id": "demo-world",
+  "as_of": "2026-01-01T00:00:00Z",
+  "entities": [
+   {
+    "entity_id": "treasury",
+    "name": "Northwind Parts treasury (synthetic)",
+    "kind": "treasury",
+    "escalation": "treasury operator",
+    "synthetic": true
+   },
+   {
+    "entity_id": "lender",
+    "name": "Harbourline Credit pool (synthetic)",
+    "kind": "lender pool",
+    "escalation": "pool risk officer",
+    "synthetic": true
+   },
+   {
+    "entity_id": "borrower-b",
+    "name": "Bellfield Kitchens (synthetic)",
+    "kind": "borrower",
+    "synthetic": true
+   },
+   {
+    "entity_id": "borrower-c",
+    "name": "Cobalt Courier Co. (synthetic)",
+    "kind": "borrower",
+    "synthetic": true
+   },
+   {
+    "entity_id": "payroll",
+    "name": "Northwind payroll bureau (synthetic)",
+    "kind": "counterparty",
+    "synthetic": true
+   },
+   {
+    "entity_id": "venue",
+    "name": "Quayside Exchange (synthetic)",
+    "kind": "venue",
+    "synthetic": true
+   },
+   {
+    "entity_id": "market-maker",
+    "name": "Tidemark Quotes (synthetic)",
+    "kind": "counterparty",
+    "synthetic": true
+   },
+   {
+    "entity_id": "feed",
+    "name": "Ledger Street Wire (synthetic)",
+    "kind": "counterparty",
+    "synthetic": true
+   }
+  ],
+  "accounts": [
+   {
+    "id": "treasury/operating",
+    "entity": "treasury",
+    "currency": "USD",
+    "floor": {
+     "minor": 3000000,
+     "currency": "USD"
+    },
+    "observability": "known",
+    "as_of": "2026-01-01T00:00:00Z",
+    "buckets": {
+     "settled": {
+      "minor": 7000000,
+      "currency": "USD"
+     },
+     "reserved": {
+      "minor": 5000000,
+      "currency": "USD"
+     },
+     "pledged": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pending_in": [
+      {
+       "flow_id": "receivable-1",
+       "amount": {
+        "minor": 2000000,
+        "currency": "USD"
+       },
+       "expected_at": "2026-01-01T12:00:00Z",
+       "kind": "receivable"
+      },
+      {
+       "flow_id": "withdrawal-1",
+       "amount": {
+        "minor": 1500000,
+        "currency": "USD"
+       },
+       "expected_at": "2026-01-03T00:00:00Z",
+       "kind": "exchange_withdrawal"
+      }
+     ],
+     "pending_out": []
+    }
+   },
+   {
+    "id": "lender/operating",
+    "entity": "lender",
+    "currency": "USD",
+    "observability": "known",
+    "as_of": "2026-01-01T00:00:00Z",
+    "buckets": {
+     "settled": {
+      "minor": 4500000,
+      "currency": "USD"
+     },
+     "reserved": {
+      "minor": 1000000,
+      "currency": "USD"
+     },
+     "pledged": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pending_in": [],
+     "pending_out": []
+    }
+   },
+   {
+    "id": "lender/venue",
+    "entity": "lender",
+    "currency": "USD",
+    "venue": "venue",
+    "observability": "known",
+    "as_of": "2026-01-01T00:00:00Z",
+    "buckets": {
+     "settled": {
+      "minor": 1500000,
+      "currency": "USD"
+     },
+     "reserved": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pledged": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pending_in": [],
+     "pending_out": []
+    }
+   },
+   {
+    "id": "borrower-b/operating",
+    "entity": "borrower-b",
+    "currency": "USD",
+    "observability": "known",
+    "as_of": "2026-01-01T00:00:00Z",
+    "buckets": {
+     "settled": {
+      "minor": 900000,
+      "currency": "USD"
+     },
+     "reserved": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pledged": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pending_in": [],
+     "pending_out": []
+    }
+   },
+   {
+    "id": "borrower-c/operating",
+    "entity": "borrower-c",
+    "currency": "USD",
+    "observability": "known",
+    "as_of": "2026-01-01T00:00:00Z",
+    "buckets": {
+     "settled": {
+      "minor": 400000,
+      "currency": "USD"
+     },
+     "reserved": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pledged": {
+      "minor": 0,
+      "currency": "USD"
+     },
+     "pending_in": [],
+     "pending_out": []
+    }
+   }
+  ],
+  "obligations": [
+   {
+    "obligation_id": "payroll-1",
+    "entity": "treasury",
+    "account": "treasury/operating",
+    "amount": {
+     "minor": 5000000,
+     "currency": "USD"
+    },
+    "due_at": "2026-01-02T16:00:00Z",
+    "kind": "payroll",
+    "reservation_id": "payroll-hold"
+   }
+  ],
+  "contracts": [
+   {
+    "contract_id": "line-b",
+    "lender": "lender",
+    "borrower": "borrower-b",
+    "state": "active",
+    "kind": "committed_line",
+    "limit": {
+     "minor": 1000000,
+     "currency": "USD"
+    },
+    "drawn": {
+     "minor": 0,
+     "currency": "USD"
+    },
+    "reservation_id": "line-b:undrawn",
+    "reserved_on": "lender/operating"
+   }
+  ],
+  "exposures": [
+   {
+    "exposure_id": "venue-1",
+    "venue": "venue",
+    "shared_with": [
+     "treasury",
+     "lender"
+    ],
+    "account": "lender/venue",
+    "flow_id": "withdrawal-1"
+   }
+  ],
+  "pools": [
+   {
+    "entity": "lender",
+    "floor": {
+     "minor": 800000,
+     "currency": "USD"
+    }
+   }
+  ]
+ }
+}
