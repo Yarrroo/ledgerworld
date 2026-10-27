@@ -7,8 +7,9 @@ import ReportView from '../views/ReportView.vue'
 import InteractionView from '../views/InteractionView.vue'
 
 const routes = [
+  { path: '/', redirect: { name: 'Overview' } },
   {
-    path: '/',
+    path: '/home',
     name: 'Home',
     component: Home
   },
