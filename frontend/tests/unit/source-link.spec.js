@@ -25,8 +25,9 @@ async function open (name, path, env) {
   vi.stubEnv('VITE_API_BASE_URL', '/')
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value)
   vi.stubGlobal('fetch', vi.fn(async (url) => {
-    const screen = url.replace('/api/v1', '')
+    const screen = new URL(url, 'https://ledgerworld.example').pathname.replace('/api/v1', '')
     const body = path === '/lending' && screen === '/overview' ? LENDING_OVERVIEW : ANSWERS[screen]
+    if (!body) throw new Error(`no recorded answer for ${url}`)
     return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(body)) }
   }))
   const views = {
@@ -54,14 +55,15 @@ afterEach(() => {
 describe('the source link', () => {
   it.each(SCREENS)('%s links the source from its footer under the image setting', async (name, path) => {
     const wrapper = await open(name, path, { VITE_SOURCE_URL: SOURCE })
-    expect(wrapper.find('[data-test="banner"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="error"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="mode"]').text()).toBe('Simulated provider')
     const link = wrapper.get(`main a[href="${SOURCE}"]`)
     expect(link.text()).toBe('Source code (AGPL-3.0)')
   })
 
   it.each(SCREENS)('%s shows no dead link when built without one', async (name, path) => {
     const wrapper = await open(name, path, { VITE_SOURCE_URL: '' })
-    expect(wrapper.find('[data-test="banner"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="mode"]').text()).toBe('Simulated provider')
     expect(wrapper.findAll('a').filter((a) => a.text().startsWith('Source code'))).toEqual([])
   })
 })

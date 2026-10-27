@@ -195,21 +195,21 @@ def test_the_dockerfile_sets_no_application_value_beyond_the_role():
             names |= {pair.split("=", 1)[0] for pair in shlex.split(rest)}
         if word == "ARG":
             assert "=" not in rest, f"ARG {rest} carries a default value"
-            args.add(rest)
+            args |= set(rest.split())
     assert names - TOOLCHAIN_ENV == {"LEDGERWORLD_ROLE"}
     assert (names - TOOLCHAIN_ENV) | args <= env_example()
 
 
 # --------------------------------------------------------------------------- AGPL source link
 
-SOURCE_URL = "VITE_SOURCE_URL"
+SOURCE_ARG = "VITE_SOURCE_URL"
 
 
 def run_source_guard(value: str | None) -> subprocess.CompletedProcess:
     """The frontend stage's check on the source link, run as the build's /bin/sh runs it."""
-    runs = [r for w, r in stages()["frontend"] if w == "RUN" and SOURCE_URL in r]
+    runs = [r for w, r in stages()["frontend"] if w == "RUN" and SOURCE_ARG in r]
     assert len(runs) == 1, "the frontend stage checks the source link in exactly one RUN"
-    env = {"PATH": "/usr/bin:/bin"} | ({} if value is None else {SOURCE_URL: value})
+    env = {"PATH": "/usr/bin:/bin"} | ({} if value is None else {SOURCE_ARG: value})
     return subprocess.run(["sh", "-c", runs[0]], env=env, capture_output=True, text=True,
                           timeout=30, check=False)
 
@@ -219,21 +219,23 @@ def test_the_frontend_build_takes_the_source_link_as_a_build_argument():
     link only when the bundle was built with VITE_SOURCE_URL, so the image declares it, checks it
     and builds after the check."""
     frontend = stages()["frontend"]
-    assert ("ARG", SOURCE_URL) in frontend
+    assert ("ARG", SOURCE_ARG) in frontend
     order = [r for w, r in frontend if w in ("ARG", "RUN")]
-    arg = order.index(SOURCE_URL)
-    guard = next(i for i, r in enumerate(order) if SOURCE_URL in r and i != arg)
+    arg = order.index(SOURCE_ARG)
+    guard = next(i for i, r in enumerate(order) if SOURCE_ARG in r and i != arg)
     build = next(i for i, r in enumerate(order) if "run build" in r)
     assert arg < guard < build
-    assert SOURCE_URL in env_example()
 
 
 @pytest.mark.parametrize("value", [None, "", " ", "github.com/x/y", "javascript:alert(1)",
-                                   "https://", "ftp://example.org/src"])
+                                   "https://", "ftp://example.org/src", "https:// ",
+                                   "https:///src", "https://example.org/src ",
+                                   'https://example.org/src"', "https://example.org/<src>",
+                                   "https://example.org/a b"])
 def test_an_image_without_a_source_link_is_not_built(value):
     result = run_source_guard(value)
     assert result.returncode != 0
-    assert SOURCE_URL in result.stderr
+    assert SOURCE_ARG in result.stderr
 
 
 @pytest.mark.parametrize("value", ["https://example.org/ledgerworld", "http://git.example:8080/lw"])
@@ -241,11 +243,17 @@ def test_an_image_with_a_source_link_builds(value):
     assert run_source_guard(value).returncode == 0
 
 
+def test_the_documented_build_line_passes_the_source_link():
+    lines = [line for line in (DEPLOY / "Dockerfile").read_text().splitlines()
+             if line.startswith("#") and "docker build" in line]
+    assert lines and all(f"--build-arg {SOURCE_ARG}=" in line for line in lines)
+
+
 def test_compose_passes_the_source_link_to_every_build_of_the_image():
     for name, service in our_services().items():
         args = service["build"].get("args") or {}
-        assert args.get(SOURCE_URL) == "${VITE_SOURCE_URL:-}", name
-    assert SOURCE_URL in host()["build"]["required"]
+        assert args.get(SOURCE_ARG) == "${VITE_SOURCE_URL:-}", name
+    assert SOURCE_ARG in host()["build"]["required"]
 
 
 # ------------------------------------------------------------------------------------- compose
