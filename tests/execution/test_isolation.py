@@ -91,6 +91,50 @@ print('isolated')
     assert result.stdout.strip() == "isolated"
 
 
+@pytest.mark.parametrize("platform", ["twitter", "reddit", "parallel"])
+def test_upstream_launchers_share_the_scrubbed_environment(platform, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import simulation_runner as module
+
+    runner = module.SimulationRunner
+    simulation_id = "isolation-launch"
+    sim_dir = tmp_path / simulation_id
+    sim_dir.mkdir()
+    (sim_dir / "simulation_config.json").write_text("{}", encoding="utf-8")
+    (tmp_path / f"run_{platform}_simulation.py").write_text("pass\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "RUN_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(runner, "SCRIPTS_DIR", str(tmp_path))
+    for name in ("_run_states", "_processes", "_action_queues", "_stdout_files",
+                 "_stderr_files", "_graph_memory_enabled", "_monitor_threads"):
+        monkeypatch.setattr(runner, name, {})
+    monkeypatch.setattr(runner, "_sync_simulation_status", lambda *a, **k: None)
+    monkeypatch.setattr(module.threading, "Thread",
+                        lambda **kwargs: SimpleNamespace(start=lambda: None))
+    environments = []
+
+    def popen(*args, **kwargs):
+        environments.append(kwargs["env"])
+        return SimpleNamespace(pid=123)
+
+    monkeypatch.setattr(module.subprocess, "Popen", popen)
+    monkeypatch.setenv("AIRWALLEX_API_KEY", SENTINEL)
+    monkeypatch.setenv("AIRWALLEX_FUTURE_SETTING", SENTINEL)
+    monkeypatch.setenv("LEDGERWORLD_DEMO_TOKEN", SENTINEL)
+    try:
+        runner.start_simulation(simulation_id, platform=platform)
+        (env,) = environments
+        assert not any(name.startswith("AIRWALLEX_") for name in env)
+        assert "LEDGERWORLD_DEMO_TOKEN" not in env
+        assert env["LEDGERWORLD_ROLE"] == "sim"
+        assert env["PYTHON_DOTENV_DISABLED"] == "1"
+        assert env["PYTHONUTF8"] == "1" and env["PYTHONIOENCODING"] == "utf-8"
+        assert os.environ["AIRWALLEX_API_KEY"] == SENTINEL
+    finally:
+        for stream in runner._stdout_files.values():
+            stream.close()
+
+
 def test_sim_bootstrap_disables_dotenv_before_config_import():
     probe = """
 import os, dotenv
@@ -102,9 +146,28 @@ dotenv.load_dotenv = checked_load
 import app
 assert os.environ['LEDGERWORLD_ROLE'] == 'sim'
 """
-    env = dict(os.environ) | {"LEDGERWORLD_ROLE": "sim", "AIRWALLEX_API_KEY": SENTINEL,
-                              "PYTHON_DOTENV_DISABLED": "0"}
+    env = dict(os.environ) | {"LEDGERWORLD_ROLE": "sim", "PYTHON_DOTENV_DISABLED": "0"}
+    env["AIRWALLEX_API_KEY"] = SENTINEL
     result = child(probe, env=env)
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_sim_role_loaded_from_dotenv_is_scrubbed_before_app_returns():
+    probe = """
+import os, dotenv
+os.environ.pop('LEDGERWORLD_ROLE', None)
+def fixture_dotenv(*args, **kwargs):
+    os.environ.update(LEDGERWORLD_ROLE='sim', AIRWALLEX_API_KEY='placeholder-dotenv',
+                      LEDGERWORLD_DEMO_TOKEN='placeholder-dotenv')
+    return True
+dotenv.load_dotenv = fixture_dotenv
+import app
+assert os.environ['LEDGERWORLD_ROLE'] == 'sim'
+assert os.environ['PYTHON_DOTENV_DISABLED'] == '1'
+assert not any(name.startswith('AIRWALLEX_') for name in os.environ)
+assert 'LEDGERWORLD_DEMO_TOKEN' not in os.environ
+"""
+    result = child(probe, env=dict(os.environ) | {"PYTHON_DOTENV_DISABLED": "0"})
     assert result.returncode == 0, result.stderr
 
 

@@ -17,6 +17,7 @@ from flask import Flask, request
 from flask_cors import CORS
 
 from .config import Config
+bootstrap()
 from .utils.logger import setup_logger, get_logger
 
 

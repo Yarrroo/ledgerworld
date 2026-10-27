@@ -118,6 +118,8 @@
       "tests/execution/test_isolation.py::test_simulation_imports_obey_the_fixture",
       "tests/execution/test_isolation.py::test_spawn_sim_scrubs_the_fixture_without_mutating_the_parent",
       "tests/execution/test_isolation.py::test_runtime_entry_scrubs_credentials_before_simulation",
+      "tests/execution/test_isolation.py::test_upstream_launchers_share_the_scrubbed_environment",
+      "tests/execution/test_isolation.py::test_a_sim_role_loaded_from_dotenv_is_scrubbed_before_app_returns",
       "tests/execution/test_isolation.py::test_sim_bootstrap_disables_dotenv_before_config_import",
       "tests/execution/test_isolation.py::test_dotenv_cannot_restore_a_provider_variable_or_change_the_role",
       "tests/execution/test_isolation.py::test_the_import_fence_includes_lazy_worker_and_decision_paths",

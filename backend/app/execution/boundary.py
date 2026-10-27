@@ -1,7 +1,8 @@
 """The application boundary between simulation and execution (T14).
 
 A simulation is a fresh process, not an in-process role switch. Its launcher passes
-``spawn_sim(parent_env)`` to the child; app bootstrap scrubs again before loading config.
+``spawn_sim(parent_env)`` to the child; app bootstrap scrubs before loading config and
+checks again afterward in case dotenv selected the sim role.
 The live connector and gateway call ``require_execution`` before loading their dependencies.
 This is not an arbitrary-Python sandbox: deployment must isolate users, files, database
 permissions and provider network access (isolation.json assigns that boundary to T24).
@@ -30,7 +31,7 @@ def enter_sim() -> None:
 
 
 def bootstrap() -> None:
-    """Run before app config: dotenv must never restore credentials or overwrite the role."""
+    """Check both sides of config loading, including a sim role selected by dotenv."""
     if os.environ.get("LEDGERWORLD_ROLE") == "sim":
         enter_sim()
 
