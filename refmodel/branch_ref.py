@@ -14,11 +14,12 @@ Money is integer minor units throughout; prices are integers in 1e-4 (10000 = 1.
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import json
 import random
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,15 +38,9 @@ OPERATING = {
     "borrower-c": "borrower-c/operating",
     "venue": "exchange-venue/operating",
 }
-OWNER_PREFIX = {
-    "treasury": "borrower-a/",
-    "lender": "lender/",
-    "borrower-b": "borrower-b/",
-    "borrower-c": "borrower-c/",
-    "venue": "exchange-venue/",
-}
+OWNER_PREFIX = {a: acc.split("/")[0] + "/" for a, acc in OPERATING.items()}
 FINANCIAL_TYPES = {"request_advance", "offer", "accept", "disburse", "repay", "convert",
-                   "pay", "pledge", "release", "defer"}
+                   "pay", "release", "defer"}
 
 # The nine items `branch-isolation.json` says a checkpoint contains -> the Checkpoint field.
 CHECKPOINT_ITEMS = {
@@ -73,8 +68,14 @@ class ReplayDivergence(Exception):
     """A replayed round observed something other than what the transcript recorded."""
 
 
+@functools.cache
+def _fixture_text(path: Path) -> str:
+    return path.read_text()
+
+
 def load_fixture(name: str, base: Path = FIXTURES) -> dict:
-    return json.loads((base / name).read_text())
+    """A fresh parse of a fixture (read once from disk); callers may mutate what they get."""
+    return json.loads(_fixture_text(base / name))
 
 
 def canonical(obj) -> bytes:
@@ -139,11 +140,7 @@ class MemoryClient:
         return hits[-1].value if hits else None
 
     def view(self, actor_id: str) -> dict:
-        out = {}
-        for r in self.records():
-            if r.actor_id == actor_id:
-                out[r.key] = r.value
-        return out
+        return {r.key: r.value for r in self.records() if r.actor_id == actor_id}
 
 
 # ---------------------------------------------------------------- model
@@ -192,8 +189,10 @@ class IntentQueue:
         self._items.append(intent)
 
     def drain(self) -> list[dict]:
+        # n is the call's position in the actor's response; sorting the id string would put
+        # i-r1-x-10 before i-r1-x-2
         items = sorted(self._items, key=lambda i: (i["priority_class"], i["sim_minute"],
-                                                    i["actor_id"], i["intent_id"]))
+                                                    i["actor_id"], i["n"]))
         self._items = []
         return items
 
@@ -208,16 +207,17 @@ class FinanceAgent:
         self.persona = persona
         self.actor_id = persona["actor_id"]
         self.queue = queue
-        self.tools = {name: self._tool(name, queue, branch_id) for name in persona["tools"]}
+        self.tools = {name: self._tool(name, branch_id) for name in persona["tools"]}
 
-    def _tool(self, name, queue, branch_id):
+    def _tool(self, name, branch_id):
+        queue = self.queue
         actor_id, prio = self.persona["actor_id"], self.persona["priority_class"]
 
         def call(round_: int, n: int, args: dict, evidence_ids: list, obs_hash: str):
             intent = {"intent_id": f"i-r{round_}-{actor_id}-{n}", "branch_id": branch_id,
                       "round": round_, "actor_id": actor_id, "type": name, "params": args,
                       "evidence_ids": list(evidence_ids), "obs_hash": obs_hash,
-                      "priority_class": prio, "sim_minute": round_ * ROUND_HOURS * 60}
+                      "priority_class": prio, "sim_minute": round_ * ROUND_HOURS * 60, "n": n}
             queue.put(intent)
             return f"queued {intent['intent_id']}"
         return call
@@ -262,12 +262,11 @@ def toy_snapshot() -> dict:
         {"entity_id": "borrower-b", "name": "Borrower B (synthetic)", "kind": "borrower"},
         {"entity_id": "borrower-c", "name": "Borrower C (synthetic)", "kind": "borrower"},
     ]
-    for acc_id, b in chain["accounts"].items():
-        snap["accounts"].append({"id": acc_id, "entity": "lender", "currency": "USD",
-                                 "buckets": {"settled": b["settled"], "reserved": 0, "pledged": 0,
-                                             "unknown": None, "pending_in": [], "pending_out": []}})
-    for ent, settled in (("borrower-b", 400000), ("borrower-c", 250000)):
-        snap["accounts"].append({"id": f"{ent}/operating", "entity": ent, "currency": "USD",
+    extra = [(acc_id, "lender", b["settled"]) for acc_id, b in chain["accounts"].items()]
+    extra += [("borrower-b/operating", "borrower-b", 400000),
+              ("borrower-c/operating", "borrower-c", 250000)]
+    for acc_id, ent, settled in extra:
+        snap["accounts"].append({"id": acc_id, "entity": ent, "currency": "USD",
                                  "buckets": {"settled": settled, "reserved": 0, "pledged": 0,
                                              "unknown": None, "pending_in": [], "pending_out": []}})
     snap["contracts"] = [
@@ -281,7 +280,7 @@ def toy_snapshot() -> dict:
 
 def ledger_from_c5(snap: dict) -> dict:
     validate_c5(snap)
-    accounts, flows, obligations = {}, [], []
+    accounts, flows, flows_out, obligations = {}, [], [], []
     for a in snap["accounts"]:
         b = a["buckets"]
         accounts[a["id"]] = {"entity": a["entity"], "currency": a["currency"],
@@ -292,15 +291,31 @@ def ledger_from_c5(snap: dict) -> dict:
             flows.append({"flow_id": f["flow_id"], "account": a["id"], "amount": f["amount"],
                           "currency": a["currency"], "expected_h": f["expected_h"],
                           "arrival_h": f["expected_h"], "status": "expected"})
+        for f in b.get("pending_out", []):
+            flows_out.append({"flow_id": f["flow_id"], "account": a["id"], "amount": f["amount"],
+                              "due_h": f.get("due_h", f.get("expected_h")), "status": "open"})
     for o in snap["obligations"]:
         obligations.append({**o, "status": "open"})
     committed = [c for c in snap["contracts"] if c["kind"] == "committed_line"]
     floor = next((c["amount"] for c in snap["contracts"] if c["kind"] == "pool_floor"), 0)
-    return {"accounts": accounts, "flows": flows, "obligations": obligations,
-            "committed_undrawn": {c["contract_id"]: {"borrower": c["borrower"],
+    return {"accounts": accounts, "flows": flows, "flows_out": flows_out,
+            "obligations": obligations,
+            "committed_undrawn": {c["contract_id"]: {"lender": c["lender"],
+                                                     "borrower": c["borrower"],
                                                      "amount": c["undrawn"]} for c in committed},
             "pool_floor": floor, "pool_obligations": {}, "facilities": {}, "requests": {},
-            "loans": {}, "journals": [], "unpaid": []}
+            "loans": {}, "intents": {}, "journals": [], "unpaid": []}
+
+
+def new_account(entity: str, currency: str, settled: int = 0) -> dict:
+    """A ledger account with nothing reserved, pledged or unknown."""
+    return {"entity": entity, "currency": currency, "settled": settled, "reserved": 0,
+            "pledged": 0, "unknown": False, "floor": 0}
+
+
+def arrives_by(flow: dict, t: int) -> bool:
+    """A pending_in still outstanding whose arrival falls at or before t."""
+    return flow["status"] in ("expected", "overdue") and flow["arrival_h"] <= t
 
 
 def k_p(ledger: dict) -> int:
@@ -316,18 +331,23 @@ def k_p(ledger: dict) -> int:
 
 
 def projected_cash(ledger: dict, account: str, t: int) -> int:
-    """LF-1 P(t) on one account: settled + arrivals by t - obligations due by t."""
+    """LF-1 P(t) on one account: settled + arrivals by t - pending_out and obligations due by t."""
     a = ledger["accounts"][account]
-    arrivals = sum(f["amount"] for f in ledger["flows"] if f["account"] == account
-                   and f["status"] in ("expected", "overdue") and f["arrival_h"] <= t)
+    arrivals = sum(f["amount"] for f in ledger["flows"]
+                   if f["account"] == account and arrives_by(f, t))
+    out = sum(f["amount"] for f in ledger["flows_out"] if f["account"] == account
+              and f["status"] == "open" and f["due_h"] <= t)
     due = sum(o["amount"] for o in ledger["obligations"] if o["account"] == account
               and o["status"] == "open" and o["due_h"] <= t)
-    return a["settled"] + arrivals - due
+    return a["settled"] + arrivals - out - due
 
 
 def spendable(ledger: dict, account: str) -> int:
+    """LF-1 S(now) without arrivals: a committed outflow is spoken for whatever its due time."""
     a = ledger["accounts"][account]
-    return a["settled"] - a["reserved"] - a["pledged"]
+    out = sum(f["amount"] for f in ledger["flows_out"]
+              if f["account"] == account and f["status"] == "open")
+    return a["settled"] - a["reserved"] - a["pledged"] - out
 
 
 @dataclass(frozen=True)
@@ -351,7 +371,7 @@ class Checkpoint:
 
     def hashes(self) -> dict:
         return {"ledger": sha(self.ledger_state), "sqlite": sha(self.sqlite_copy),
-                "memory": sha(canonical([r.__dict__ for r in self.immutable_memory_records]))}
+                "memory": sha([asdict(r) for r in self.immutable_memory_records])}
 
 
 @dataclass
@@ -367,7 +387,8 @@ class RoundResult:
 class World:
     def __init__(self, world_id: str, branch_id: str, ledger: dict, events: list[dict],
                  model: ScriptedModel, store: MemoryStore, seed: int, replay: bool = False,
-                 memory_writes: list[dict] | None = None):
+                 memory_writes: list[dict] | None = None, sqlite_dump: str | None = None,
+                 start_round: int = 0):
         self.world_id, self.branch_id, self.replay = world_id, branch_id, replay
         self.ledger = ledger
         self.events = sorted(events, key=lambda e: e["round"])
@@ -375,13 +396,12 @@ class World:
         self.model = model
         self.memory = MemoryClient(store, namespace(world_id, branch_id))
         self.rng = random.Random(seed)
-        self.round = 0
-        self.oasis_time_step = 0
+        self.round = self.oasis_time_step = start_round
         self.db = sqlite3.connect(":memory:")
-        self.db.executescript(
+        self.db.executescript(sqlite_dump or (
             "CREATE TABLE post(post_id TEXT PRIMARY KEY, round INT, author TEXT, text TEXT,"
             " audience TEXT, to_actor TEXT);"
-            "CREATE TABLE price(price_id TEXT PRIMARY KEY, round INT, symbol TEXT, value INT);")
+            "CREATE TABLE price(price_id TEXT PRIMARY KEY, round INT, symbol TEXT, value INT);"))
         self.queue = IntentQueue()
         self.agents = {p["actor_id"]: FinanceAgent(p, self.queue, branch_id) for p in roster()}
         self.pending_c2: list[dict] = []
@@ -469,6 +489,8 @@ class World:
         cleared, journals = [], []
         for intent in self.queue.drain():
             status, reason, journal = self._clear(intent, r, t)
+            # the ledger keeps each intent's evidence, so a trace survives a fork
+            self.ledger["intents"][intent["intent_id"]] = list(intent["evidence_ids"])
             c2 = {"intent_id": intent["intent_id"], "status": status, "round": r,
                   "journal_id": journal["journal_id"] if journal else None}
             if reason:
@@ -576,11 +598,22 @@ class World:
                               " round DESC LIMIT 1", (symbol, r)).fetchone()
         return row[0] if row else None
 
+    def _book(self, r: int, intent: dict, kind: str, postings: list, **extra):
+        self._post(postings)
+        return "accepted", None, self._journal(r, intent["intent_id"], kind, postings, **extra)
+
     def _clear(self, intent: dict, r: int, t: int):
-        """-> (status, reason, journal). Validation is folded in: a bad intent is rejected."""
+        """-> (status, reason, journal). Step 6 runs first: the type must be in the actor's
+        mandate and every amount a positive integer; a bad intent is rejected, never repaired."""
         L, typ, p, aid = self.ledger, intent["type"], intent["params"], intent["actor_id"]
+        agent = self.agents.get(aid)
+        if agent is None or typ not in agent.persona["tools"]:
+            return "rejected", "outside_mandate", None
         if any(isinstance(v, float) for v in p.values()):
             return "rejected", "non_integer_amount", None
+        amt = p.get("amount_minor", p.get("buy_amount_minor"))
+        if amt is not None and (type(amt) is not int or amt <= 0):
+            return "rejected", "non_positive_amount", None
         if typ in ("no_action", "defer"):
             return "accepted", None, None
         if typ == "request_advance":
@@ -590,17 +623,15 @@ class World:
                 f = L["facilities"][fac]
                 f["state"] = "drawn"
                 L["flows"].append({"flow_id": f"adv-{fac}", "account": OPERATING[aid],
-                                   "amount": p["amount_minor"], "currency": "USD",
+                                   "amount": amt, "currency": "USD",
                                    "expected_h": t + ROUND_HOURS, "arrival_h": t + ROUND_HOURS,
                                    "status": "expected"})
-                post = [{"account": OPERATING[f["lender"]], "amount": -p["amount_minor"]}]
-                self._post(post)
-                return "accepted", None, self._journal(r, intent["intent_id"], "disburse", post)
-            rid = f"req:{aid}:r{r}"
-            L["requests"][rid] = {"from": aid, "to": p["from"], "amount": p["amount_minor"],
-                                  "currency": p["currency"], "status": "open",
-                                  "intent_id": intent["intent_id"],
-                                  "evidence_ids": intent["evidence_ids"]}
+                return self._book(r, intent, "disburse",
+                                  [{"account": OPERATING[f["lender"]], "amount": -amt}])
+            L["requests"][f"req:{aid}:r{r}"] = {
+                "from": aid, "to": p["from"], "amount": amt, "currency": p["currency"],
+                "status": "open", "intent_id": intent["intent_id"],
+                "evidence_ids": intent["evidence_ids"]}
             return "accepted", None, None
         if typ == "accept":
             req = L["requests"].get(p["request"])
@@ -610,86 +641,97 @@ class World:
             return "accepted", None, None
         if typ == "disburse":
             req = L["requests"].get(p["request"])
-            if not req or req["status"] != "accepted" or req["amount"] != p["amount_minor"]:
+            if not req or req["to"] != aid or req["status"] != "accepted" or req["amount"] != amt:
                 return "rejected", "request_not_accepted", None
-            if p["amount_minor"] > k_p(L):
-                return "rejected", f"K_p = {k_p(L)}", None
-            post = [{"account": p["from_account"], "amount": -p["amount_minor"]},
-                    {"account": OPERATING[req["from"]], "amount": p["amount_minor"]}]
-            self._post(post)
+            if not p["from_account"].startswith(OWNER_PREFIX[aid]):
+                return "rejected", "not_own_account", None
+            cap = k_p(L)
+            if amt > cap:
+                return "rejected", f"K_p = {cap}", None
             req["status"] = "disbursed"
-            return "accepted", None, self._journal(r, intent["intent_id"], "disburse", post)
+            return self._book(r, intent, "disburse",
+                              [{"account": p["from_account"], "amount": -amt},
+                               {"account": OPERATING[req["from"]], "amount": amt}])
         if typ == "offer":
             L["facilities"][f"fac-{p['to']}-r{r}"] = {"lender": aid, "to": p["to"],
-                                                      "amount": p["amount_minor"],
-                                                      "state": "offered"}
+                                                      "amount": amt, "state": "offered"}
             return "accepted", None, None
         if typ == "release":
             fid = p["facility"]
-            if fid in L["facilities"] and L["facilities"][fid]["state"] == "offered":
-                L["facilities"][fid]["state"] = "withdrawn"
+            fac, line = L["facilities"].get(fid), L["committed_undrawn"].get(fid)
+            if fac and fac["lender"] == aid and fac["state"] == "offered":
+                fac["state"] = "withdrawn"
                 return "accepted", None, None
-            if fid in L["committed_undrawn"]:
+            if line and line["lender"] == aid:
                 del L["committed_undrawn"][fid]
                 return "accepted", None, None
             return "rejected", "nothing_to_release", None
         if typ == "repay":
             loan = L["loans"].get(p["loan"])
-            if not loan or spendable(L, OPERATING[aid]) < p["amount_minor"]:
-                return "rejected", "cannot_repay", None
-            post = [{"account": OPERATING[aid], "amount": -p["amount_minor"]},
-                    {"account": OPERATING[loan["lender"]], "amount": p["amount_minor"]}]
-            self._post(post)
-            loan["outstanding"] -= p["amount_minor"]
-            for d in loan["due"]:
-                if d["status"] == "due":
-                    d["status"], d["paid"] = "paid", p["amount_minor"]
-                    break
-            return "accepted", None, self._journal(r, intent["intent_id"], "repay", post)
-        if typ == "pay":
-            if spendable(L, OPERATING[aid]) < p["amount_minor"]:
+            due = next((d for d in loan["due"] if d["status"] == "due"), None) if loan else None
+            if not loan or loan["borrower"] != aid or due is None or amt != due["amount"]:
+                return "rejected", "not_a_due_installment", None
+            if spendable(L, OPERATING[aid]) < amt:
                 return "rejected", "insufficient_spendable", None
-            post = [{"account": OPERATING[aid], "amount": -p["amount_minor"]}]
-            self._post(post)
-            return "accepted", None, self._journal(r, intent["intent_id"], "pay", post)
+            loan["outstanding"] -= amt
+            due["status"], due["paid"] = "paid", amt
+            return self._book(r, intent, "repay",
+                              [{"account": OPERATING[aid], "amount": -amt},
+                               {"account": OPERATING[loan["lender"]], "amount": amt}])
+        if typ == "pay":
+            if spendable(L, OPERATING[aid]) < amt:
+                return "rejected", "insufficient_spendable", None
+            return self._book(r, intent, "pay", [{"account": OPERATING[aid], "amount": -amt}])
         if typ == "convert":  # quote at the current public price, then the conversion
             sym = f"{p['buy_currency']}{p['sell_currency']}"
             rate = self._price(sym, r)
             if rate is None:
                 return "rejected", "no_quote", None
-            sell = -(-p["buy_amount_minor"] * rate // PRICE_ONE)  # ceil: never undershoot
+            sell = -(-amt * rate // PRICE_ONE)  # ceil: never undershoot
             src = OPERATING[aid]
-            dst = next(i for i, a in L["accounts"].items()
-                       if i.startswith(OWNER_PREFIX[aid]) and a["currency"] == p["buy_currency"])
+            dst = next((i for i, a in L["accounts"].items()
+                        if i.startswith(OWNER_PREFIX[aid]) and a["currency"] == p["buy_currency"]),
+                       None)
+            if dst is None:
+                return "rejected", "no_account", None
             if spendable(L, src) < sell:
                 return "rejected", "insufficient_spendable", None
-            post = [{"account": src, "amount": -sell}, {"account": dst, "amount": p["buy_amount_minor"]}]
-            self._post(post)
-            return "accepted", None, self._journal(r, intent["intent_id"], "convert", post,
-                                                   quote={"symbol": sym, "rate_e4": rate})
+            return self._book(r, intent, "convert",
+                              [{"account": src, "amount": -sell}, {"account": dst, "amount": amt}],
+                              quote={"symbol": sym, "rate_e4": rate})
         return "rejected", f"unsupported:{typ}", None
 
     def _settle(self, r: int, t: int) -> list:
         L, out = self.ledger, []
         for f in L["flows"]:
-            if f["status"] in ("expected", "overdue") and f["arrival_h"] <= t:
+            if not arrives_by(f, t):
+                continue
+            extra = {"flow_id": f["flow_id"]}
+            if f["currency"] == "USD":
+                usd = f["amount"]
+            else:  # a foreign pending_in is valued only now, at the settled rate (floor)
+                rate = self._price(f"{f['currency']}USD", r)
+                if rate is None:  # no settled rate: its value is unknown and adds nothing
+                    f["status"] = "unknown"
+                    continue
+                usd = f["amount"] * rate // PRICE_ONE
+                extra.update(amount_in=f["amount"], currency_in=f["currency"], rate_e4=rate,
+                             loss=f["amount"] - usd)
+            f["status"] = "settled"
+            post = [{"account": f["account"], "amount": usd}]
+            self._post(post)
+            out.append(self._journal(r, None, "arrival", post, **extra))
+        for f in L["flows_out"]:
+            if f["status"] == "open" and f["due_h"] <= t:
                 f["status"] = "settled"
-                if f["currency"] == "USD":
-                    post = [{"account": f["account"], "amount": f["amount"]}]
-                    self._post(post)
-                    out.append(self._journal(r, None, "arrival", post, flow_id=f["flow_id"]))
-                else:  # a foreign pending_in is valued only now, at the settled rate (floor)
-                    rate = self._price(f"{f['currency']}USD", r)
-                    usd = f["amount"] * rate // PRICE_ONE
-                    post = [{"account": f["account"], "amount": usd}]
-                    self._post(post)
-                    out.append(self._journal(r, None, "arrival", post, flow_id=f["flow_id"],
-                                             amount_in=f["amount"], currency_in=f["currency"],
-                                             rate_e4=rate, loss=f["amount"] - usd))
+                post = [{"account": f["account"], "amount": -f["amount"]}]
+                self._post(post)
+                out.append(self._journal(r, None, "pending_out", post, flow_id=f["flow_id"]))
         for o in L["obligations"]:
             if o["status"] == "open" and o["due_h"] <= t:
                 a = L["accounts"][o["account"]]
-                a["reserved"] = max(0, a["reserved"] - o["amount"]) if o.get("reservation_id") else a["reserved"]
+                if o.get("reservation_id"):
+                    a["reserved"] = max(0, a["reserved"] - o["amount"])
                 post = [{"account": o["account"], "amount": -o["amount"]}]
                 self._post(post)
                 o["status"] = "settled"
@@ -729,10 +771,8 @@ def fork(cp: Checkpoint, branch_id: str, model: ScriptedModel, store: MemoryStor
     bound to the new queue; pinned memory records are copied into the new namespace; the
     ledger and the SQLite file are copies, so the parent is never written."""
     w = World(cp.world_id, branch_id, json.loads(cp.ledger_state), json.loads(cp.events),
-              model, store, seed=0, replay=replay, memory_writes=memory_writes)
-    w.db.close()
-    w.db = sqlite3.connect(":memory:")
-    w.db.executescript(cp.sqlite_copy.decode())
+              model, store, seed=0, replay=replay, memory_writes=memory_writes,
+              sqlite_dump=cp.sqlite_copy.decode())
     for rec in cp.immutable_memory_records:
         w.memory.write(rec.actor_id, rec.key, rec.value, rec.round)
     w.round, w.oasis_time_step = cp.clocks
@@ -761,19 +801,23 @@ def replay(branch: World, cp: Checkpoint) -> World:
 
 
 def trace(world: World, journal_id: str) -> list[str]:
-    """Follow a journal back through intents, requests and evidence to its first cause."""
+    """Follow a journal back through intents, requests and evidence to its first cause. Reads
+    only the ledger, so a chain that began before a fork is followed into the parent's part."""
     j = next(j for j in world.ledger["journals"] if j["journal_id"] == journal_id)
-    intents = {c["intent_id"]: c for res in world.results for c in res.cleared}
-    by_request = {k: v for k, v in world.ledger["requests"].items()}
-    out = [f"journal of {j['intent_id']}"]
-    frontier = [j["intent_id"]]
+    if j["intent_id"] is None:  # a mandatory settlement has no intent behind it
+        return [f"journal {journal_id} ({j['kind']})"]
+    evidence, requests = world.ledger["intents"], world.ledger["requests"]
+    out, frontier, seen = [f"journal of {j['intent_id']}"], [j["intent_id"]], set()
     while frontier:
         node = frontier.pop()
+        if node in seen:
+            continue
+        seen.add(node)
         out.append(node)
-        if node in intents:
-            frontier += intents[node]["evidence_ids"]
-        elif node in by_request:
-            frontier.append(by_request[node]["intent_id"])
+        if node in evidence:
+            frontier += evidence[node]
+        elif node in requests:
+            frontier.append(requests[node]["intent_id"])
     return out
 
 
@@ -807,6 +851,12 @@ def branch_plan(fork_spec: dict) -> list[dict]:
 # ---------------------------------------------------------------- the six scenario families
 
 
+def price_events(symbol: str, path: list[float], start: int) -> list[dict]:
+    """A public price path as scheduled events, one per round from `start`, in 1e-4 units."""
+    return [{"event_id": f"px-{i}", "round": start + i, "kind": "price", "symbol": symbol,
+             "value": round(px * PRICE_ONE)} for i, px in enumerate(path)]
+
+
 def _family_world(fam: dict) -> tuple[dict, list[dict], list[dict]]:
     """The toy ledger, the family's shock as data-driven scheduled events, and the
     ScriptedModel plan that answers it."""
@@ -832,17 +882,13 @@ def _family_world(fam: dict) -> tuple[dict, list[dict], list[dict]]:
                     "post_id": "p-r3-1", "author": "feed", "text": p["post"]}]
         plan = load_fixture("coupled-chain.json")["plan"]
     elif fid == "stablecoin-depeg":
-        ledger["accounts"]["borrower-a/usdc-in"] = {
-            "entity": "borrower-a", "currency": "USD", "settled": 0, "reserved": 0,
-            "pledged": 0, "unknown": False, "floor": 0}
+        ledger["accounts"]["borrower-a/usdc-in"] = new_account("borrower-a", "USD")
         start_h = start * ROUND_HOURS
         ledger["flows"].append({"flow_id": "usdc-1", "account": "borrower-a/usdc-in",
                                 "amount": p["pending_in_minor"], "currency": p["asset"],
                                 "expected_h": start_h,
                                 "arrival_h": start_h + p["settle_delay_h"], "status": "expected"})
-        for i, px in enumerate(p["price_path"]):
-            events.append({"event_id": f"px-{i}", "round": start + i, "kind": "price",
-                           "symbol": f"{p['asset']}USD", "value": round(px * PRICE_ONE)})
+        events += price_events(f"{p['asset']}USD", p["price_path"], start)
         plan.append({"actor_id": "treasury", "round": start + 1,
                      "when_seen": [f"price:{p['asset']}USD:r{start + 1}"],
                      "tool_calls": [{"name": "defer", "args": {"what": "usdc-1 conversion",
@@ -872,15 +918,11 @@ def _family_world(fam: dict) -> tuple[dict, list[dict], list[dict]]:
                      "when_seen": ["evt:redemption-spike"],
                      "tool_calls": [{"name": "release", "args": {"facility": "fac-c"}}]})
     elif fid == "fx-gap":
-        ledger["accounts"]["borrower-a/eur"] = {
-            "entity": "borrower-a", "currency": "EUR", "settled": 0, "reserved": 0,
-            "pledged": 0, "unknown": False, "floor": 0}
+        ledger["accounts"]["borrower-a/eur"] = new_account("borrower-a", "EUR")
         ledger["obligations"].append({"obligation_id": "eur-invoice", "account": "borrower-a/eur",
                                       "amount": 1000000, "due_h": 36, "kind": "supplier",
                                       "status": "open"})
-        for i, px in enumerate(p["eurusd_path"]):
-            events.append({"event_id": f"px-{i}", "round": start + i, "kind": "price",
-                           "symbol": "EURUSD", "value": round(px * PRICE_ONE)})
+        events += price_events("EURUSD", p["eurusd_path"], start)
         plan.append({"actor_id": "treasury", "round": start + 1,
                      "when_seen": [f"price:EURUSD:r{start + 1}"],
                      "tool_calls": [{"name": "convert", "args": {
@@ -895,8 +937,7 @@ def run_family(fam: dict, rounds: int = 3, seed: int | None = None) -> World:
     """Run one family for `rounds` rounds on ScriptedModel from the round it starts in."""
     ledger, events, plan = _family_world(fam)
     w = World(f"fam-{fam['id']}", "base", ledger, events, ScriptedModel(plan), MemoryStore(),
-              fam["seed"] if seed is None else seed)
-    w.round = w.oasis_time_step = fam["starts_round"] - 1
+              fam["seed"] if seed is None else seed, start_round=fam["starts_round"] - 1)
     w.run(rounds)
     return w
 

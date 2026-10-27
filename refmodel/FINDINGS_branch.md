@@ -1,7 +1,7 @@
 # Branch / replay / scenario-family reference model — findings
 
 `refmodel/branch_ref.py` (stdlib only), checked by `python -m unittest discover -s refmodel -p test_branch_ref.py`
-(20 tests, green). Fixtures `branch-isolation.json`, `scenario-families.json`, `coupled-chain.json`,
+(30 tests, green). Fixtures `branch-isolation.json`, `scenario-families.json`, `coupled-chain.json`,
 `actors.json`, `lf1-treasury.json` are read unchanged (the suite fails if their bytes change).
 
 ## Reproduced
@@ -51,3 +51,13 @@ namespace guard each turns the suite red.
    booking rule is only observable on a longer run. Rounding at the settled rate is unstated (model:
    floor).
 7. **Lender naming** (low · high). `actors.json` entity `lender-pool`; account ids use `lender/`.
+8. **Clearing order sorts the id string** (medium · high). HANDOFF `IntentQueue.drain` sorts on
+   `(…, actor_id, intent_id)`; as a string `i-r5-lender-10` sorts before `i-r5-lender-2`, so an
+   actor with 10+ calls clears out of order (a disburse ahead of its accept). Sort on the call
+   index `n`, as the model does.
+9. **Step 6 must check authority, not only schema** (medium · high). The model rejects, before
+   clearing: a type outside the actor's mandate, a non-positive amount, a disburse from an
+   account the lender does not own, a repay by anyone but the borrower or of less than the due
+   installment, and a release by anyone but the facility's lender. Each has a test. A foreign
+   `pending_in` with no settled rate becomes `unknown`, never a crash mid-round; `pending_out`
+   counts in P(t) and S.
