@@ -1,0 +1,12 @@
+run: architect
+tier: Brief
+target: T08 coupled round coordinator (board item 9)
+vision: prp/2026-10-20-ledgerworld/briefs/T08.md (the brief is the requester's words)
+inventory: prp/2026-10-20-ledgerworld/design/modules/agent-world/HANDOFF.md (module already designed; this run fixes the clearing and abort rules it leaves open)
+consumers: design.md#consumers
+prove:
+  fresh_eyes: ran (single context, feasibility / failure-modes / simplicity; findings folded into design.md "Abort" and "Out of this task")
+  panel: skipped (Brief tier)
+  reviewer_sim: skipped (no reviewer pack on this node)
+publish: none (unattended order; the design lives in prp/ only)
+footer: no reviewer pack on this node; no publish door used
