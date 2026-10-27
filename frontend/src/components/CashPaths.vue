@@ -57,7 +57,7 @@ const rows = computed(() => {
     const known = path.points
       .filter((p) => Date.parse(p.t) <= props.at && p.value.minor != null)
       .map((p) => ({ x: Date.parse(p.t), y: p.value.minor }))
-      .sort((a, b2) => a.x - b2.x)
+      .sort((p, q) => p.x - q.x)
     return {
       branch_id: path.branch_id,
       account_id: path.account_id,
