@@ -36,12 +36,21 @@ def make_repo(path: Path, files: dict[str, str]) -> str:
     return git(path, "rev-parse", "HEAD")
 
 
+def check(script: str, *args: str) -> subprocess.CompletedProcess[str]:
+    return run(sys.executable, str(CHECKS / script), *args)
+
+
 def attribution(repo: Path, base: str) -> subprocess.CompletedProcess[str]:
-    return run(sys.executable, str(CHECKS / "attribution.py"), "--repo", str(repo), "--base", base)
+    return check("attribution.py", "--repo", str(repo), "--base", base)
 
 
 def no_secrets(repo: Path) -> subprocess.CompletedProcess[str]:
-    return run(sys.executable, str(CHECKS / "no_secrets.py"), "--repo", str(repo))
+    return check("no_secrets.py", "--repo", str(repo))
+
+
+def env_example_names() -> list[str]:
+    lines = (ROOT / ".env.example").read_text().splitlines()
+    return [line for line in lines if line and not line.startswith("#")]
 
 
 ATTRIBUTION_EMPTY = "# Attribution\n\n## Upstream files modified\n\n| Path | Why |\n|---|---|\n"
@@ -186,13 +195,12 @@ def test_attribution_matches_non_ascii_paths(tmp_path):
     assert attribution(tmp_path, base).returncode == 0
 
 
-def test_attribution_refuses_a_tag_that_is_not_the_upstream_tree(tmp_path):
+def test_attribution_defaults_to_the_pinned_tree_and_needs_it(tmp_path):
     make_repo(tmp_path, {"a.py": "1\n"})
-    git(tmp_path, "tag", "upstream-7657031")
     (tmp_path / "ATTRIBUTION.md").write_text(ATTRIBUTION_EMPTY)
-    result = run(sys.executable, str(CHECKS / "attribution.py"), "--repo", str(tmp_path))
+    result = check("attribution.py", "--repo", str(tmp_path))
     assert result.returncode == 1
-    assert "does not point at tree" in result.stderr
+    assert "not in this clone" in result.stderr
 
 
 def test_merge_gate_refuses_a_stale_lock():
@@ -200,7 +208,7 @@ def test_merge_gate_refuses_a_stale_lock():
 
 
 def test_url_ok_refuses_non_http_schemes_cleanly():
-    result = run(sys.executable, str(CHECKS / "url_ok.py"), "file:///etc/hostname")
+    result = check("url_ok.py", "file:///etc/hostname")
     assert result.returncode == 1
     assert "Traceback" not in result.stderr
 
@@ -214,18 +222,12 @@ def test_env_example_lists_every_variable_the_backend_reads():
         for name in match.groups() if name
     }
     read.discard("WERKZEUG_RUN_MAIN")  # set by the dev server itself
-    listed = {
-        line.split("=", 1)[0] for line in (ROOT / ".env.example").read_text().splitlines()
-        if line and not line.startswith("#")
-    }
+    listed = {line.split("=", 1)[0] for line in env_example_names()}
     assert read <= listed, sorted(read - listed)
 
 
 def test_env_example_names_every_variable_without_values():
-    lines = [
-        line for line in (ROOT / ".env.example").read_text().splitlines()
-        if line and not line.startswith("#")
-    ]
+    lines = env_example_names()
     names = [line.split("=", 1)[0] for line in lines]
     assert all(line.endswith("=") for line in lines)
     for name in ("AIRWALLEX_API_KEY", "LLM_API_KEY", "ZEP_API_KEY", "LEDGERWORLD_DEMO_TOKEN"):
@@ -242,14 +244,12 @@ def test_required_checks_cover_both_goals():
 def test_doc_has(tmp_path):
     doc = tmp_path / "doc.md"
     doc.write_text("# Title\n\n## Setup\ntext\n")
-    script = str(CHECKS / "doc_has.py")
-    assert run(sys.executable, script, str(doc), "Title", "Setup").returncode == 0
-    assert run(sys.executable, script, str(doc), "Setup", "Missing").returncode == 1
+    assert check("doc_has.py", str(doc), "Title", "Setup").returncode == 0
+    assert check("doc_has.py", str(doc), "Setup", "Missing").returncode == 1
 
 
 def test_doc_has_ignores_code_fences_and_keeps_trailing_hash(tmp_path):
     doc = tmp_path / "doc.md"
     doc.write_text("# Title\n\n```bash\n# Setup\n```\n\n## C#\n\n## Usage ##\n")
-    script = str(CHECKS / "doc_has.py")
-    assert run(sys.executable, script, str(doc), "Setup").returncode == 1
-    assert run(sys.executable, script, str(doc), "C#", "Usage").returncode == 0
+    assert check("doc_has.py", str(doc), "Setup").returncode == 1
+    assert check("doc_has.py", str(doc), "C#", "Usage").returncode == 0

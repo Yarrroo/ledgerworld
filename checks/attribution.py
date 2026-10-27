@@ -1,8 +1,7 @@
 """Fail when an upstream file is modified or deleted but missing from ATTRIBUTION.md.
 
-Compares the working tree with the unmodified upstream import. The base is the tag
-`upstream-7657031` when it exists, otherwise the parentless commit whose tree is the
-pinned upstream tree.
+Compares the working tree with the pinned upstream tree itself (the tree of the
+unmodified import commit, tagged `upstream-7657031`), so no tag or ref can move the base.
 
 Usage: python checks/attribution.py [--repo PATH] [--base REV]
 """
@@ -15,7 +14,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-UPSTREAM_TAG = "upstream-7657031"
 UPSTREAM_TREE = "dcc88f9b1da4145a06769a7f979d50d77e1dba25"
 MODIFIED_HEADING = "## Upstream files modified"
 ROW_PATH = re.compile(r"^\|\s*`([^`]+)`\s*\|")
@@ -25,28 +23,6 @@ def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(repo), *args], check=False, capture_output=True, text=True
     )
-
-
-def tree_of(repo: Path, rev: str) -> str:
-    return git(repo, "rev-parse", f"{rev}^{{tree}}").stdout.strip()
-
-
-def find_base(repo: Path) -> str | None:
-    """The upstream import; a tag pointing anywhere else is refused, not trusted."""
-    tagged = git(repo, "rev-parse", "-q", "--verify", f"{UPSTREAM_TAG}^{{commit}}")
-    if tagged.returncode == 0:
-        base = tagged.stdout.strip()
-        if tree_of(repo, base) != UPSTREAM_TREE:
-            print(
-                f"attribution: tag {UPSTREAM_TAG} does not point at tree {UPSTREAM_TREE}",
-                file=sys.stderr,
-            )
-            return None
-        return base
-    for root in git(repo, "rev-list", "--max-parents=0", "HEAD").stdout.split():
-        if tree_of(repo, root) == UPSTREAM_TREE:
-            return root
-    return None
 
 
 def listed_modified(attribution: Path) -> set[str]:
@@ -64,30 +40,25 @@ def listed_modified(attribution: Path) -> set[str]:
 
 def changed_upstream(repo: Path, base: str) -> list[tuple[str, str]]:
     # -z: paths arrive unquoted (non-ASCII, tabs), as status\0path\0 pairs.
-    diff = git(repo, "diff", "--name-status", "--no-renames", "-z", base)
+    diff = git(
+        repo, "diff", "--name-status", "--no-renames", "--diff-filter=MDT", "-z", base
+    )
     if diff.returncode != 0:
         raise RuntimeError(diff.stderr.strip())
     fields = diff.stdout.split("\0")
-    changes = []
-    for status, path in zip(fields[0::2], fields[1::2], strict=False):
-        if status[:1] in {"M", "D", "T"}:
-            changes.append((status[:1], path))
-    return changes
+    return list(zip(fields[0::2], fields[1::2], strict=False))
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path("."))
-    parser.add_argument("--base", help="revision of the unmodified upstream import")
+    parser.add_argument("--base", default=UPSTREAM_TREE, help="tree-ish of the upstream import")
     args = parser.parse_args(argv)
 
-    base = args.base or find_base(args.repo)
-    if base is None:
-        print(
-            f"attribution: no upstream base (tag {UPSTREAM_TAG} or a root commit with "
-            f"tree {UPSTREAM_TREE}); fetch full history",
-            file=sys.stderr,
-        )
+    base = args.base
+    if git(args.repo, "cat-file", "-e", f"{base}^{{tree}}").returncode != 0:
+        print(f"attribution: upstream tree {base} not in this clone; fetch full history",
+              file=sys.stderr)
         return 1
     attribution = args.repo / "ATTRIBUTION.md"
     if not attribution.is_file():

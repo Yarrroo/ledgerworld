@@ -25,8 +25,8 @@ git diff upstream-7657031 -- backend frontend   # upstream code we changed
 git diff --name-status upstream-7657031         # every added, modified or deleted path
 ```
 
-`checks/attribution.py` finds the import by the tag, or by the tree hash when the tag is absent,
-and fails if a modified or deleted upstream path is missing from `ATTRIBUTION.md`.
+`checks/attribution.py` diffs the working tree against the pinned tree hash itself (no tag
+needed) and fails if a modified or deleted upstream path is missing from `ATTRIBUTION.md`.
 
 ## Upstream tests
 
