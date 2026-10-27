@@ -30,6 +30,15 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The URL of an /api/v1 path under `base`: an absolute origin, a path prefix, or "/" for the
+ * page's own origin (the image's setting), each with or without trailing slashes. Exactly one
+ * slash joins them: "//api/v1/…" would be a protocol-relative URL to a host called "api".
+ */
+export function apiUrl (path, base = BASE) {
+  return `${String(base).replace(/\/+$/, '')}/api/v1/${String(path).replace(/^\/+/, '')}`
+}
+
 /** One request to /api/v1, no retry. A C6 ErrorResponse becomes an ApiError with its code. */
 export async function request (path, { method = 'GET', body, token, signal } = {}) {
   const headers = { Accept: 'application/json' }
@@ -37,7 +46,7 @@ export async function request (path, { method = 'GET', body, token, signal } = {
   if (token) headers.Authorization = `Bearer ${token}`
   let response
   try {
-    response = await fetch(`${BASE}/api/v1${path}`, {
+    response = await fetch(apiUrl(path), {
       method, headers, signal, body: body === undefined ? undefined : JSON.stringify(body)
     })
   } catch (error) {
