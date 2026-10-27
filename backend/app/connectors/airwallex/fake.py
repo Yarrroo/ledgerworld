@@ -5,8 +5,8 @@ body through the wire encoding, and keeps state: balances per account, global ac
 beneficiaries, quotes, conversions, transfers, connected-account transfers, charges and deposits.
 What it pins, because the gateway's tests rely on it:
 - a replayed `request_id` is REJECTED — `400 request_id_duplicate` with no `trace_id` on a
-  transfer (a conversion: `400 invalid_argument` "request_id '…' has been used in the past"; the
-  rest per `REPLAY_REFUSALS`), `409` while the
+  transfer (a conversion: `400 invalid_argument` "request_id '…' has been used in the past", no
+  `trace_id` either; the rest per `REPLAY_REFUSALS`), `409` while the
   first call is held open — never answered with the original; the original is found by
   list-by-`request_id`;
 - transfer `SCHEDULED → PROCESSING → SENT → PAID`: the create answers `SCHEDULED` and the fake
@@ -17,8 +17,9 @@ What it pins, because the gateway's tests rely on it:
 - a quote answers 200 and ends at `valid_to_at`; a Global Account carries no `currency` key, its
   currencies are in `required_features` / `supported_features`;
 - request amounts are decimal strings, the deposit simulation's `amount` a JSON number.
-- deposit create answers PENDING; its paginated list observes SETTLED and credits once
-  (an explicitly requested PENDING deposit stays pending).
+- deposit create answers PENDING with `id`, `amount`, `currency`, `reference` and `status` only
+  (no `request_id`, `created_at` or `global_account_id`); its paginated list observes SETTLED and
+  credits once (an explicitly requested PENDING deposit stays pending).
 
 Scenarios arm the next request(s) (`times`, None for every one): `happy`, `timeout_after_accept`
 (stored, then no answer), `timeout_before_send` (nothing stored), `insufficient_funds`,
@@ -97,6 +98,8 @@ QUOTE_VALIDITIES = {"MIN_1": 60, "MIN_15": 900, "MIN_30": 1800, "HR_1": 3600, "H
 # refused for its missing `currency`, and the list answers `incorrect_version`.
 TRANSFERS_SINCE = "2024-09-27"
 LOGIN = "/api/v1/authentication/login"
+# Keys a deposit carries in the list but not in the create's answer (sandbox run 4).
+DEPOSIT_LISTED_ONLY = ("global_account_id", "created_at")
 DECIMAL_STRING = re.compile(r"[0-9]+(\.[0-9]+)?")
 
 
@@ -413,7 +416,8 @@ class FakeTransport:
             raise _Refuse(409, None, "A request with this request_id is in progress")
         if used and collection == "conversions":
             raise _Refuse(400, "invalid_argument",
-                          f"request_id '{request_id}' has been used in the past", "request_id")
+                          f"request_id '{request_id}' has been used in the past", "request_id",
+                          traced=False)
         if used:
             code, traced = REPLAY_REFUSALS[collection]
             raise _Refuse(400, code, "The request_id has been used", "request_id", traced=traced)
@@ -511,13 +515,16 @@ class FakeTransport:
         if status not in ("SETTLED", "PENDING"):
             raise _Refuse(400, "invalid_argument", "status is SETTLED or PENDING", "status")
         self._serial += 1
-        deposit = {"id": f"deposit-{self._serial}", "request_id": None, "status": "PENDING",
+        deposit = {"id": f"deposit-{self._serial}", "status": "PENDING",
                    "_settle_on_lookup": status == "SETTLED",
                    "global_account_id": account["id"], "amount": _number(minor, currency),
                    "currency": currency, "reference": body.get("reference"),
                    "created_at": _iso(self.clock())}
         self.objects["deposits"][deposit["id"]] = deposit
-        return self._public(deposit)
+        answer = self._public(deposit)
+        for key in DEPOSIT_LISTED_ONLY:
+            del answer[key]
+        return answer
 
     def _transition(self, transfer_id: str, body: Mapping) -> dict:
         transfer = self._get("transfers", transfer_id)
