@@ -449,6 +449,9 @@ class Barriers:
         self.records: list[str] = []
         self.armed = True
         self.stubborn = False
+        self.cleanup_gate: asyncio.Event | None = None  # set: a cancelled writer cleans up slowly
+        self.in_cleanup = asyncio.Event()
+        self.writer: asyncio.Task | None = None
 
 
 class SiblingModel(ScriptedModel):
@@ -468,11 +471,15 @@ class SiblingModel(ScriptedModel):
         submit(self.world.queue, agent.finance_actor,
                [(FinancialActionType.NO_ACTION, NoActionArgs(reason="provisional"))])
         b.records.append("provisional writes")
+        b.writer = asyncio.current_task()
         child = asyncio.create_task(self._child(agent))
         b.reached.set()
         try:
             await b.release.wait()
         except asyncio.CancelledError:
+            if b.cleanup_gate is not None:
+                b.in_cleanup.set()
+                await b.cleanup_gate.wait()
             self._cleanup(agent)
             if b.stubborn:  # a writer that will not stop
                 b.records.append("stubborn: ignoring cancellation")
@@ -727,6 +734,58 @@ def test_a_world_whose_writer_will_not_stop_refuses_a_retry(tmp_path):
                 await world.coordinator.run_round(world)
             assert "stubborn: ignoring cancellation" in barriers.records
         finally:
+            barriers.release.set()
+            for _ in range(20):
+                await asyncio.sleep(0)
+            await world.close()
+
+    run(go())
+
+
+@pytest.mark.parametrize("cause", ["fault", "cancel"])
+def test_a_cancellation_during_abort_cleanup_waits_for_it_to_finish(tmp_path, control, cause):
+    """The coordinator is cancelled while the round's abort is still stopping a writer: the
+    cleanup still runs to the end (writers joined, ledger rolled back, connection closed, world
+    restored) before the cancellation propagates."""
+    seen = {}
+
+    def advanced(world, ctx):
+        seen["conn"] = ctx.conn
+
+    async def go():
+        barriers = Barriers()
+        barriers.cleanup_gate = asyncio.Event()
+        world = rollback_world(tmp_path, f"cancel-in-cleanup-{cause}", barriers,
+                               fail=cause == "fault")
+        try:
+            capture = await to_round_start(world)
+            world.coordinator.hooks["advanced"] = advanced
+            task = asyncio.create_task(world.coordinator.run_round(world))
+            await barriers.reached.wait()
+            if cause == "cancel":
+                task.cancel()
+            await barriers.in_cleanup.wait()  # the abort is waiting on the writer's cleanup
+            task.cancel()
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert not task.done()  # the cancellation waits for the cleanup
+            barriers.cleanup_gate.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert barriers.writer.done()
+            assert "cleanup memory written" in barriers.records
+            conn = seen["conn"]
+            assert conn.closed and not conn.in_transaction()
+            assert_restored(world, capture, "cancelled" if cause == "cancel" else "failed")
+            barriers.release.set()
+            for _ in range(20):
+                await asyncio.sleep(0)
+            assert world.fingerprint() == capture.fingerprint
+            del world.coordinator.hooks["advanced"]
+            barriers.armed = False
+            await retry_equals_control(world, control)
+        finally:
+            barriers.cleanup_gate.set()
             barriers.release.set()
             for _ in range(20):
                 await asyncio.sleep(0)
