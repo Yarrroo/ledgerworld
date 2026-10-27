@@ -5,9 +5,12 @@ each round end is the sum of the account's postings in journals of that round or
 obligation is met when its settlement journal (its own, or its committed reservation's flow's)
 falls in its due round or earlier, by its state only when the ledger names no such journal, and
 unmet otherwise, short by its amount less the cash that was free then (settled less the
-reservations still backing later obligations, less pledged; never below zero). Funding cost is
-the expense the entity booked in the branch (an advance's fee is recognised at disbursal). Every
-number is an integer in minor units.
+reservations still backing later obligations, less pledged; never below zero). An obligation
+due at or before the checkpoint and still outstanding there is carried in with its original
+deadline, unmet and overdue; its "then" is the first assessed round end, its first chance in
+the branch, read before its own payment when the branch paid it there. One paid by the
+checkpoint is history and left out. Funding cost is the expense the entity booked in the branch
+(an advance's fee is recognised at disbursal). Every number is an integer in minor units.
 
 Cash is usable only at the end of a round whose balance was known: an unknown balance adds
 nothing (HANDOFF), so the floor and an unmet obligation's shortfall count only what it owes
@@ -38,11 +41,23 @@ class ObligationResult:
     amount_minor: int
     met: bool
     short_minor: int | None = None
+    # Outstanding past its deadline at the checkpoint: the first assessed round end, whose free
+    # cash its shortfall counts.
+    overdue_h: int | None = None
+
+    @property
+    def checked_h(self) -> int:
+        """The hour whose free cash its shortfall counts: its deadline, or for one overdue at
+        the checkpoint the first assessed round end."""
+        return self.due_h if self.overdue_h is None else self.overdue_h
 
     def as_dict(self) -> dict:
         out = {"id": self.id, "due_h": self.due_h, "amount_minor": self.amount_minor,
                "met": self.met}
-        return out if self.short_minor is None else {**out, "short_minor": self.short_minor}
+        for key in ("short_minor", "overdue_h"):
+            if getattr(self, key) is not None:
+                out[key] = getattr(self, key)
+        return out
 
 
 @dataclass(frozen=True)
@@ -169,24 +184,33 @@ def assess(world: Any, account: str, *, from_round: int, to_round: int,
     for ob in sorted(rows, key=lambda r: (_aware(r["due_at"]), r["obligation_id"])):
         due_h = due_hour(_aware(ob["due_at"]), epoch)
         due_round = -(-due_h // ROUND_HOURS)
-        if not from_round < due_round <= to_round:
+        if due_round > to_round:
             continue
+        overdue = due_round <= from_round  # due by the checkpoint, before any assessed round
         paid = _paid_round(store, ob)
-        # No journal it can name: met before the ledger opened (a snapshot), or settled under a
-        # journal id its caller chose. Only then does the state the ledger left decide.
-        met = paid <= due_round if paid is not None else ob["state"] == "met"
-        if met:
-            obligations.append(ObligationResult(ob["obligation_id"], due_h,
-                                                ob["amount_minor"], True))
+        # Paid by its due round, or for an overdue one by the checkpoint. No journal it can name:
+        # met before the ledger opened (a snapshot), or settled under a journal id its caller
+        # chose. Only then does the state the ledger left decide.
+        met = paid <= max(due_round, from_round) if paid is not None else ob["state"] == "met"
+        if met:  # an overdue one met by the checkpoint is history, not the branch's outcome
+            if not overdue:
+                obligations.append(ObligationResult(ob["obligation_id"], due_h,
+                                                    ob["amount_minor"], True))
             continue
+        # Its first chance in the branch: its due round, or for an overdue one the first round.
+        first_h = max(due_round, rounds.start) * ROUND_HOURS
         later = sum(o["amount_minor"] for o in rows
                     if o["reservation_id"] and o["obligation_id"] != ob["obligation_id"]
                     and _aware(o["due_at"]) > _aware(ob["due_at"]))
-        free = usable[due_round * ROUND_HOURS] - later - view.pledged_minor
-        # Paid late from cash that was there (a committed flow landing after its due round) is
-        # unmet with nothing short.
-        obligations.append(ObligationResult(ob["obligation_id"], due_h, ob["amount_minor"],
-                                            False, max(0, ob["amount_minor"] - max(0, free))))
+        # Paid there, late: the cash then is read before it went out, and an unknown round end
+        # still counts none of it.
+        then = settled[first_h] + (ob["amount_minor"] if paid == first_h // ROUND_HOURS else 0)
+        free = (min(then, 0) if first_h in unknown else then) - later - view.pledged_minor
+        # Paid late from cash that was there then (a committed flow landing after its due round,
+        # an overdue one paid at its first chance) is unmet with nothing short.
+        obligations.append(ObligationResult(
+            ob["obligation_id"], due_h, ob["amount_minor"], False,
+            max(0, ob["amount_minor"] - max(0, free)), overdue_h=first_h if overdue else None))
 
     floor = view.floor_minor or 0
     series = list(usable.items())
