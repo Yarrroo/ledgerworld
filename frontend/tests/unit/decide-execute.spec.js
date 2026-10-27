@@ -898,6 +898,64 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
     expect(text(w, 'context')).toContain('execution apr-1')
     expect(w.find('[data-test="poll-error"]').exists()).toBe(false)
   })
+
+  it('an unreadable approval answered after the screen is left is held: the run is blocked on return', async () => {
+    let release
+    const { w, calls } = await reviewReady({ 'POST /approvals': () => new Promise((resolve) => { release = resolve }) })
+    await w.get('[data-test="confirm"]').trigger('click')
+    mounted.splice(mounted.indexOf(w), 1)
+    w.unmount()
+    release(UNREADABLE)
+    await flushPromises()
+    const back = await open(Execution, '/execution')
+    expect(text(back, 'blocked')).toBe(kase('approval-post-timeout').expect.message)
+    expect(disabled(back, 'review-plan')).toBe(true)
+    expect(posts(calls, '/approvals')).toHaveLength(1)
+  })
+
+  it('"Reading again" is said exactly when a read is scheduled, and a 429 is read again', async () => {
+    fakeTimers()
+    let answer = refuse(403, 'forbidden', 'not yours')
+    const { w, calls } = await reviewReady({ 'POST /executions': accepted(), 'GET /executions/apr-1': () => answer })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'poll-error')).toContain('not yours. Reading again.') // an execution this tab sent
+    answer = refuse(429, 'rate_limited', 'slow down')
+    await tick()
+    expect(text(w, 'poll-error')).toContain('slow down. Reading again.')
+    answer = paid()
+    await tick()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(3)
+    expect(text(w, 'leg-status')).toContain('PAID · reconciled as of')
+  })
+
+  it('a read error ending in a period is not shown with two', async () => {
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': refuse(503, 'http_error', 'down for maintenance.')
+    })
+    const w = await open(Execution, '/execution')
+    expect(text(w, 'poll-error')).toContain('down for maintenance. Reading again.')
+  })
+
+  it('a run change leaves no "not recorded yet" from the last execution while the next one loads', async () => {
+    let overviewAnswer = overview()
+    const { w } = await reviewReady({
+      'POST /executions': accepted(),
+      'GET /overview': () => overviewAnswer,
+      'GET /decisions/run-2': { ...decisionsBody(), run_id: 'run-2' }
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'not-found')).toContain('does not mean it failed')
+    overviewAnswer = new Promise(() => {}) // the next screen is still loading
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    expect(w.find('[data-test="not-found"]').exists()).toBe(false)
+  })
 })
 
 describe('leaving and returning to Execution (board item 95)', () => {

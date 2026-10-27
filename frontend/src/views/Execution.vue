@@ -41,7 +41,7 @@
         <template v-else>Execution {{ activeId }} is unavailable: the server has no record of it.</template>
       </p>
       <p v-if="pollError" class="lw-note" data-test="poll-error">
-        {{ STATES.error.icon }} {{ execution ? STATES.error.word : 'Could not read' }}: {{ pollError }}.<template v-if="retrying"> Reading again.</template>
+        {{ STATES.error.icon }} {{ execution ? STATES.error.word : 'Could not read' }}: {{ pollError.replace(/\.$/, '') }}.<template v-if="rereading"> Reading again.</template>
       </p>
       <p v-if="!execution && !notFound && !pollError" class="lw-time" data-test="no-execution">
         Unavailable: no execution to show for this run.
@@ -412,8 +412,9 @@ async function confirmApproval () {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
       body: { run_id: state.body.run_id, policy: policy.value }
     })
+    const approval = boundApproval(answer) // unreadable is unknown, and held, even once left
     if (disposed) return
-    flow.approval = boundApproval(answer)
+    flow.approval = approval
     flow.serverAt = Date.parse(answer.as_of)
     flow.receivedAt = Date.now()
     now.value = flow.receivedAt
@@ -475,7 +476,8 @@ const activeId = shallowRef(null)
 const execution = shallowRef(null)
 const notFound = shallowRef(false)
 const pollError = shallowRef('')
-const retrying = shallowRef(false) // the failed read is read again: anything but a 4xx refusal
+const retrying = shallowRef(false) // a failed read worth reading again: no answer, or retry-later
+const rereading = shallowRef(false) // a read is scheduled: what "Reading again" says
 let failedAt = 0 // generation of the newest failed read: only a later answer clears its error
 let timer = null
 const followedId = shallowRef(null)
@@ -498,12 +500,13 @@ function schedule () {
   const body = execution.value
   const keep = Boolean(pollError.value && retrying.value) || (followed ? (!body || moving(body)) : Boolean(body && moving(body)))
   timer = keep ? setTimeout(poll, POLL_MS) : null
+  rereading.value = keep
 }
 
 /** A failed read: said, kept as the newest failure, and read again unless refused outright. */
 function failed (error, generation) {
   pollError.value = error.message
-  retrying.value = unanswered(error)
+  retrying.value = unanswered(error) || [408, 429].includes(error.status)
   failedAt = Math.max(failedAt, generation)
 }
 
@@ -610,6 +613,7 @@ watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
     followedId.value = null
     activeId.value = null
     execution.value = null
+    notFound.value = false
     pollError.value = ''
     clearTimeout(timer)
   }
