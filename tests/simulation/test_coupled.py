@@ -782,3 +782,37 @@ def test_capture_covers_every_component_the_fixture_names():
                      "world and OASIS clocks", "RNG state", "scheduled-event cursor",
                      "pending C2 deliveries", "intent queue", "transcript cursor"}
     assert ROLLBACK["abort_order"][0].startswith("close admission")
+
+
+# ------------------------------------------------------------------- vet round 1 regressions
+
+
+def test_a_model_chosen_reference_the_ledger_refuses_is_a_rejection_not_a_failed_round(tmp_path):
+    plan = ScriptedPlan([
+        {"actor_id": "lender", "round": 1, "tool_calls": [
+            {"name": "offer", "args": {"amount_minor": 100_000, "currency": "USD",
+                                       "to": "feed"}}]},
+        {"actor_id": "borrower-c", "round": 1, "tool_calls": [
+            {"name": "request_advance", "args": {"amount_minor": 100_000, "currency": "USD",
+                                                 "from": "lender"}}]},
+        {"actor_id": "lender", "round": 2, "tool_calls": [
+            {"name": "accept", "args": {"request": "req:borrower-c:r1"}},
+            {"name": "disburse", "args": {"request": "req:borrower-c:r1",
+                                          "amount_minor": 100_000, "currency": "USD",
+                                          "from_account": "lender/nowhere"}}]},
+        *IDLE,
+    ])
+
+    async def go():
+        world = make_world(tmp_path, "refs", plan=plan)
+        async with world:
+            return world, await world.run(2)
+
+    world, (r1, r2) = run(go())
+    assert world.committed_round == 2 and not world.failures
+    offer = by_intent(r1)["i-r1-lender-1"]
+    assert (offer.c2.status, offer.c2.reason) == ("rejected", "invalid_reference")
+    assert by_intent(r2)["i-r2-lender-1"].c2.status == "accepted"
+    disburse = by_intent(r2)["i-r2-lender-2"]
+    assert (disburse.c2.status, disburse.c2.reason) == ("rejected", "invalid_reference")
+    assert settled(world, "lender/operating") == 4_500_000

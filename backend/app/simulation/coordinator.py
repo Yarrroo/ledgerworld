@@ -47,6 +47,7 @@ from typing import Any
 from oasis_finance.actions import clearing_key
 from pydantic import ValidationError
 from sqlalchemy import Connection
+from sqlalchemy.exc import IntegrityError
 
 from ..finance import ledger, lending
 from ..finance.contracts import facility, pool_facilities, register, set_facility
@@ -177,7 +178,8 @@ def clear_intents(world: World, conn: Connection, intents: Iterable[ActionIntent
     """§7.2 step 7: clear the intents against the ledger in the deterministic order.
 
     Each intent clears in its own savepoint, so a refused one leaves nothing behind and the
-    next is cleared against what the earlier ones did.
+    next is cleared against what the earlier ones did. What the model chose can only be
+    rejected: a ledger refusal, or a reference the ledger cannot resolve, is a C2 reason.
     """
     out = []
     for intent in sorted(intents, key=clearing_key):
@@ -191,6 +193,12 @@ def clear_intents(world: World, conn: Connection, intents: Iterable[ActionIntent
         except LedgerRefusal as refusal:
             out.append(_rejection(intent.intent_id, intent.actor_id, intent.type, intent.round,
                                   refusal.code, _binding(refusal), intent, refusal.detail))
+            continue
+        except (ValueError, LookupError, IntegrityError) as error:
+            # A reference the model chose (an account, a counterparty) that the ledger refuses
+            # to resolve; the savepoint took back whatever the intent had written.
+            out.append(_rejection(intent.intent_id, intent.actor_id, intent.type, intent.round,
+                                  "invalid_reference", str(error)[:400], intent))
             continue
         c2 = ClearedAction(intent_id=intent.intent_id, status="accepted",
                            journal_id=journal.journal_id if journal else None, round=intent.round)
