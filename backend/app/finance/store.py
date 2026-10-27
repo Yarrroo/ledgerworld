@@ -217,9 +217,7 @@ class LedgerStore:
         The account row is locked first, so no other transaction can claim the same units
         between this read and the caller's commit.
         """
-        acc = self._locked(c, {account_id}, cash_only=False).get(account_id)
-        if acc is None:
-            raise UnknownAccount(account_id)
+        acc = self._locked(c, {account_id}).get(account_id) or self._account(c, account_id)
         observability = c.execute(select(account_observations.c.observability).where(
             account_observations.c.account_id == account_id)).scalar_one()
         settled = _sum(c, postings, account_id)
@@ -303,9 +301,11 @@ class LedgerStore:
                 .where(reservations.c.state == "held", reservations.c.expires_at.is_not(None),
                        reservations.c.expires_at <= _naive(now))
                 .order_by(reservations.c.reservation_id)).scalars())
-            if due:
-                c.execute(update(reservations).where(reservations.c.reservation_id.in_(due))
-                          .values(state="expired"))
+            if due:  # guarded: a hold committed or released meanwhile is not expired
+                due = sorted(c.execute(
+                    update(reservations).where(reservations.c.reservation_id.in_(due),
+                                               reservations.c.state == "held")
+                    .values(state="expired").returning(reservations.c.reservation_id)).scalars())
         return due
 
     def settle(self, reservation_id: str, *, to_account: str, at: datetime,
@@ -335,7 +335,7 @@ class LedgerStore:
             if counterparty == flow.account_id:
                 raise ValueError(f"flow {flow_id} cannot settle against its own account")
             sign = 1 if flow.direction == "in" else -1
-            self._locked(c, {flow.account_id})
+            self._locked(c, {flow.account_id, counterparty})  # both, in id order, as _apply will
             # Guarded, so a concurrent settler that read it pending before this lock lands nothing.
             landed = c.execute(update(expected_flows).where(expected_flows.c.flow_id == flow_id,
                                                             expected_flows.c.state == "pending")
@@ -525,20 +525,19 @@ class LedgerStore:
         return self._locked(conn, set(account_ids))
 
     @staticmethod
-    def _locked(c: Connection, account_ids: set[str], *, cash_only: bool = True) -> dict[str, Any]:
-        """The account rows, locked in id order, so one call never deadlocks against another.
+    def _locked(c: Connection, account_ids: set[str]) -> dict[str, Any]:
+        """The cash account rows among `account_ids`, locked in id order.
 
-        Only a cash account's free units are checked, so only cash rows are locked by default; a
-        shared external or income account stays uncontended. NO KEY UPDATE, not UPDATE: an insert
+        Only a cash account's free units are checked, so only cash rows are locked; a shared
+        external or income account stays uncontended. NO KEY UPDATE, not UPDATE: an insert
         referencing the account (a posting, a reservation) takes KEY SHARE, which it does not
-        block. A transaction that locks in several calls can still deadlock with another;
-        PostgreSQL aborts one of them, and nothing is written.
+        block. One call never deadlocks against another; a transaction that locks in several
+        calls can, and then PostgreSQL aborts one of them and nothing is written.
         """
-        query = select(accounts).where(accounts.c.account_id.in_(account_ids))
-        if cash_only:
-            query = query.where(accounts.c.kind == "cash")
         return {r.account_id: r for r in c.execute(
-            query.order_by(accounts.c.account_id).with_for_update(key_share=True))}
+            select(accounts).where(accounts.c.account_id.in_(account_ids),
+                                   accounts.c.kind == "cash")
+            .order_by(accounts.c.account_id).with_for_update(key_share=True))}
 
     def _account(self, c: Connection, account_id: str, required: bool = True) -> Any:
         row = c.execute(select(accounts).where(accounts.c.account_id == account_id)).first()

@@ -480,3 +480,8 @@ def test_a_line_id_is_not_measured_against_ids_only_an_advance_generates():
     next(c for c in snap["contracts"] if c["contract_id"] == "line-b")["contract_id"] = "b" * 45
     store = world(snap)
     assert contracts.facility(store, "b" * 45).kind == "committed_line"
+
+
+def test_a_facility_lock_needs_the_callers_transaction():
+    with pytest.raises(ValueError, match="pass conn"):
+        contracts.facility(world(), "adv-a", lock=True)

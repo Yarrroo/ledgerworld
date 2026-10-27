@@ -62,13 +62,19 @@ def test_lf1_on_postgres(url):
 Claim = Callable[[LedgerStore, str, Connection | None], object]
 
 
-def race(url: str, first: Claim, second: Claim) -> dict[str, str]:
-    """{"a": outcome, "b": outcome}: "committed", a refusal code, or the escaped error's name."""
+def race(url: str, first: Claim, second: Claim, pause: str | None = None) -> dict[str, str]:
+    """{"a": outcome, "b": outcome}: "committed", a refusal code, or the escaped error's name.
+
+    `pause` names a method of A's store: A stops just before its first call until B has
+    finished or is blocked on A, so B can take locks in the middle of A's claim.
+    """
     b_url = make_url(url).update_query_dict({"application_name": "race-b"})
     stores = {"a": LedgerStore(url),
               "b": LedgerStore(b_url.render_as_string(hide_password=False))}
     probe = create_engine(url)
     outcome: dict[str, str] = {}
+    a_pid: list[int] = []
+    a_ready = threading.Event()
 
     def run(name: str, claim: Claim, conn: Connection | None) -> None:
         try:
@@ -79,21 +85,45 @@ def race(url: str, first: Claim, second: Claim) -> dict[str, str]:
         except Exception as exc:  # noqa: BLE001 - the outcome names what escaped
             outcome[name] = type(exc).__name__
 
-    def b_waits_on_a_lock() -> bool:
-        with probe.connect() as c:
-            return bool(c.execute(text(
-                "SELECT count(*) FROM pg_stat_activity"
-                " WHERE application_name = 'race-b' AND wait_event_type = 'Lock'")).scalar())
+    b = threading.Thread(target=run, args=("b", second, None))
 
-    try:
+    def b_is_settled() -> bool:
+        if not b.is_alive():
+            return True
+        with probe.connect() as c:  # blocked by A itself, not by anything else
+            return bool(c.execute(text(
+                "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'race-b'"
+                " AND :a = ANY(pg_blocking_pids(pid))"), {"a": a_pid[0]}).scalar())
+
+    def wait_for_b() -> None:
+        a_ready.set()
+        deadline = time.monotonic() + 20
+        while not (b.ident is not None and b_is_settled()):
+            assert time.monotonic() < deadline, "claim B neither finished nor blocked on A"
+            time.sleep(0.02)
+
+    if pause:
+        inner, paused = getattr(stores["a"], pause), []
+
+        def paused_once(*args, **kwargs):
+            if not paused:
+                paused.append(True)
+                wait_for_b()
+            return inner(*args, **kwargs)
+        setattr(stores["a"], pause, paused_once)
+
+    def claim_a() -> None:
         with stores["a"].engine.connect() as conn, conn.begin():
+            a_pid.append(conn.execute(text("SELECT pg_backend_pid()")).scalar())
             run("a", first, conn)
-            b = threading.Thread(target=run, args=("b", second, None))
-            b.start()
-            deadline = time.monotonic() + 20
-            while b.is_alive() and not b_waits_on_a_lock():
-                assert time.monotonic() < deadline, "claim B neither finished nor blocked"
-                time.sleep(0.02)
+            wait_for_b()
+
+    a = threading.Thread(target=claim_a)
+    try:
+        a.start()
+        assert a_ready.wait(20), "claim A never reached the point B starts at"
+        b.start()
+        a.join(30)
         b.join(30)
     finally:
         probe.dispose()
@@ -125,7 +155,8 @@ CLAIMS: dict[str, Claim] = {
 
 
 @pytest.mark.parametrize("first,second", [("hold", "hold"), ("pledge", "hold"),
-                                          ("hold", "pledge"), ("pay", "pay"), ("hold", "pay")])
+                                          ("hold", "pledge"), ("pay", "pay"), ("hold", "pay"),
+                                          ("pay", "hold")])
 def test_two_connections_never_claim_more_than_settled(url, first, second):
     """Two 700 claims on 1,000 settled, with distinct ids: one commits, one is refused by name."""
     store = funded(url)
@@ -146,6 +177,46 @@ def test_two_connections_settle_one_flow_once(url):
 
     assert race(url, settle, settle) == {"a": "committed", "b": "ValueError"}
     assert store.view("a/cash").settled_minor == 600
+
+
+def test_two_connections_never_expire_a_committed_reservation(url):
+    store = funded(url)
+    store.hold("a/cash", 400, now=T0, reservation_id="res", expires_at=T0 + timedelta(hours=1))
+
+    def commit(s: LedgerStore, n: str, c: Connection | None) -> None:
+        s.commit("res", due_at=T0, conn=c)
+
+    expired: list[str] = []
+
+    def expire(s: LedgerStore, n: str, c: Connection | None) -> None:
+        expired.extend(s.expire_due(T0 + timedelta(hours=2), conn=c))
+
+    assert race(url, commit, expire) == {"a": "committed", "b": "committed"}
+    assert (store.reservation("res").state, expired) == ("committed", [])
+
+
+def test_settling_against_a_cash_account_never_deadlocks_a_payment(url):
+    """A settlement on b/cash paid from a/cash, and a payment a/cash → b/cash, at once.
+
+    A stops before posting its journal while B locks both accounts: each must lock both in id
+    order up front, or each holds the account the other waits on.
+    """
+    store = funded(url)
+    store.add_entity("b", "Entity B (synthetic)", "treasury")
+    store.open_account("b/cash", "b", "USD", as_of=T0)
+    store.apply(Journal("open-b", (Posting("b/cash", 1000), Posting("a/opening", -1000)),
+                        kind="opening", sim_time=T0))
+    store.hold("b/cash", 400, now=T0, reservation_id="res")
+    flow = store.commit("res", due_at=T0)
+
+    def settle(s: LedgerStore, n: str, c: Connection | None) -> None:
+        s.settle_flow(flow, counterparty="a/cash", at=T0, journal_id="settle", conn=c)
+
+    def payment(s: LedgerStore, n: str, c: Connection | None) -> None:
+        pay(s, "a/cash", 100, to_account="b/cash", now=T0, journal_id="pay", conn=c)
+
+    assert race(url, settle, payment, pause="_apply") == {"a": "committed", "b": "committed"}
+    assert (store.view("a/cash").settled_minor, store.view("b/cash").settled_minor) == (1300, 700)
 
 
 def test_two_connections_disburse_one_advance_once(url):

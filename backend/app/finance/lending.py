@@ -149,7 +149,7 @@ def _lock_cash(store: LedgerStore, c: Connection, currency: str,
     rows = store.lock(*(account_id for account_id, _ in owned), conn=c)
     for account_id, entity in owned:
         row = rows.get(account_id)
-        if row is None or (row.entity_id, row.currency) != (entity, currency):
+        if row is None or (row.entity_id, row.currency, row.kind) != (entity, currency, "cash"):
             raise ValueError(f"{account_id} is not a {currency} cash account of {entity}")
 
 

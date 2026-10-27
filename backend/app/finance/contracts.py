@@ -210,6 +210,8 @@ def facility(store: LedgerStore, facility_id: str, conn: Connection | None = Non
              lock: bool = False) -> Facility:
     """One facility; `lock` holds its row until `conn`'s transaction ends, so a writer reads its
     state, outstanding and undrawn only after a concurrent writer of the same facility commits."""
+    if lock and conn is None:
+        raise ValueError("a facility lock is held by the caller's transaction: pass conn")
     query = select(facilities).where(facilities.c.facility_id == facility_id)
     with store.reading(conn) as c:
         row = c.execute(query.with_for_update(key_share=True) if lock else query).first()
