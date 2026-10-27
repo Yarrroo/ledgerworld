@@ -152,9 +152,26 @@ def request_id(plan_hash: str, index: int, kind: str) -> str:
 
 
 def install(conn: sqlite3.Connection) -> None:
-    """Create the execution tables once in this store."""
-    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'execution_legs'").fetchone():
-        conn.executescript((state.DESIGN / "schema.sql").read_text())
+    """Create the execution tables once in this store. The catalogue it reads is the store's own:
+    `sqlite_master` on SQLite, `information_schema` on any other (PostgreSQL rejects the first,
+    and the failed statement aborts the transaction the next query runs in)."""
+    schema = (state.DESIGN / "schema.sql").read_text()
+    if isinstance(conn, sqlite3.Connection):
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'execution_legs'").fetchone():
+            conn.executescript(schema)
+        return
+    try:
+        if not conn.execute("SELECT 1 FROM information_schema.tables WHERE table_name ="
+                            " 'execution_legs' AND table_schema = current_schema()").fetchone():
+            # A server driver takes one statement per call; the schema's comments hold no `;`.
+            body = "\n".join(line for line in schema.splitlines()
+                             if not line.lstrip().startswith("--"))
+            for statement in filter(None, (s.strip() for s in body.split(";"))):
+                conn.execute(statement)
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
 
 
 def _now() -> str:
@@ -177,7 +194,8 @@ class Outbox:
         transaction: Transaction | None = None,
     ) -> None:
         conn.isolation_level = None
-        conn.execute("PRAGMA foreign_keys = ON")
+        if isinstance(conn, sqlite3.Connection):  # a server enforces foreign keys already
+            conn.execute("PRAGMA foreign_keys = ON")
         self.conn = conn
         self.post_journal = post_journal
         self.clock = clock
