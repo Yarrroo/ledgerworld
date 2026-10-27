@@ -795,6 +795,70 @@ def test_a_cancellation_during_abort_cleanup_waits_for_it_to_finish(tmp_path, co
     run(go())
 
 
+class RestoreBroke(Exception):
+    pass
+
+
+def test_an_abort_that_raises_leaves_the_world_unusable_and_reaches_the_caller(tmp_path):
+    def fault(world, ctx):
+        raise InjectedFault("fault-in-commit")
+
+    def broken_restore(capture):
+        raise RestoreBroke("restore broke")
+
+    async def go():
+        world = rollback_world(tmp_path, "abort-raises")
+        try:
+            await to_round_start(world)
+            world.coordinator.hooks["before_transcript"] = fault
+            world.restore = broken_restore
+            with pytest.raises(RestoreBroke) as raised:
+                await world.coordinator.run_round(world)
+            assert isinstance(raised.value.__context__, InjectedFault)
+            assert "abort did not finish" in world.unusable
+            assert "abort_failed" in [e for e, _ in world.lifecycle]
+            with pytest.raises(WorldUnusable):
+                await world.coordinator.run_round(world)
+        finally:
+            await world.close()
+
+    run(go())
+
+
+def test_an_abort_cancelled_itself_still_closes_the_ledger_and_refuses_a_retry(tmp_path):
+    seen = {}
+
+    def advanced(world, ctx):
+        seen["conn"] = ctx.conn
+
+    async def go():
+        barriers = Barriers()
+        barriers.cleanup_gate = asyncio.Event()
+        world = rollback_world(tmp_path, "abort-cancelled", barriers, fail=True)
+        try:
+            await to_round_start(world)
+            world.coordinator.hooks["advanced"] = advanced
+            task = asyncio.create_task(world.coordinator.run_round(world))
+            await barriers.in_cleanup.wait()
+            (abort,) = [t for t in asyncio.all_tasks()
+                        if t.get_name() == f"round-{ROLLBACK_ROUND}-abort"]
+            abort.cancel()  # the loop shutting down cancels every task, the abort's included
+            with pytest.raises(InjectedFault):
+                await task
+            conn = seen["conn"]
+            assert conn.closed and not conn.in_transaction()
+            assert "abort did not finish (cancelled)" in world.unusable
+            with pytest.raises(WorldUnusable):
+                await world.coordinator.run_round(world)
+        finally:
+            barriers.cleanup_gate.set()
+            barriers.release.set()
+            await settle()
+            await world.close()
+
+    run(go())
+
+
 def test_a_rejected_intent_is_not_a_failed_round(tmp_path, control):
     case = next(c for c in ROLLBACK["cases"] if c["id"] == "invalid-intent")
     expect = ROLLBACK["expect"]["invalid-intent"]

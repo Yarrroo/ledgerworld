@@ -16,8 +16,9 @@ Any exception or cancellation before that commit aborts the round: admission clo
 the round created (``env.step``'s gather children and theirs, found by a context variable) is
 cancelled and joined, the platform is fenced so a write a cancelled agent already sent has
 landed, then the ledger rolls back and every captured component is restored and checked
-against the capture. A cancellation that arrives during the abort waits for it to end, so the
-ledger is never left open nor a round task alive behind it. If a writer outlives its cancellation, the platform cannot be fenced or the
+against the capture. A cancellation that arrives during the abort waits for it to end, and
+however the abort ends, the ledger rolls back and its connection closes. If a writer outlives
+its cancellation, the platform cannot be fenced, the abort itself fails or is cancelled, or the
 restored world differs from its capture, the world is marked unusable and refuses every later
 round. This is exception rollback, not process-crash recovery. A rejected intent, or malformed
 output the guardrail turned into ``no_action``, is a C2 result, not a failed round.
@@ -647,10 +648,15 @@ class Coordinator:
                     await asyncio.wait({cleanup})
                 except asyncio.CancelledError as cancel:
                     again = cancel
-            if not cleanup.cancelled() and cleanup.exception() is not None:
-                world.lifecycle.append(("abort_failed", repr(cleanup.exception())))
+            broken = None if cleanup.cancelled() else cleanup.exception()
+            if cleanup.cancelled() or broken is not None:
+                why = "cancelled" if broken is None else repr(broken)
+                world.unusable = f"round {round_}: the abort did not finish ({why})"
+                world.lifecycle.append(("abort_failed", world.unusable))
             if again is not None:
                 raise again from error
+            if broken is not None:
+                raise broken
             raise
         conn.close()
         return result
