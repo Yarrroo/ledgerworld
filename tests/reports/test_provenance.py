@@ -52,8 +52,8 @@ def results():
 
 CLEAN = (
     f"Without a plan the floor is breached by {placeholder(FEAS, 'breach_without_plan')}. Drawing "
-    f"{placeholder(FEAS, 'advance_drawn')} leaves {placeholder(FEAS, 'cash_after_payroll')} after payroll, while "
-    f"the lender's capacity under stress is {placeholder(KP, 'capacity_under_stress')}."
+    f"{placeholder(FEAS, 'advance_drawn')} leaves {placeholder(FEAS, 'cash_after_payroll')} "
+    f"after payroll, while the lender's capacity under stress is {placeholder(KP, 'capacity_under_stress')}."
 )
 INVENTED = "Without a plan the floor is breached by 12,345.00 and recovery is 87% likely."
 
@@ -109,8 +109,9 @@ def test_a_written_number_is_rejected_even_when_a_figure_carries_its_value(draft
 
 
 def test_a_fill_read_as_a_percentage_is_rejected():
-    _, _, problems = ground(f"Recovery is {placeholder(KP, 'borrowers_reacting')} % likely.", results())
-    assert problems == [f"the figure {placeholder(KP, 'borrowers_reacting')} is followed by a percent sign"]
+    fill = placeholder(KP, "borrowers_reacting")
+    _, _, problems = ground(f"Recovery is {fill} % likely.", results())
+    assert problems == [f"the figure {fill} carries a unit the draft added: '%'"]
 
 
 def test_a_grounded_draft_is_filled_from_the_signed_results():
@@ -230,3 +231,29 @@ def test_two_results_under_one_evidence_id_are_refused():
     with pytest.raises(ValueError, match="evidence id"):
         writer.write_section("Integrated plan", [*given, twin])
     assert model.calls == []
+
+
+@pytest.mark.parametrize("draft, unit", [
+    (f"Losses were USD {placeholder(KP, 'borrowers_reacting')}.", "USD"),
+    (f"Losses were ${placeholder(KP, 'borrowers_reacting')}.", "$"),
+    (f"Recovery is {placeholder(KP, 'borrowers_reacting')} percent.", "percent"),
+    (f"Paid in EUR {placeholder(FEAS, 'advance_drawn')}.", "EUR"),
+    (f"The advance is {placeholder(FEAS, 'advance_drawn')} million.", "million"),
+    (f"About {placeholder(KP, 'borrowers_reacting')}k borrowers.", "k"),
+], ids=["currency-code-before-count", "dollar-before-count", "percent-word",
+        "currency-before-money", "scale-word", "scale-suffix"])
+def test_a_unit_written_beside_a_fill_is_rejected(draft, unit):
+    _, _, problems = ground(draft, results())
+    assert any(p.endswith(f"carries a unit the draft added: {unit!r}") for p in problems), problems
+
+
+def test_a_placeholder_in_extra_braces_is_rejected():
+    text, _, problems = ground(f"Cash is {{{placeholder(FEAS, 'cash_after_payroll')}}}.", results())
+    assert text == "Cash is {USD 30,000.00}."
+    assert problems == ["a malformed placeholder near 'Cash is {'"]
+
+
+def test_ground_refuses_two_results_under_one_evidence_id():
+    twin = sign_result(FEAS, "feasibility", {"cash_after_payroll": usd(1)}, key=SIGNING_KEY)
+    with pytest.raises(ValueError, match=f"evidence id.*{FEAS}"):
+        ground(CLEAN, [*results(), twin])

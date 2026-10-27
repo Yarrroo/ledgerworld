@@ -7,11 +7,13 @@ signed with HMAC-SHA256 by whoever produced it; the key is the caller's, never t
 The model writes each figure as a placeholder ``{{<evidence_id>#<figure>}}`` and the placeholder
 is filled with the figure's rendered value, currency included. A number the model writes itself
 rejects the draft, even one a figure carries: its unit would be the model's (``EUR 10,000.00``
-against a USD figure, a count read as ``3%``). So do a placeholder naming no figure, a fill
-followed by a percent sign, and a fill that runs into a neighbouring digit, sign or point
-(``3`` beside ``3`` reads 33). A rejected draft gets one redraft with the reasons; a rejected
-redraft gives way to a template written from the results alone. Every number in the returned text
-is one fill, linked to its evidence id, on all three paths.
+against a USD figure, a count read as ``3%``). So do a placeholder naming no figure, a unit
+written beside a fill (a currency before it, a percent, rate or scale after it), and a fill that
+runs into a neighbouring digit, sign or point (``3`` beside ``3`` reads 33). The unit check is a
+list of the usual forms, not a parser; a unit it does not list passes. A rejected draft gets one
+redraft with the reasons; a rejected redraft gives way to a template written from the results
+alone. Every number in the returned text is one fill, linked to its evidence id, on all three
+paths.
 
 A number is any run of decimal digits, so an identifier like ``LF-1`` or ``round 4`` counts.
 Figure and kind names hold no digit for the same reason: the template prints them. Numbers spelt
@@ -43,7 +45,14 @@ Label = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z_]{0,63}$")]
 Figure = Money | Count
 
 PLACEHOLDER = re.compile(r"\{\{\s*([^\s{}#]+)#([^\s{}#]+)\s*\}\}")
-PERCENT_AFTER = re.compile(r"\s*[%‰]")
+# A unit written beside a fill is the model's, not the figure's: a currency before it, a rate or a
+# scale after it (a count as "USD 3", "3 percent", money as "USD 10,000.00 million").
+UNIT_BEFORE = re.compile(r"([$€£¥]|\b[A-Z]{3})\s*$")
+UNIT_AFTER = re.compile(
+    r"\s*([%‰]|(?:percent|per\s*cent|bps|basis\s+points?|thousand|million|billion|trillion"
+    r"|mn|bn|k|m|x)\b)",
+    re.IGNORECASE,
+)
 # Grouped thousands or plain digits with an optional fraction; a minus only where it is not a
 # hyphen inside a word (in "LF-1" the number is 1).
 NUMBER = re.compile(r"(?:(?<!\w)-)?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
@@ -153,6 +162,14 @@ class _Span:
     end: int
 
 
+def _table(results: Sequence[SignedResult]) -> dict[FigureRef, Figure]:
+    ids = [r.evidence_id for r in results]
+    repeated = sorted({i for i in ids if ids.count(i) > 1})
+    if repeated:
+        raise ValueError(f"two results share an evidence id: {repeated}")
+    return {FigureRef(r.evidence_id, k): v for r in results for k, v in r.figures.items()}
+
+
 def ground(
     draft: str, results: Sequence[SignedResult]
 ) -> tuple[str, tuple[NumberLink, ...], list[str]]:
@@ -160,9 +177,7 @@ def ground(
 
     The text is usable only when ``problems`` is empty: then every number in it is one fill.
     """
-    table = {
-        FigureRef(r.evidence_id, k): v for r in results for k, v in r.figures.items()
-    }
+    table = _table(results)
     out: list[str] = []
     links: list[NumberLink] = []
     unknown: list[_Span] = []  # placeholders naming no figure, already a problem
@@ -184,8 +199,10 @@ def ground(
         if ref in table:
             span = emit(render(table[ref]))
             links.append(NumberLink(span.start, span.end, out[-1], ref))
-            if PERCENT_AFTER.match(draft, m.end()):
-                problems.append(f"the figure {m.group()} is followed by a percent sign")
+            unit = UNIT_BEFORE.search(draft, 0, m.start()) or UNIT_AFTER.match(draft, m.end())
+            if unit:
+                problems.append(
+                    f"the figure {m.group()} carries a unit the draft added: {unit.group(1)!r}")
         else:
             problems.append(f"the placeholder {m.group()} names no figure of a signed result")
             unknown.append(emit(m.group()))
@@ -193,8 +210,10 @@ def ground(
     emit(draft[pos:])
     text = "".join(out)
 
-    if "{{" in PLACEHOLDER.sub("", draft) or "}}" in PLACEHOLDER.sub("", draft):
-        problems.append("a malformed placeholder")
+    rest = PLACEHOLDER.sub("", draft)
+    brace = min((i for i in (rest.find("{"), rest.find("}")) if i >= 0), default=-1)
+    if brace >= 0:
+        problems.append(f"a malformed placeholder near {rest[max(0, brace - 40):brace + 1]!r}")
     amounts = {_amount(v) for v in table.values()}
     for m in NUMBER.finditer(text):
         if _within(m, links) or _within(m, unknown):
@@ -254,9 +273,7 @@ class GroundedReportAgent(ReportAgent):
         """Draft, then at most one redraft, then the template; every result must verify first."""
         if not results:
             raise ValueError("a grounded section needs at least one signed result")
-        ids = [r.evidence_id for r in results]
-        if len(ids) != len(set(ids)):
-            raise ValueError(f"two results share an evidence id: {sorted(ids)}")
+        _table(results)  # refuses two results under one evidence id before the model is asked
         for r in results:
             verify_result(r, key=self._key)
         listing = [
