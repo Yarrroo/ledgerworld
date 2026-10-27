@@ -242,6 +242,24 @@ describe('Treasury shows the terms the ledger counts in P', () => {
     expect(text(w, 'calculation')).toContain('70,000.00 settled - 50,000.00 payroll = 20,000.00')
   })
 
+  it('an obligation due after the lowest point is named as excluded, not silently dropped', async () => {
+    serve({
+      '/treasury': treasuryWith((body) => {
+        body.obligations.push({ ...clone(body.obligations[0]), obligation_id: 'tax-1', kind: 'tax',
+          reservation_id: null, due_at: '2026-01-07T12:00:00Z' })
+      })
+    })
+    const w = await open(Treasury, '/treasury')
+    expect(text(w, 'calculation')).toContain('tax tax-1 due (t=60 h)')
+  })
+
+  it('a floor metric with no minor at all reads Unknown, never Floor breached', async () => {
+    serve({ '/treasury': treasuryWith((body, a) => { a.floor = { currency: 'USD', status: 'unknown' } }) })
+    const w = await open(Treasury, '/treasury')
+    expect(text(w, 'floor-status')).toBe('?Unknown')
+    expect(w.find('[data-test="shortfall"]').exists()).toBe(false)
+  })
+
   it('an unknown floor reads Unknown, never Floor kept', async () => {
     serve({
       '/treasury': treasuryWith((body, a) => {
@@ -355,6 +373,22 @@ describe('data-states fixture', () => {
     expect(text(w, 'fund-why')).toBe('Last loaded, not current; reload before funding')
   })
 
+  it('a failed refresh after a context change drops the reloaded notice beside the error', async () => {
+    let mode = 'fake'
+    let fail = false
+    serveLending(() => (fail ? new Error('connection reset') : { ...clone(lendingLf2.instance), mode }))
+    const w = await open(Lending, '/lending')
+    mode = 'sandbox'
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="context-changed"]').exists()).toBe(true)
+    fail = true
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'error')).toContain('Last loaded, not current')
+    expect(w.find('[data-test="context-changed"]').exists()).toBe(false)
+  })
+
   it('late-response: an answer for a context no longer selected is discarded', () => {
     const c = stateCase('late-response')
     const guard = latestOnly()
@@ -435,6 +469,12 @@ describe('formatting and labels', () => {
 
   it('an unparseable time is Unavailable, not a crash', () => {
     expect(formatTime('not a time')).toEqual({ utc: 'Unavailable', local: '' })
+  })
+
+  it('a replay of a run with no branch is not called a hypothetical branch', async () => {
+    serve({ '/overview': { ...clone(overviewLf1.instance), run_id: 'run-7', replay: true } })
+    const w = await open(Overview, '/overview')
+    expect(text(w, 'source')).toBe(`${dataStates.labels.replay} · run-7`)
   })
 
   it('a hypothetical branch or a replay is never labelled the observed snapshot', async () => {

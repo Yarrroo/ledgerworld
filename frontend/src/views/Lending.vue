@@ -108,8 +108,7 @@ async function load () {
 }
 
 const { state, refresh } = useReading(load)
-const body = computed(() => state.body)
-const capacity = computed(() => body.value.capacity)
+const capacity = computed(() => state.body.capacity)
 const reduced = computed(() => capacity.value.authority !== 'full')
 
 const capacityText = computed(() => {
@@ -134,7 +133,7 @@ const calculation = computed(() => {
 })
 
 const unobserved = computed(() =>
-  body.value.missing.filter((id) => id.startsWith(`${body.value.pool}/`)))
+  state.body.missing.filter((id) => id.startsWith(`${state.body.pool}/`)))
 
 const fundingWhy = computed(() => {
   if (state.status === 'error') return 'Last loaded, not current; reload before funding'
@@ -148,7 +147,7 @@ const fundingWhy = computed(() => {
 const fundingTarget = computed(() => {
   if (state.status !== 'loaded' || reduced.value || capacity.value.K_p.status !== 'known') return null
   if (!routeExists(router, '/decisions')) return null
-  const run = body.value.demo.run_id
+  const run = state.body.demo.run_id
   return run ? { path: '/decisions', query: { run_id: run } } : { path: '/decisions' }
 })
 

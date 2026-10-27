@@ -8,7 +8,8 @@
  *   units with a currency and is formatted here, once, at the display boundary.
  * - A metric has four states — known, unknown, stale, unassessed — and an unknown is never 0.
  * - A late answer never overwrites a newer one: a reading applies only its newest request's
- *   answer, and `latestOnly()` (selected context plus generation) guards polls of one resource.
+ *   answer. `latestOnly()` (selected context plus generation) is for a polled resource the user
+ *   selects, such as an execution's status; these reading screens select nothing.
  * - Text is English only, as the product is (system brief §15).
  */
 
@@ -143,8 +144,10 @@ export const stateOf = (status) => STATES[status] || STATES.unassessed
 
 /** Floor kept or breached, read off an API headroom metric (P minimum − floor). */
 export function floorState (headroom) {
-  if (!headroom || headroom.status === 'unknown') return 'unknown'
-  if (headroom.status === 'unassessed' || headroom.minor === null) return 'unassessed'
+  if (!headroom || headroom.status === 'unknown' || headroom.minor == null) {
+    return headroom?.status === 'unassessed' ? 'unassessed' : 'unknown'
+  }
+  if (headroom.status === 'unassessed') return 'unassessed'
   return headroom.minor >= 0 ? 'kept' : 'breached'
 }
 
@@ -154,7 +157,7 @@ export function floorState (headroom) {
  */
 export function againstFloor (value, floor) {
   if (!floor || floor.status === 'unassessed') return { state: 'unassessed', gap: null }
-  if (value?.minor == null || floor.minor === null) return { state: 'unknown', gap: null }
+  if (value?.minor == null || floor.minor == null) return { state: 'unknown', gap: null }
   const gap = value.minor - floor.minor
   return { state: gap >= 0 ? 'kept' : 'breached', gap }
 }
@@ -210,8 +213,9 @@ export function projectionTerms (account, t, obligations, asOf) {
   const carried = new Set(b.pending_out.map((f) => f.reservation_id).filter(Boolean))
   for (const o of obligations) {
     if (o.account !== account.id || !OWED.has(o.state ?? 'open')) continue
-    if (o.reservation_id && carried.has(o.reservation_id)) continue
+    if (o.reservation_id && carried.has(o.reservation_id)) continue // counted as its outflow
     if (isDue(o.due_at)) terms.push(`- ${formatAmount(o.amount.minor, c)} ${o.kind}`)
+    else excluded.push(`${o.kind} ${o.obligation_id} due (${hoursFrom(asOf, o.due_at)})`)
   }
   const result = account.projected.find((p) => p.t === t)?.value
   return {
@@ -241,7 +245,10 @@ export const LABELS = {
 
 /** What a response's figures are: a replay, a hypothetical branch, or the observed snapshot. */
 export function sourceLabel (body) {
-  if (body.replay) return `${LABELS.replay} · ${LABELS.branch} ${body.branch_id ?? ''}`.trim()
+  if (body.replay) {
+    const of = body.branch_id ? `${LABELS.branch} ${body.branch_id}` : (body.run_id ?? body.snapshot_id)
+    return `${LABELS.replay} · ${of}`
+  }
   if (body.branch_id) return `${LABELS.branch} ${body.branch_id}`
   return `${LABELS.synthetic} ${body.snapshot_id}`
 }
@@ -285,6 +292,7 @@ export function useReading (load) {
     } catch (error) {
       if (mine !== newest) return
       state.error = error
+      state.contextChanged = false
       state.status = 'error'
     }
   }

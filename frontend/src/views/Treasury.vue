@@ -15,17 +15,17 @@
       <div class="lw-strip">
         <article class="lw-tile" data-test="floor">
           <div class="lw-tile__label">Reserve floor on P</div>
-          <div :class="['lw-status', `lw-status--${STATES[a.floor.state].tone}`]" data-test="floor-status">
-            <span aria-hidden="true">{{ STATES[a.floor.state].icon }}</span>
-            <span>{{ STATES[a.floor.state].word }}</span>
+          <div :class="['lw-status', `lw-status--${STATES[a.floorCheck.state].tone}`]" data-test="floor-status">
+            <span aria-hidden="true">{{ STATES[a.floorCheck.state].icon }}</span>
+            <span>{{ STATES[a.floorCheck.state].word }}</span>
           </div>
-          <div v-if="a.floor.state === 'breached'" class="lw-figure" data-test="shortfall">
-            {{ formatMoney(-a.floor.gap, a.currency) }} at {{ hoursFrom(body.as_of, a.low.t) }}
+          <div v-if="a.floorCheck.state === 'breached'" class="lw-figure" data-test="shortfall">
+            {{ formatMoney(-a.floorCheck.gap, a.currency) }} at {{ hoursFrom(body.as_of, a.low.t) }}
           </div>
           <div v-else-if="a.low" class="lw-figure lw-figure--small">
             lowest {{ metricText(a.low.value) }} at {{ hoursFrom(body.as_of, a.low.t) }}
           </div>
-          <div class="lw-time">floor {{ a.floorMetric ? metricText(a.floorMetric) : 'Not assessed' }}</div>
+          <div class="lw-time">floor {{ a.floor ? metricText(a.floor) : 'Not assessed' }}</div>
           <details v-if="a.low" class="lw-calc">
             <summary>How this is calculated</summary>
             <div class="lw-calc__body" data-test="calculation">
@@ -141,8 +141,7 @@ const accounts = computed(() => {
     return {
       ...a,
       low,
-      floorMetric: a.floor,
-      floor: againstFloor(low?.value, a.floor),
+      floorCheck: againstFloor(low?.value, a.floor),
       points: a.projected.map((p) => ({
         ...p, lowest: p === low, against: againstText(p.value, a.floor)
       })),
