@@ -453,7 +453,8 @@ def failure_of(entry: dict) -> str:
         why.append(f"cash {usd(floor['min_cash'])} at t={floor['at_h']} h, "
                    f"{usd(floor['short_minor'])} under the floor")
     why += [f"{o['id']} unmet at t={o['due_h']} h"
-            + (f", still owed at t={o['overdue_h']} h" if "overdue_h" in o else "")
+            + (f", overdue at the checkpoint (read at t={o['overdue_h']} h)"
+               if "overdue_h" in o else "")
             + (f", short {usd(o['short_minor'])}" if o.get("short_minor") else "")
             for o in entry["obligations"]]
     return f"{entry['policy']}: " + ("; ".join(why) or "infeasible")

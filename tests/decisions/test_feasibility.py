@@ -146,14 +146,15 @@ def top_up(w: SimpleNamespace, minor: int, round_: int) -> None:
                           round=round_, sim_time=T0 + timedelta(hours=4 * round_)))
 
 
-@pytest.mark.parametrize(("amount", "paid_round", "short"), [
-    (1_500_000, None, 500_000),  # never paid: 1,500,000 overdue against 1,000,000 free at t=12
-    (900_000, 3, 0),  # paid at its first chance: the cash free then is read before it went out
-    (1_500_000, 4, 500_000),  # paid a round later, after a top-up: short at its first chance
-    (300_000, 1, None),  # paid by the checkpoint: history, not the branch's outcome
+@pytest.mark.parametrize(("amount", "paid_round", "short", "unknown"), [
+    (1_500_000, None, 500_000, set()),  # never paid: 1,500,000 against 1,000,000 free at t=12
+    (900_000, 3, 0, set()),  # paid at its first chance: cash read before it went out
+    (1_500_000, 4, 500_000, set()),  # paid a round later, after a top-up: short at t=12
+    (900_000, 3, 900_000, {3}),  # paid there, but that round end was unknown: nothing usable
+    (300_000, 1, None, set()),  # paid by the checkpoint: history, not the branch's outcome
 ])
 def test_an_obligation_outstanding_at_the_checkpoint_is_carried_with_its_deadline(
-        amount, paid_round, short):
+        amount, paid_round, short, unknown):
     """Due at t=4 (round 1), assessed after the checkpoint at round 2: an obligation still owed
     there is unmet and overdue since its own deadline, short by what its first chance in the
     branch (t=12) could not pay; one already settled is left out."""
@@ -165,7 +166,7 @@ def test_an_obligation_outstanding_at_the_checkpoint_is_carried_with_its_deadlin
         top_up(w, 1_000_000, 4)
     if paid_round is not None:
         settle_due(w.store, T0 + timedelta(hours=4 * paid_round), round=paid_round)
-    f = assess(w, ACCOUNT, from_round=2, to_round=5, observability=seen(set(), range(3, 6)))
+    f = assess(w, ACCOUNT, from_round=2, to_round=5, observability=seen(unknown, range(3, 6)))
     if short is None:
         assert f.obligations == () and f.feasible
         return

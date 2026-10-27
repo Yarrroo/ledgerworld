@@ -198,19 +198,19 @@ def assess(world: Any, account: str, *, from_round: int, to_round: int,
                                                     ob["amount_minor"], True))
             continue
         # Its first chance in the branch: its due round, or for an overdue one the first round.
-        first = max(due_round, rounds.start)
+        first_h = max(due_round, rounds.start) * ROUND_HOURS
         later = sum(o["amount_minor"] for o in rows
                     if o["reservation_id"] and o["obligation_id"] != ob["obligation_id"]
                     and _aware(o["due_at"]) > _aware(ob["due_at"]))
-        free = usable[first * ROUND_HOURS] - later - view.pledged_minor
-        if paid == first:  # paid there, late: the cash free then is read before it went out
-            free += ob["amount_minor"]
-        # Paid late from cash that was there (a committed flow landing after its due round) is
-        # unmet with nothing short.
+        # Paid there, late: the cash then is read before it went out, and an unknown round end
+        # still counts none of it.
+        then = settled[first_h] + (ob["amount_minor"] if paid == first_h // ROUND_HOURS else 0)
+        free = (min(then, 0) if first_h in unknown else then) - later - view.pledged_minor
+        # Paid late from cash that was there then (a committed flow landing after its due round,
+        # an overdue one paid at its first chance) is unmet with nothing short.
         obligations.append(ObligationResult(
             ob["obligation_id"], due_h, ob["amount_minor"], False,
-            max(0, ob["amount_minor"] - max(0, free)),
-            overdue_h=first * ROUND_HOURS if overdue else None))
+            max(0, ob["amount_minor"] - max(0, free)), overdue_h=first_h if overdue else None))
 
     floor = view.floor_minor or 0
     series = list(usable.items())

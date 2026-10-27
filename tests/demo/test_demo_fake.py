@@ -135,8 +135,8 @@ def test_an_obligation_overdue_at_the_checkpoint_says_where_its_shortfall_was_re
              "floor": {"min_cash": 3_000_000, "at_h": 40, "short_minor": 0, "breach_h": None},
              "obligations": [{"id": "fee-0", "due_h": 4, "amount_minor": 500_000, "met": False,
                               "short_minor": 200_000, "overdue_h": 12}]}
-    assert run.failure_of(entry) == ("fixed-reserve: fee-0 unmet at t=4 h, still owed at t=12 h, "
-                                     "short 2,000.00")
+    assert run.failure_of(entry) == ("fixed-reserve: fee-0 unmet at t=4 h, overdue at the "
+                                     "checkpoint (read at t=12 h), short 2,000.00")
 
 
 def test_no_credential_reaches_the_simulation_or_the_receipt(demo):
