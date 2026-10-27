@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from checks import demo_receipt
+from checks.goals import g3
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "prp/2026-10-20-ledgerworld/design/modules/execution/fixtures/demo-receipt.json"
@@ -76,6 +77,8 @@ def patched(case: dict, receipt: dict | None = None) -> dict:
 def live_sandbox() -> dict:
     receipt = valid_fake()
     receipt["mode"] = "sandbox"
+    receipt["started_at"] = "2026-11-06T10:00:00Z"
+    receipt["checkpoints"]["fresh_branch"]["created_at"] = "2026-11-06T10:00:05Z"
     for checkpoint in receipt["checkpoints"].values():
         checkpoint["mode"] = "sandbox"
     return receipt
@@ -114,6 +117,51 @@ def test_sandbox_receipt_with_provider_ids_counts_three_live():
     receipt = live_sandbox()
     assert demo_receipt.check(receipt, require_live=True) == []
     assert demo_receipt.live_checkpoints(receipt) == 3
+
+
+def test_timestamp_with_an_offset_is_the_same_instant():
+    receipt = live_sandbox()
+    receipt["started_at"] = "2026-11-06T14:00:00+04:00"
+    assert demo_receipt.check(receipt, require_live=True) == []
+    assert demo_receipt.live_checkpoints(receipt) == 3
+
+
+def test_mode_b_label_needs_simulation_not_one_exact_string():
+    receipt = live_sandbox()
+    receipt["checkpoints"]["advance_reconciled"]["label"] = "advance inflow (simulation, Mode B)"
+    assert demo_receipt.check(receipt, require_live=True) == []
+
+
+def g3_cases() -> list[tuple[str, dict]]:
+    """Well-shaped receipts with both timestamps: the live one, each fixture case on it, edges.
+
+    Without a timestamp the two part on purpose: the fixture counts the branch (its
+    live-missing-provider-id case expects 2 on the timestamp-less fake), g3 does not.
+    """
+    cases = [("live", live_sandbox())]
+    cases += [(case_id, patched(case, live_sandbox())) for case_id, case in INVALID.items()]
+    receipt = live_sandbox()
+    receipt["started_at"] = "2026-11-06T14:00:00+04:00"
+    cases.append(("offset-started-at", receipt))
+    receipt = live_sandbox()
+    receipt["checkpoints"]["advance_reconciled"]["label"] = "advance inflow (simulation, Mode B)"
+    cases.append(("mode-b-other-label", receipt))
+    receipt = live_sandbox()
+    receipt["checkpoints"]["fresh_branch"]["created_at"] = "2026-11-06T11:00:00+02:00"
+    cases.append(("offset-created-before-run", receipt))
+    receipt = live_sandbox()
+    receipt["connected"] = True
+    receipt["checkpoints"]["advance_reconciled"]["label"] = "advance (connected-account transfer)"
+    cases.append(("mode-a-advance", receipt))
+    receipt = live_sandbox()
+    receipt["checkpoints"]["advance_reconciled"]["status"] = "PENDING"
+    cases.append(("advance-pending", receipt))
+    return cases
+
+
+@pytest.mark.parametrize(("case_id", "receipt"), g3_cases(), ids=[c[0] for c in g3_cases()])
+def test_checker_and_g3_kpi_count_the_same_live_checkpoints(case_id, receipt):
+    assert demo_receipt.live_checkpoints(receipt) == g3.count(receipt), case_id
 
 
 def test_setup_movement_is_listed_apart_and_never_counts():

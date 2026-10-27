@@ -6,7 +6,9 @@ The receipt is the one `scripts/demo.sh` writes (shape: the execution module's
 `fixtures/demo-receipt.json`). Exit 0 when it is valid; with `--require-live`, only when all three
 checkpoints — fresh_branch, advance_reconciled, payout_reconciled — are live. A live checkpoint is
 one from a sandbox run with no run-level refusal, carrying no refusal of its own and a provider id
-where it moves money; their number is the g3 KPI `demo_checkpoints_live`. A missing receipt
+where it moves money. Their number is the g3 KPI `demo_checkpoints_live`; `checks/goals/g3.py`
+takes the same count of a well-shaped receipt that carries both `started_at` and the branch's
+`created_at` (g3 needs both to call a branch fresh, the fixture does not). A missing receipt
 counts 0. Setup movements (funding the sandbox wallet) are listed apart and never count as a
 checkpoint. Exit 1 on a refusal, 2 on bad usage. Stdlib only.
 """
@@ -22,20 +24,17 @@ MODES = ("fake", "sandbox")
 MODELS = ("scripted", "live")
 BEATS = ["state", "world", "shock", "fork", "break", "execute", "reconcile"]
 CHECKPOINTS = ("fresh_branch", "advance_reconciled", "payout_reconciled")
-MODE_B_ADVANCE_LABEL = "advance inflow (sandbox simulation)"
 
 
 def _utc(value: object) -> datetime | None:
+    """The instant in UTC; None when absent, malformed or without an offset (any offset is fine)."""
     if not isinstance(value, str):
         return None
     try:
         stamp = datetime.fromisoformat(value)
     except ValueError:
         return None
-    offset = stamp.utcoffset()
-    if offset is None or offset.total_seconds() != 0:
-        return None
-    return stamp.astimezone(UTC)
+    return stamp.astimezone(UTC) if stamp.utcoffset() is not None else None
 
 
 KINDS = {
@@ -144,7 +143,7 @@ def _advance_rules(receipt: dict, advance: dict) -> list[str]:
     out = []
     if not advance["reconciled"] or advance["status"] != "SETTLED":
         out.append("advance not reconciled")
-    if receipt.get("connected") is False and advance["label"] != MODE_B_ADVANCE_LABEL:
+    if receipt.get("connected") is False and "simulation" not in advance["label"]:
         out.append("Mode B advance must carry the simulation label")
     return out
 
