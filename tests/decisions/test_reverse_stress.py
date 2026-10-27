@@ -393,10 +393,16 @@ def test_a_facility_of_another_lender_is_refused_rather_than_cleared_on_this_poo
         replay_world(Asks(1_000_000), b)
 
 
-def test_a_flow_already_overdue_at_the_snapshot_is_still_shocked():
+def late(bid: str, *obligations: dict) -> Baseline:
+    """The snapshot taken at t = 12 instead, with ``obligations`` added to it."""
     snap = SNAPSHOT.model_dump(mode="json")
     snap["as_of"] = snap["accounts"][0]["as_of"] = iso_utc(12)
-    b = Baseline("late", Snapshot.model_validate(snap), SNAPSHOT.as_of, "lender", terms=TERMS)
+    snap["obligations"] += obligations
+    return Baseline(bid, Snapshot.model_validate(snap), SNAPSHOT.as_of, "lender", terms=TERMS)
+
+
+def test_a_flow_already_overdue_at_the_snapshot_is_still_shocked():
+    b = late("late")
     path = replay_world(Integrated(), b, delayed_receipt(
         "rcv-1", range_=(0, 2_000_000), scale=2_000_000).events(2_000_000))
     assert any("slips past the horizon" in e["text"] for e in path.events)
@@ -406,14 +412,10 @@ def test_a_flow_already_overdue_at_the_snapshot_is_still_shocked():
 def test_an_obligation_already_overdue_at_the_snapshot_is_unmet_as_assess_counts_it():
     """Owed since t = 4 at a t = 12 snapshot, it is paid the next round, after its deadline:
     unmet, as ``assess`` carries an obligation outstanding at its checkpoint."""
-    snap = SNAPSHOT.model_dump(mode="json")
-    snap["as_of"] = snap["accounts"][0]["as_of"] = iso_utc(12)
-    b = Baseline("late", Snapshot.model_validate(snap), SNAPSHOT.as_of, "lender", terms=TERMS)
-    snap["obligations"].append({"obligation_id": "fee-0", "entity": "treasury",
-                                "account": "treasury/operating", "amount": usd(100_000),
-                                "due_at": iso_utc(4), "kind": "fee"})
-    owed = Baseline("owed", Snapshot.model_validate(snap), SNAPSHOT.as_of, "lender", terms=TERMS)
-    before, path = replay_world(Integrated(), b), replay_world(Integrated(), owed)
+    owed = late("owed", {"obligation_id": "fee-0", "entity": "treasury",
+                         "account": "treasury/operating", "amount": usd(100_000),
+                         "due_at": iso_utc(4), "kind": "fee"})
+    before, path = replay_world(Integrated(), late("late")), replay_world(Integrated(), owed)
     assert any(e["text"] == "r4 (t=16): fee-0 100,000 paid" for e in path.events)
     assert path.obligations_unmet == before.obligations_unmet + 1
     assert path.breaks
