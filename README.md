@@ -24,7 +24,8 @@ Tests marked `live` or `pg` are skipped by default; `uv run pytest -m pg` runs t
 tests against `LEDGER_DATABASE_URL`.
 
 Frontend: `npm --prefix frontend install && npm --prefix frontend run dev`; the observed-state
-screens are `/overview`, `/treasury` and `/lending`. Unit tests: `npm --prefix frontend run test:unit`.
+screens are `/overview`, `/treasury` and `/lending`; the policy comparison is `/decisions` and the
+approval, provider state and receipts are `/execution`. Unit tests: `npm --prefix frontend run test:unit`.
 Backend: `cd backend && uv run python run.py`.
 
 ## Licence
