@@ -69,6 +69,9 @@ const approvalBody = (patch = {}) => ({
   as_of: approvalBinding.now, mode: 'fake', approval: { ...clone(boundApproval.instance), ...patch }
 })
 
+/** POST /executions accepted: the server names the execution by its approval id. */
+const accepted = (id = 'apr-1') => ({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: id })
+
 const advance = () => clone(executionSettled.instance.legs[0])
 const payout = (patch = {}) => ({
   ...clone(submittedPayout.instance), label: 'payout from the operator account', ...patch
@@ -267,7 +270,7 @@ describe('Execution: authority and the bounded approval', () => {
   it('approve then execute: two explicit acts, each POST sent once, execution id = approval id', async () => {
     const c = kase('approve-then-execute').expect
     const { w, calls } = await reviewReady({
-      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'POST /executions': accepted(),
       'GET /executions/apr-1': executionBody({ legs: [advance(), sentPayout()] })
     })
     const confirm = w.get('[data-test="confirm"]')
@@ -479,7 +482,7 @@ describe('accessibility: keyboard review (mocked transport only)', () => {
 
   it('confirm, execute and close by keyboard; Enter on the page executes nothing', async () => {
     const { w, calls } = await reviewReady({
-      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'POST /executions': accepted(),
       'GET /executions/apr-1': executionBody({ legs: [advance()] })
     })
     await approve(w)
@@ -589,7 +592,7 @@ describe('vet round 2', () => {
     fakeTimers()
     let body = executionBody({ legs: [] })
     const { w, calls } = await reviewReady({
-      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'POST /executions': accepted(),
       'GET /executions/apr-1': () => body
     })
     await approve(w)
@@ -621,7 +624,7 @@ describe('vet round 2', () => {
   it('Refresh re-reads an execution this tab sent', async () => {
     let body = executionBody({ legs: [paidPayout()] })
     const { w } = await reviewReady({
-      'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+      'POST /executions': accepted(),
       'GET /executions/apr-1': () => body
     })
     await approve(w)
@@ -687,7 +690,7 @@ describe('vet round 2, re-read', () => {
     await flushPromises()
     expect(calls.some((x) => x.path === '/decisions/run-2')).toBe(true)
     expect(text(w, 'context')).toContain('Run run-2')
-    release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
+    release(accepted())
     await flushPromises()
   })
 })
@@ -725,7 +728,7 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
   const executions = {
     'an unparseable body': UNREADABLE,
     'a body with no execution id': { as_of: '2026-11-05T10:00:05Z', mode: 'fake' },
-    'another execution id': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-9' }
+    'another execution id': accepted('apr-9')
   }
   for (const [what, answer] of Object.entries(executions)) {
     it(`execution POST answered with ${what}: read back by the approval id, never resent`, async () => {
@@ -747,14 +750,14 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
 
   const reads = {
     'an unparseable body': UNREADABLE,
-    'a body with no legs': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' }
+    'a body with no legs': accepted()
   }
   for (const [what, first] of Object.entries(reads)) {
     it(`a status read answered with ${what} is not a state: it says so and reads again`, async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
       let answer = first
       const { w, calls } = await reviewReady({
-        'POST /executions': { as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' },
+        'POST /executions': accepted(),
         'GET /executions/apr-1': () => answer
       })
       await approve(w)

@@ -188,24 +188,21 @@ const route = useRoute()
 const enc = encodeURIComponent
 
 /** A 2xx whose body is missing or incomplete: answered, but what it says cannot be read. */
-const UNREADABLE = 'unreadable'
-const unreadable = () => new ApiError(null, UNREADABLE, 'the answer could not be read')
-
-/** An execution read with the legs and incidents the receipts are drawn from. */
-const readableExecution = (body) => typeof body?.execution_id === 'string' &&
-  Array.isArray(body.legs) && Array.isArray(body.incidents)
+const unreadable = () => new ApiError(null, 'unreadable', 'the answer could not be read')
 
 /** GET /executions/:id; an answer without its legs and incidents is unreadable, never a state. */
 async function readExecution (id) {
   const body = await request(`/executions/${enc(id)}`)
-  if (!readableExecution(body)) throw unreadable()
+  const readable = typeof body?.execution_id === 'string' && Array.isArray(body.legs) &&
+    Array.isArray(body.incidents)
+  if (!readable) throw unreadable()
   return body
 }
 
 /** A read that may name nothing yet: 404 is "not there", every other failure is an error. */
-async function optional (read) {
+async function optional (reading) {
   try {
-    return await read()
+    return await reading
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) return null
     throw error
@@ -221,8 +218,8 @@ const { state, refresh } = useReading(async () => {
   let decisionsError = ''
   const [decisions, execution] = await Promise.all([
     // the receipts still read when this fails; only the review needs the decision
-    runId ? optional(() => request(`/decisions/${enc(runId)}`)).catch((error) => { decisionsError = error.message; return null }) : null,
-    executionId ? optional(() => readExecution(executionId)) : null
+    runId ? optional(request(`/decisions/${enc(runId)}`)).catch((error) => { decisionsError = error.message; return null }) : null,
+    executionId ? optional(readExecution(executionId)) : null
   ])
   const head = execution ?? overview
   return {
@@ -298,7 +295,6 @@ const executeWhy = computed(() => {
   if ((decisions.value?.results ?? []).some((r) => r.branch_id === a.snapshot_id)) {
     return 'Bound to a hypothetical branch, not the observed state; review again'
   }
-  if (!a.legs.length) return 'No legs were bound'
   if (serverNow.value >= Date.parse(a.expires_at)) return 'Approval expired'
   if (flow.submitting) return 'Sending'
   return ''
@@ -308,13 +304,12 @@ const executeWhy = computed(() => {
  * No answer, a server/proxy failure, or a 2xx this screen cannot read: the POST may or may not
  * have taken effect. Only a 4xx is a definite refusal.
  */
-const unanswered = (error) => !(error instanceof ApiError) || error.code === UNREADABLE ||
-  error.status === 0 || error.status >= 500
+const unanswered = (error) => !(error?.status >= 400 && error.status < 500)
 
 const isText = (x) => typeof x === 'string' && x !== ''
 // C6 timestamps are ISO-8601 with a zone; Date.parse alone also takes "1" or "Nov 5"
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
-const isTime = (iso) => typeof iso === 'string' && ISO.test(iso) && !Number.isNaN(Date.parse(iso))
+const isTime = (iso) => ISO.test(iso) && !Number.isNaN(Date.parse(iso))
 
 /** A C3 leg as the bound-terms table shows it. */
 const isLeg = (l) => Number.isSafeInteger(l?.index) && isText(l.kind) && isText(l.source) &&
