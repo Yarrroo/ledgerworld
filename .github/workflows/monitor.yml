@@ -1,0 +1,59 @@
+name: Monitor LedgerWorld
+
+# Set the repository variable LEDGERWORLD_URL to the submitted public origin. Keep this workflow
+# enabled through Demo Day, including during the freeze; failed runs use Actions notifications.
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ledgerworld-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      LEDGERWORLD_URL: ${{ vars.LEDGERWORLD_URL }}
+    steps:
+      - name: Read health and cached overview
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from urllib.parse import urlsplit
+          from urllib.request import Request, urlopen
+
+          base = os.environ["LEDGERWORLD_URL"].rstrip("/")
+          origin = urlsplit(base)
+          if (origin.scheme != "https" or not origin.netloc or origin.username is not None
+                  or origin.password is not None or origin.path or origin.query or origin.fragment):
+              raise SystemExit("LEDGERWORLD_URL must be a public HTTPS origin")
+
+          # These GETs read existing state; never run the demo, fork, execute, or call a provider.
+          for path in ("/api/v1/health", "/api/v1/overview"):
+              request = Request(base + path, headers={"Accept": "application/json"}, method="GET")
+              with urlopen(request, timeout=20) as response:
+                  if response.status != 200:
+                      raise SystemExit(f"{path}: expected HTTP 200")
+                  body = json.load(response)
+              if not isinstance(body, dict) or not body.get("as_of") or not body.get("mode"):
+                  raise SystemExit(f"{path}: missing response envelope")
+              if path == "/api/v1/health" and body.get("ok") is not True:
+                  raise SystemExit("Health check is not OK")
+              if path == "/api/v1/overview" and not all(
+                  key in body for key in ("snapshot_id", "cash", "coverage", "demo")
+              ):
+                  raise SystemExit("Cached overview is unavailable")
+              if path == "/api/v1/overview" and (
+                  not isinstance(body["demo"], dict) or not body["demo"].get("run_id")
+              ):
+                  raise SystemExit("Prepared demo run is unavailable")
+              print(f"{path}: OK")
+          PY
