@@ -524,6 +524,12 @@ class FailingModel(ScriptedModel):
         return self._answer(messages, tools)
 
 
+async def settle() -> None:
+    """Let every ready task run a step: what a released barrier would let through, lands."""
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
 def memory_record(agent, text):
     from camel.memories import MemoryRecord
     from camel.messages import BaseMessage
@@ -706,8 +712,7 @@ def test_an_aborted_agent_step_stops_every_writer_before_restoring(tmp_path, con
                             else "failed")
             # cleanup_writes_removed, writes_after_restore: release every barrier and look again.
             barriers.release.set()
-            for _ in range(20):
-                await asyncio.sleep(0)
+            await settle()
             assert world.fingerprint() == capture.fingerprint
             assert expect["writes_after_restore"] == 0 and expect["cleanup_writes_removed"]
             barriers.armed = False
@@ -735,8 +740,7 @@ def test_a_world_whose_writer_will_not_stop_refuses_a_retry(tmp_path):
             assert "stubborn: ignoring cancellation" in barriers.records
         finally:
             barriers.release.set()
-            for _ in range(20):
-                await asyncio.sleep(0)
+            await settle()
             await world.close()
 
     run(go())
@@ -766,8 +770,7 @@ def test_a_cancellation_during_abort_cleanup_waits_for_it_to_finish(tmp_path, co
                 task.cancel()
             await barriers.in_cleanup.wait()  # the abort is waiting on the writer's cleanup
             task.cancel()
-            for _ in range(20):
-                await asyncio.sleep(0)
+            await settle()
             assert not task.done()  # the cancellation waits for the cleanup
             barriers.cleanup_gate.set()
             with pytest.raises(asyncio.CancelledError):
@@ -778,8 +781,7 @@ def test_a_cancellation_during_abort_cleanup_waits_for_it_to_finish(tmp_path, co
             assert conn.closed and not conn.in_transaction()
             assert_restored(world, capture, "cancelled" if cause == "cancel" else "failed")
             barriers.release.set()
-            for _ in range(20):
-                await asyncio.sleep(0)
+            await settle()
             assert world.fingerprint() == capture.fingerprint
             del world.coordinator.hooks["advanced"]
             barriers.armed = False
@@ -787,8 +789,7 @@ def test_a_cancellation_during_abort_cleanup_waits_for_it_to_finish(tmp_path, co
         finally:
             barriers.cleanup_gate.set()
             barriers.release.set()
-            for _ in range(20):
-                await asyncio.sleep(0)
+            await settle()
             await world.close()
 
     run(go())
