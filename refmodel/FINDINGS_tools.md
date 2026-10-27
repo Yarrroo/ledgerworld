@@ -37,9 +37,9 @@ unchanged from `prp/`. Accept: `python -m unittest discover -s refmodel -p test_
 5. **`alert_reason` when the two attempts fail differently** is unpinned; the model reports the
    repair attempt's reason, `repair_call_failed` when the repair call itself raises, and
    `tool_schema_missing` for a mandated tool with no schema.
-7. **The hash input's text encoding is unpinned.** The model uses ASCII-escaped JSON (`json.dumps`
+6. **The hash input's text encoding is unpinned.** The model uses ASCII-escaped JSON (`json.dumps`
    default) and orders items by id, then by canonical content; T07 must match both.
-6. **`mandatory_settlements_run`** needs a ledger and a round coordinator; out of scope for a
+7. **`mandatory_settlements_run`** needs a ledger and a round coordinator; out of scope for a
    stdlib oracle. Covered here only as "the guard never raises".
 
 No `checks/required.json` id is added until T07 imports this model.
