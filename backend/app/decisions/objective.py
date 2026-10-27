@@ -14,7 +14,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 from ..finance.spendability import grouped
-from ..simulation.clock import ROUND_HOURS
 from .feasibility import Feasibility
 
 __all__ = ["KEY_FIELDS", "DecisionResult", "Evaluation", "policy_key", "rank"]
@@ -127,9 +126,9 @@ def _binding(earliest: dict, evals: list[Evaluation], tried: list[Evaluation],
 
 
 def _unknown(f: Feasibility, h: int) -> str:
-    """Says so when the round end holding hour ``h`` had an unknown balance: the shortfall is
-    what could not be used, not what the ledger held."""
-    return " (balance unknown)" if -(-h // ROUND_HOURS) * ROUND_HOURS in f.unknown_h else ""
+    """Says so when hour ``h`` fell in a round that ended unknown: the shortfall is what could
+    not be used, not what the ledger held."""
+    return " (balance unknown)" if f.unknown_at(h) else ""
 
 
 def rank(evaluations: Sequence[Evaluation], *, order: Sequence[str] | None = None,

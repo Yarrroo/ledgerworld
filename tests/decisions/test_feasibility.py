@@ -102,3 +102,10 @@ def test_a_round_with_no_recorded_observability_is_refused():
     with pytest.raises(ValueError, match=r"rounds \[4, 5\]"):
         assess(world(), ACCOUNT, from_round=0, to_round=5,
                observability=seen(set(), range(1, 4)))
+
+
+@pytest.mark.parametrize("state", ["stale", "Known", None])
+def test_an_observability_that_is_neither_known_nor_unknown_is_refused(state):
+    with pytest.raises(ValueError, match="known or unknown"):
+        assess(world(), ACCOUNT, from_round=0, to_round=5,
+               observability={**seen(set()), 3: state})

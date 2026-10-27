@@ -80,6 +80,10 @@ class Feasibility:
     def feasible(self) -> bool:
         return not self.unmet and not self.breached
 
+    def unknown_at(self, h: int) -> bool:
+        """Whether the round end holding hour ``h`` (the round it is due in) was unknown."""
+        return -(-h // ROUND_HOURS) * ROUND_HOURS in self.unknown_h
+
     def as_dict(self) -> dict:
         return {"account": self.account, "settled": {str(h): v for h, v in self.settled.items()},
                 "obligations": [o.as_dict() for o in self.obligations],
@@ -140,11 +144,13 @@ def assess(world: Any, account: str, *, from_round: int, to_round: int,
     missing = [r for r in rounds if r not in observability]
     if missing:
         raise ValueError(f"no observability of {account} recorded for rounds {missing}")
+    odd = {r: observability[r] for r in rounds if observability[r] not in ("known", "unknown")}
+    if odd:
+        raise ValueError(f"observability of {account} is known or unknown, not {odd}")
     view = store.view(account)
     settled = settled_by_round(store, account, rounds)
-    known = {r * ROUND_HOURS: observability[r] == "known" for r in rounds}
-    usable = {h: v if known[h] else min(v, 0) for h, v in settled.items()}
-    unknown_h = tuple(h for h, k in known.items() if not k)
+    unknown = {r * ROUND_HOURS for r in rounds if observability[r] == "unknown"}
+    usable = {h: min(v, 0) if h in unknown else v for h, v in settled.items()}
 
     obligations = []
     rows = [r for r in store.rows("obligations") if r["account_id"] == account]
@@ -178,4 +184,4 @@ def assess(world: Any, account: str, *, from_round: int, to_round: int,
     return Feasibility(
         account=account, settled=settled, obligations=tuple(obligations),
         floor=FloorResult(min_cash, at_h, max(0, floor - min_cash), breach),
-        funding_cost_minor=_expense(store, view.entity_id, from_round), unknown_h=unknown_h)
+        funding_cost_minor=_expense(store, view.entity_id, from_round), unknown_h=tuple(sorted(unknown)))
