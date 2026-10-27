@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import socket
 import subprocess
@@ -67,7 +66,7 @@ def test_go(capsys):
     assert "feasible defer, hold; selected hold" in "\n".join(out)
 
 
-def test_api_suffix_is_not_doubled(capsys):
+def test_api_suffix_is_not_doubled():
     def fetch(url: str) -> tuple[int, object]:
         return answers()[url]
 
@@ -111,7 +110,7 @@ def test_pending_decisions(capsys):
 
 def test_unreconciled_receipt(capsys):
     table = answers()
-    execution = copy.deepcopy(table[f"{API}/executions/apr-1"][1])
+    execution = table[f"{API}/executions/apr-1"][1]
     execution["legs"][0].update(reconciled=False, state="pending")
     table[f"{API}/executions/apr-1"] = (200, execution)
     code, out = check(table, capsys)
@@ -122,7 +121,7 @@ def test_unreconciled_receipt(capsys):
 
 def test_missing_receipt_and_open_incident(capsys):
     table = answers()
-    execution = copy.deepcopy(table[f"{API}/executions/apr-1"][1])
+    execution = table[f"{API}/executions/apr-1"][1]
     execution["incidents"] = [{"incident_id": "inc-1", "leg_id": "x", "kind": "unknown",
                                "state": "open", "opened_at": "2026-11-05T10:01:00Z"}]
     table[f"{API}/executions/apr-1"] = (200, execution)
