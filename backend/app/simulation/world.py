@@ -18,10 +18,9 @@ back and ``fingerprint()`` digests each, so a restoration is checked rather than
 Importing ``oasis`` writes ``./log`` in the working directory (oasis-seam.md S13), so it is
 imported on first use from a temporary directory.
 
-Each world has its own RNG, so one branch's draws never move another's. OASIS's recommender and
-camel's model choice draw from the module-level ``random``; ``import_oasis`` points those names
-at the RNG of the world whose platform task or ``env.step`` is running (a context variable),
-and the process-global one only outside every world.
+Each world has its own RNG, so one branch's draws never move another's: ``import_oasis`` routes
+OASIS's and camel's module-level draws (``oasis_finance.draws``) to the RNG of the world whose
+platform task or ``env.step`` is running.
 """
 
 from __future__ import annotations
@@ -36,7 +35,6 @@ import sqlite3
 import sys
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from functools import cached_property
@@ -45,6 +43,7 @@ from types import SimpleNamespace
 from typing import Any, Self
 
 from oasis_finance.actions import decode_args
+from oasis_finance.draws import WORLD_RNG, route_draws
 from oasis_finance.observation import DEFAULT_EPOCH
 from sqlalchemy import Connection, select
 
@@ -70,32 +69,6 @@ class WorldUnusable(RuntimeError):
     """A failed round could not be shown to have stopped every writer; this world is spent."""
 
 
-_WORLD_RNG: ContextVar[random.Random | None] = ContextVar("world_rng", default=None)
-
-
-def _running_rng() -> Any:
-    """The RNG of the world running in this context; outside every world, ``random`` itself."""
-    return _WORLD_RNG.get() or random
-
-
-class _RunningWorldRandom:
-    """Stands in for the ``random`` module where OASIS draws: each draw is the running world's."""
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(_running_rng(), name)
-
-
-def _route_draws() -> None:
-    """Point every module-level draw a round makes at the running world's RNG."""
-    from camel.models import model_manager
-    from oasis.social_platform import platform, recsys
-
-    for module in (platform, recsys):
-        if not isinstance(module.random, _RunningWorldRandom):
-            module.random = _RunningWorldRandom()
-    model_manager.choice = lambda seq: _running_rng().choice(seq)
-
-
 def import_oasis() -> SimpleNamespace:
     """The OASIS names the world uses, imported from a temporary directory the first time."""
     if "oasis.environment.env" not in sys.modules:
@@ -105,7 +78,7 @@ def import_oasis() -> SimpleNamespace:
             import oasis  # noqa: F401
         finally:
             os.chdir(cwd)
-    _route_draws()  # oasis may have been imported elsewhere first
+    route_draws()  # oasis may have been imported elsewhere first
     from oasis import AgentGraph, LLMAction, Platform
     from oasis.environment.env import OasisEnv
     from oasis.social_platform.typing import ActionType
@@ -274,6 +247,7 @@ class World:
         self._own_draws(self.env, "step")
         await self.env.reset()
         platform.sandbox_clock.time_step = self.clock.round
+        self.rng.seed(self.seed)  # a started world draws from its seed, whatever reset drew
         return self
 
     def _own_draws(self, obj: Any, name: str) -> None:
@@ -281,11 +255,11 @@ class World:
         method = getattr(obj, name)
 
         async def owned(*args: Any, **kwargs: Any) -> Any:
-            token = _WORLD_RNG.set(self.rng)
+            token = WORLD_RNG.set(self.rng)
             try:
                 return await method(*args, **kwargs)
             finally:
-                _WORLD_RNG.reset(token)
+                WORLD_RNG.reset(token)
 
         setattr(obj, name, owned)
 

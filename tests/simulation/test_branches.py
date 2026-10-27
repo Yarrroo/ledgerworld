@@ -669,10 +669,11 @@ def test_a_late_fork_does_not_move_the_parents_random_stream(tmp_path):
     assert forked == unforked
 
 
-@pytest.mark.parametrize("order", ["aabb", "bbaa", "abba"])
+@pytest.mark.parametrize("order", ["aabb", "bbaa", "abba", "ab|ab"])
 def test_siblings_draw_alike_whatever_order_they_run_in(tmp_path, order):
     """Two siblings with one plan, forked from one checkpoint, draw the same recommendations
-    round by round however their rounds interleave; the process-global RNG is not drawn."""
+    round by round however their rounds interleave, one after another or at once ("ab|ab":
+    each round of both under one gather); the process-global RNG is not drawn."""
     async def go():
         parent, cp = await small_parent(tmp_path, scenario=FEED)
         siblings = {}
@@ -681,9 +682,10 @@ def test_siblings_draw_alike_whatever_order_they_run_in(tmp_path, order):
             siblings[b] = await fork(cp, b, model=idle_model(), workdir=tmp_path / b)
         process = random.getstate()
         seen: dict[str, list] = {"a": [], "b": []}
-        for b in order:
-            await siblings[b].world.run(1)
-            seen[b].append(drawn(siblings[b].world))
+        for step in order.split("|") if "|" in order else order:
+            await asyncio.gather(*(siblings[b].world.run(1) for b in step))
+            for b in step:
+                seen[b].append(drawn(siblings[b].world))
         untouched = random.getstate() == process
         for sibling in siblings.values():
             await sibling.world.close()
