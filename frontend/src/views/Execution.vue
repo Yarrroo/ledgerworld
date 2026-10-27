@@ -197,14 +197,12 @@ const { state, refresh } = useReading(async () => {
   const runId = asked || overview.demo.run_id
   const demo = !asked || asked === overview.demo.run_id
   const executionId = route.query.execution_id || (demo ? overview.demo.execution_id : null) || null
-  let decisions = null
   let decisionsError = ''
-  try {
-    decisions = runId ? await optional(`/decisions/${enc(runId)}`) : null
-  } catch (error) { // the receipts still read; only the review needs the decision
-    decisionsError = error.message
-  }
-  const execution = executionId ? await optional(`/executions/${enc(executionId)}`) : null
+  const [decisions, execution] = await Promise.all([
+    // the receipts still read when this fails; only the review needs the decision
+    runId ? optional(`/decisions/${enc(runId)}`).catch((error) => { decisionsError = error.message; return null }) : null,
+    executionId ? optional(`/executions/${enc(executionId)}`) : null
+  ])
   const head = execution ?? overview
   return {
     as_of: head.as_of, mode: head.mode, snapshot_id: head.snapshot_id, run_id: runId,
