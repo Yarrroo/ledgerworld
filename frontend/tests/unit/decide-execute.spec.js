@@ -125,6 +125,11 @@ function serve (answers) {
 }
 
 const posts = (calls, path) => calls.filter((c) => c.method === 'POST' && (!path || c.path === path))
+const gets = (calls, path) => calls.filter((x) => x.method === 'GET' && x.path === path)
+
+/** The poll's clock: timers only, so promises and Date stay real. */
+const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+const tick = async () => { vi.advanceTimersByTime(5000); await flushPromises() }
 
 async function open (component, path) {
   const router = createRouter({
@@ -569,9 +574,6 @@ describe('vet round 1', () => {
 })
 
 describe('vet round 2', () => {
-  const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
-  const gets = (calls, path) => calls.filter((x) => x.method === 'GET' && x.path === path)
-  const tick = async () => { vi.advanceTimersByTime(5000); await flushPromises() }
 
   it('a failed status read after an unanswered execution POST keeps reading', async () => {
     fakeTimers()
@@ -707,8 +709,10 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
     'an approval with no legs bound': approvalBody({ legs: [] }),
     'a leg with no kind': approvalBody({ legs: legs({ kind: undefined }) }),
     'a leg whose after is not a list': approvalBody({ legs: legs({ after: 'res-1' }) }),
+    'a leg whose after holds no leg index': approvalBody({ legs: legs({ after: [{}] }) }),
+    'a leg funded by something that is not a source': approvalBody({ legs: legs({ funded_by: {} }) }),
     'an approval with no readable expiry': approvalBody({ expires_at: 'soon' }),
-    'an expiry that is not ISO-8601': approvalBody({ expires_at: '1' }),
+    'an expiry that is not RFC 3339': approvalBody({ expires_at: '1' }),
     'no server time': { ...approvalBody(), as_of: undefined }
   }
   for (const [what, answer] of Object.entries(approvals)) {
@@ -748,13 +752,19 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
     })
   }
 
+  const paid = () => executionBody({ legs: [paidPayout()] })
+  const openIncident = { incident_id: 'inc-1', leg_id: paidPayout().leg_id, state: 'open', opened_at: '2026-11-05T10:05:00Z' }
   const reads = {
     'an unparseable body': UNREADABLE,
-    'a body with no legs': accepted()
+    'a body with no legs': accepted(),
+    'another execution': { ...paid(), execution_id: 'apr-9' },
+    'no provider mode': { ...paid(), mode: undefined },
+    'a leg with no state': executionBody({ legs: [{ ...paidPayout(), state: undefined }] }),
+    'an incident with no kind': { ...paid(), incidents: [openIncident] }
   }
   for (const [what, first] of Object.entries(reads)) {
     it(`a status read answered with ${what} is not a state: it says so and reads again`, async () => {
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+      fakeTimers()
       let answer = first
       const { w, calls } = await reviewReady({
         'POST /executions': accepted(),
@@ -764,23 +774,49 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
       await w.get('[data-test="execute"]').trigger('click')
       await flushPromises()
       expect(text(w, 'poll-error')).toContain('the answer could not be read')
-      answer = executionBody({ legs: [paidPayout()] })
-      vi.advanceTimersByTime(5000)
-      await flushPromises()
-      expect(calls.filter((x) => x.method === 'GET' && x.path === '/executions/apr-1')).toHaveLength(2)
+      expect(w.find('[data-test="leg-status"]').exists()).toBe(false)
+      answer = paid()
+      await tick()
+      expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
       expect(w.find('[data-test="poll-error"]').exists()).toBe(false)
       expect(text(w, 'leg-status')).toContain('PAID · reconciled as of')
     })
   }
 
-  it('an unreadable first read of a linked execution is an error, not "no record"', async () => {
+  it('"not recorded yet" and "could not be read" never stand together', async () => {
+    fakeTimers()
+    let answer // unlisted: 404
+    const { w } = await reviewReady({ 'POST /executions': accepted(), 'GET /executions/apr-1': () => answer })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'not-found')).toContain('does not mean it failed')
+    answer = UNREADABLE
+    await tick()
+    expect(text(w, 'poll-error')).toContain('the answer could not be read')
+    expect(w.find('[data-test="not-found"]').exists()).toBe(false)
+    answer = undefined
+    await tick()
+    expect(w.find('[data-test="not-found"]').exists()).toBe(true)
+    expect(w.find('[data-test="poll-error"]').exists()).toBe(false)
+  })
+
+  it('an unreadable linked execution is said so, not "no record", and the review still opens', async () => {
     serve({
       'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
       'GET /decisions/run-1': decisionsBody(),
       'GET /executions/apr-1': UNREADABLE
     })
     const w = await open(Execution, '/execution')
-    expect(text(w, 'error')).toContain('the answer could not be read')
+    expect(text(w, 'poll-error')).toContain('the answer could not be read')
     expect(w.find('[data-test="not-found"]').exists()).toBe(false)
+    expect(disabled(w, 'review-plan')).toBe(false)
+  })
+
+  it('an RFC 3339 time with a space separator is a readable expiry', async () => {
+    const { w } = await reviewReady({ 'POST /approvals': approvalBody({ expires_at: '2026-11-05 10:15:00+00:00' }) })
+    await approve(w)
+    expect(w.find('[data-test="blocked"]').exists()).toBe(false)
+    expect(disabled(w, 'execute')).toBe(false)
   })
 })

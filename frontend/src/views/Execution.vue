@@ -189,12 +189,25 @@ const enc = encodeURIComponent
 
 /** A 2xx whose body is missing or incomplete: answered, but what it says cannot be read. */
 const unreadable = () => new ApiError(null, 'unreadable', 'the answer could not be read')
+const isText = (x) => typeof x === 'string' && x !== ''
+const isTextOrNull = (x) => x == null || isText(x)
+// C6 times are RFC 3339 date-times; Date.parse alone also takes "1" or "Nov 5"
+const RFC3339 = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?([Zz]|[+-]\d{2}:\d{2})$/
+const isTime = (iso) => RFC3339.test(iso) && !Number.isNaN(Date.parse(iso))
 
-/** GET /executions/:id; an answer without its legs and incidents is unreadable, never a state. */
+/** A C6 execution leg and incident as the receipts and the incident view draw them. */
+const isExecutionLeg = (l) => isText(l?.leg_id) && isText(l.kind) && isText(l.state) &&
+  typeof l.reconciled === 'boolean' &&
+  (l.receipt == null || (isText(l.receipt.status) && Array.isArray(l.receipt.raw_keys)))
+const isIncident = (i) => isText(i?.leg_id) && isText(i.kind) && isText(i.state) && isTime(i.opened_at)
+
+/** GET /executions/:id; an answer about another execution, or an incomplete one, is unreadable. */
 async function readExecution (id) {
   const body = await request(`/executions/${enc(id)}`)
-  const readable = typeof body?.execution_id === 'string' && Array.isArray(body.legs) &&
-    Array.isArray(body.incidents)
+  const readable = body?.execution_id === id && isTime(body.as_of) && isText(body.mode) &&
+    isText(body.approval_id) && isText(body.snapshot_id) &&
+    Array.isArray(body.legs) && body.legs.every(isExecutionLeg) &&
+    Array.isArray(body.incidents) && body.incidents.every(isIncident)
   if (!readable) throw unreadable()
   return body
 }
@@ -216,15 +229,17 @@ const { state, refresh } = useReading(async () => {
   const demo = !asked || asked === overview.demo.run_id
   const executionId = route.query.execution_id || (demo ? overview.demo.execution_id : null) || null
   let decisionsError = ''
+  let executionError = ''
   const [decisions, execution] = await Promise.all([
     // the receipts still read when this fails; only the review needs the decision
     runId ? optional(request(`/decisions/${enc(runId)}`)).catch((error) => { decisionsError = error.message; return null }) : null,
-    executionId ? optional(readExecution(executionId)) : null
+    // and the review still opens when the receipts cannot be read
+    executionId ? optional(readExecution(executionId)).catch((error) => { executionError = error.message; return null }) : null
   ])
   const head = execution ?? overview
   return {
     as_of: head.as_of, mode: head.mode, snapshot_id: head.snapshot_id, run_id: runId,
-    execution_id: executionId, decisions, decisionsError, execution
+    execution_id: executionId, decisions, decisionsError, execution, executionError
   }
 })
 
@@ -306,15 +321,11 @@ const executeWhy = computed(() => {
  */
 const unanswered = (error) => !(error?.status >= 400 && error.status < 500)
 
-const isText = (x) => typeof x === 'string' && x !== ''
-// C6 timestamps are ISO-8601 with a zone; Date.parse alone also takes "1" or "Nov 5"
-const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
-const isTime = (iso) => ISO.test(iso) && !Number.isNaN(Date.parse(iso))
-
 /** A C3 leg as the bound-terms table shows it. */
 const isLeg = (l) => Number.isSafeInteger(l?.index) && isText(l.kind) && isText(l.source) &&
   isText(l.counterparty) && Number.isSafeInteger(l.amount?.minor) && isText(l.amount.currency) &&
-  (l.after == null || Array.isArray(l.after))
+  isTextOrNull(l.funded_by) && isTextOrNull(l.facility_id) &&
+  (l.after == null || (Array.isArray(l.after) && l.after.every(Number.isSafeInteger))) // leg indices
 
 /** The approval a 201 bound, with every term the review shows; anything less is unreadable. */
 function boundApproval (answer) {
@@ -444,8 +455,8 @@ async function poll () {
     pollError.value = ''
   } catch (error) {
     if (!guard.accept(ticket, id)) return
-    if (error.status === 404) notFound.value = true
-    else pollError.value = error.message
+    notFound.value = error.status === 404 // the two notices never stand together
+    pollError.value = notFound.value ? '' : error.message
   }
   schedule()
 }
@@ -469,8 +480,8 @@ watch(() => state.body, (body) => {
   activeId.value = body.execution_id
   guard.select(body.execution_id)
   live.value = null
-  notFound.value = Boolean(body.execution_id && !body.execution)
-  pollError.value = ''
+  notFound.value = Boolean(body.execution_id && !body.execution && !body.executionError)
+  pollError.value = body.executionError
   schedule()
   if (route.query.review === '1' && !autoReviewed && !reviewWhy.value) {
     autoReviewed = true
