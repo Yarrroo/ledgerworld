@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
 from datetime import timedelta
 from pathlib import Path
 
@@ -170,16 +169,15 @@ def test_a_family_is_parameterised_and_refuses_what_it_cannot_run():
         load_family("fx-gap", seed="106")
 
 
-def test_a_silent_borrower_never_acts_in_its_family():
+def test_a_silent_borrower_never_acts_in_its_family(tmp_path):
     family = load_family("borrower-silence")
     assert not [e for e in family.script if e.get("actor_id") == "borrower-b"]
     with pytest.raises(ValueError, match="acts after it fell silent"):
         load_family("borrower-silence", params={"borrower": "borrower-c"},
-                    directory=_with_script(family, "borrower-c"))
+                    directory=_with_script(family, "borrower-c", tmp_path))
 
 
-def _with_script(family, talker: str) -> Path:
-    directory = Path(tempfile.mkdtemp(prefix="families-"))
+def _with_script(family, talker: str, directory: Path) -> Path:
     raw = json.loads((ROOT / "scenarios/families/borrower-silence.json").read_text())
     raw["script"].append({"actor_id": talker, "round": family.params["from_round"] + 1,
                           "tool_calls": [{"name": "pay", "args": {
