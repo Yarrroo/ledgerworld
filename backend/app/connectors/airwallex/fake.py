@@ -71,7 +71,12 @@ COLLECTION_PATHS = {
     "charges": "/api/v1/charges",
 }
 MONEY_CREATES = {f"{path}/create": collection for collection, path in COLLECTION_PATHS.items()}
-QUOTE_VALIDITIES = frozenset({"MIN_1", "MIN_15", "MIN_30", "HR_1", "HR_4", "HR_8", "HR_24"})
+# How long a quote lasts, in seconds, by the `validity` it was asked for.
+QUOTE_VALIDITIES = {"MIN_1": 60, "MIN_15": 900, "MIN_30": 1800, "HR_1": 3600, "HR_4": 14400,
+                    "HR_8": 28800, "HR_24": 86400}
+# Before this version `/api/v1/transfers` is the connected-account transfer: a payout body is
+# refused for its missing `currency`, and the list answers `incorrect_version`.
+TRANSFERS_SINCE = "2024-09-27"
 LOGIN = "/api/v1/authentication/login"
 DECIMAL_STRING = re.compile(r"[0-9]+(\.[0-9]+)?")
 
@@ -265,6 +270,10 @@ class FakeTransport:
         if route == LOGIN and method == "POST":
             return self._login(headers)
         self._authenticate(headers)
+        if route.startswith("/api/v1/transfers") and headers["x-api-version"] < TRANSFERS_SINCE:
+            if route == "/api/v1/transfers/create":
+                raise _Refuse(400, "field_required", "currency is required", "currency")
+            raise _Refuse(400, "incorrect_version", "not served on this API version")
         query = {k: v[0] for k, v in parse_qs(urlsplit(path).query).items()}
         account = self._account(headers)
         if method == "GET":
@@ -346,7 +355,8 @@ class FakeTransport:
         quote = {"quote_id": f"quote-{self._serial}", "client_rate": rate,
                  "sell_currency": sell, "buy_currency": buy,
                  "sell_amount": _string(sell_minor, sell), "buy_amount": _string(buy_minor, buy),
-                 "validity": body["validity"], "valid_to": _iso(self.clock() + 60)}
+                 "validity": body["validity"],
+                 "valid_to": _iso(self.clock() + QUOTE_VALIDITIES[body["validity"]])}
         self.quotes[quote["quote_id"]] = quote
         return dict(quote)
 

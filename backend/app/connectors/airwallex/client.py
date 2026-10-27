@@ -381,7 +381,7 @@ class AirwallexClient:
             if refused.code == "auth_fail":
                 raise  # bad credentials fail the start; they are not an unclear probe
         try:
-            if active_account(self._request("GET", CONNECTED_PROBE_PATH)) is not None:
+            if active_account(self._items(self._request("GET", CONNECTED_PROBE_PATH))):
                 return "A"
             answer = "200 with no active connected account"
         except (ProviderError, OutcomeUnknown) as unclear:
@@ -430,11 +430,11 @@ class AirwallexClient:
         reason: str = TRANSFER_REASON,
     ) -> ProviderObject:
         """A payout; Mode A sends it on behalf of the connected account. The provider requires a
-        reference, so one not given is the `request_id`."""
+        reference, so one not given (or empty) is the `request_id`."""
         body = {"request_id": request_id, "beneficiary_id": beneficiary_id,
                 "source_currency": amount.currency, "transfer_currency": amount.currency,
                 "transfer_amount": to_provider_decimal(amount), "transfer_method": transfer_method,
-                "reason": reason, "reference": request_id if reference is None else reference}
+                "reason": reason, "reference": reference or request_id}
         headers = {"x-on-behalf-of": on_behalf_of} if on_behalf_of else None
         return self._create("transfer", "/api/v1/transfers/create", body, request_id, headers)
 
@@ -508,7 +508,8 @@ class AirwallexClient:
 
 
 def active_account(answer: Any) -> str | None:
-    """The id of the first `ACTIVE` account in a connected-accounts list, or None."""
+    """The id of the first `ACTIVE` account in a connected-accounts list (its items, or the
+    answer holding them), or None."""
     items = answer.get("items") if isinstance(answer, dict) else answer
     for item in items if isinstance(items, list) else []:
         if isinstance(item, dict) and item.get("status") == "ACTIVE":

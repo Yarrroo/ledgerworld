@@ -79,7 +79,7 @@ def observed(stressed: bool = False) -> dict:
 
 def fake_gateway(services: Services) -> Gateway:
     fake = FakeTransport(clock=FakeClock())
-    client = AirwallexClient(fake, fake.clock, api_version="2024-06-30", sleep=lambda _: None)
+    client = AirwallexClient(fake, fake.clock, api_version="2024-09-27", sleep=lambda _: None)
     return Gateway(services.store, client, mode="fake", leg_mode="B",
                    beneficiaries=set(services.beneficiaries.values()), clock=services.now,
                    global_account_id="ga-usd-1")

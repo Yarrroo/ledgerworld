@@ -25,7 +25,9 @@ from app.connectors.airwallex.client import (
     TRANSFER_REASON,
     AirwallexClient,
 )
-from app.connectors.airwallex.errors import ConfigError
+from app.connectors.airwallex.errors import ConfigError, ProviderError
+from app.connectors.airwallex.fake import FakeClock, FakeTransport
+from app.connectors.airwallex.fake import _iso as fake_iso
 from app.connectors.airwallex.live import LiveTransport
 from app.connectors.airwallex.transport import (
     DEFAULT_API_VERSION,
@@ -43,7 +45,7 @@ VALIDITIES = {"MIN_1", "MIN_15", "MIN_30", "HR_1", "HR_4", "HR_8", "HR_24"}
 class Sandbox:
     """Answers as the sandbox did on the requests the contract run sent."""
 
-    def __init__(self, accounts: list[dict] | None = None) -> None:
+    def __init__(self, accounts: list[dict] | dict | None = None) -> None:
         self.sent: list[httpx.Request] = []
         self.accounts = [{"id": "acct-1", "status": "ACTIVE"}] if accounts is None else accounts
 
@@ -74,7 +76,8 @@ class Sandbox:
         if path in ("/api/v1/transfers", "/api/v1/fx/conversions"):
             return httpx.Response(200, json={"items": []})
         if path == CONNECTED_PROBE_PATH:
-            return httpx.Response(200, json={"items": self.accounts})
+            listed = self.accounts if isinstance(self.accounts, dict) else {"items": self.accounts}
+            return httpx.Response(200, json=listed)
         return httpx.Response(404, json={"code": "resource_not_found", "message": path})
 
     def bodies(self, path: str) -> list[dict]:
@@ -155,3 +158,47 @@ def test_only_an_active_connected_account_selects_mode_a(accounts, mode):
 def test_forcing_mode_a_without_an_active_account_fails_at_start():
     with pytest.raises(ConfigError, match="no active connected account"):
         live(Sandbox([{"id": "acct-1"}])).probe_connected("on")
+
+
+def test_an_empty_reference_falls_back_to_the_request_id():
+    sandbox = Sandbox()
+    live(sandbox).create_transfer("canon-pay-2", beneficiary_id="ben-1", reference="",
+                                  amount=Money(minor=10_000, currency="USD"))
+    (body,) = sandbox.bodies("/api/v1/transfers/create")
+    assert body["reference"] == "canon-pay-2"
+
+
+def test_an_accounts_answer_with_no_items_is_unclear_not_empty():
+    with pytest.raises(ConfigError) as refused:
+        live(Sandbox({"note": "no list"})).probe_connected("on")
+    assert "no active connected account" not in str(refused.value)
+
+
+# ------------------------------------------------------------------------ the fake agrees
+
+
+def fake_client(api_version: str = DEFAULT_API_VERSION) -> tuple[FakeTransport, AirwallexClient]:
+    clock = FakeClock()
+    transport = FakeTransport(clock=clock)
+    return transport, AirwallexClient(transport, clock, api_version=api_version,
+                                      sleep=lambda _: None)
+
+
+def test_the_fake_refuses_payouts_and_their_lists_before_the_transfers_version():
+    _, client = fake_client("2024-06-30")
+    with pytest.raises(ProviderError) as refused:
+        client.create_transfer("leg-old-1", beneficiary_id="ben-payroll-1",
+                               amount=Money(minor=100, currency="USD"))
+    assert (refused.value.code, refused.value.source) == ("field_required", "currency")
+    with pytest.raises(ProviderError) as refused:
+        client.find_transfer("leg-old-1")
+    assert refused.value.code == "incorrect_version"
+    assert client.balances()  # the rest of the API answers on the older version
+
+
+def test_the_fake_quote_lasts_as_long_as_its_validity():
+    transport, client = fake_client()
+    quote = client.quote(sell_currency="USD", buy_currency="EUR",
+                         amount=Money(minor=100, currency="EUR"))
+    assert quote["validity"] == QUOTE_VALIDITY
+    assert quote["valid_to"] == fake_iso(transport.clock() + 15 * 60)

@@ -67,7 +67,7 @@ class Sleeps(list):
 def make(scenario: str = "happy", *, times: int | None = 1, connected: bool = False):
     clock = FakeClock()
     transport = FakeTransport(scenario, clock=clock, connected=connected, times=times)
-    client = AirwallexClient(transport, clock, api_version="2024-06-30", sleep=Sleeps())
+    client = AirwallexClient(transport, clock, api_version="2024-09-27", sleep=Sleeps())
     return transport, client
 
 
@@ -142,7 +142,7 @@ def test_headers_on_every_call_and_login_only():
     assert len(calls) == 2
     for call in calls:
         assert call.headers["authorization"].startswith("Bearer ")
-        assert call.headers["x-api-version"] == "2024-06-30"
+        assert call.headers["x-api-version"] == "2024-09-27"
         assert call.headers["content-type"] == "application/json"
         assert not {"x-client-id", "x-api-key"} & set(call.headers)
 

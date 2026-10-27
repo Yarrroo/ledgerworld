@@ -144,7 +144,7 @@ class World:
 
     def boot(self, hooks: bool = True) -> Gateway:
         """A gateway process on the store; `hooks` wires this world's faults into it."""
-        client = AirwallexClient(self.wire, self.clock, api_version="2024-06-30",
+        client = AirwallexClient(self.wire, self.clock, api_version="2024-09-27",
                                  sleep=lambda _: None)
         return Gateway(self.store, client, mode=self.mode, leg_mode=self.leg_mode,
                        beneficiaries=BINDING["beneficiary_allowlist"], clock=lambda: self.now,

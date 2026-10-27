@@ -96,7 +96,7 @@ def collection(kind: str, leg_mode: str) -> tuple[str, str]:
     if kind == "repayment":
         return "charge", "/api/v1/charges"
     if kind == "fx":
-        return "conversion", "/api/v1/fx/conversions"
+        return "conversion", aw.CONVERSIONS_PATH
     return "transfer", "/api/v1/transfers"
 
 
