@@ -59,7 +59,10 @@
    its success text and the incident view lists it; `unknown` shows "Outcome unknown; checking
    provider status. Do not send again." There is no reverse or resend control.
 7. **Polling**: every 5 s while a leg is pending, submitted or unknown, through `latestOnly`; it
-   updates text in place and never moves focus.
+   updates text in place and never moves focus. The screen's own read (initial and Refresh) draws
+   its generation from the same guard, so an older poll never overwrites it and it never
+   overwrites a newer poll. A 404 is an answer; any other failure is not, so it discards no
+   earlier-issued read, and its error clears only on an answer issued after it.
 
 ## Contract gaps (recorded, not hard-coded)
 
