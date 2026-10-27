@@ -14,13 +14,14 @@ string or a bool in ``amount_minor`` is a validation error, never rounded.
 from __future__ import annotations
 
 import json
+import re
 import threading
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Annotated, Any
 
-from app.finance.schemas import MINOR_MAX, ActionIntent, Amount, Bps, Currency, Text
+from app.finance.schemas import MINOR_MAX, ActionIntent, Amount, Bps, Currency
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -67,7 +68,8 @@ Ref = Annotated[StrictStr, StringConstraints(min_length=1, max_length=128)]
 class _Args(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    reason: Text | None = Field(None, description="why, in a sentence")
+    reason: Annotated[StrictStr, StringConstraints(max_length=1000)] | None = Field(
+        None, description="why, in a sentence")
 
 
 class _MoneyArgs(_Args):
@@ -221,11 +223,19 @@ def intent_params(args: _Args) -> dict[str, Any]:
 # ---------------------------------------------------------------------------- the intent queue
 
 
+def call_number(intent: ActionIntent) -> tuple[int, int, str]:
+    """An intent's place among its actor's: (round, call) from ``i-r<round>-<actor>-<n>``.
+
+    Read as numbers, so ``i-r4-x-2`` comes before ``i-r4-x-10``; an id of another shape sorts
+    after every standard one, by its text.
+    """
+    found = re.fullmatch(rf"i-r(\d+)-{re.escape(intent.actor_id)}-(\d+)", intent.intent_id)
+    return (int(found[1]), int(found[2]), "") if found else (MINOR_MAX, MINOR_MAX,
+                                                             intent.intent_id)
+
+
 def clearing_key(intent: ActionIntent) -> tuple:
-    # An actor's ids differ only in their call number, so the shorter id is the earlier call:
-    # "i-r4-x-2" clears before "i-r4-x-10".
-    return (intent.priority_class, intent.sim_minute, intent.actor_id,
-            len(intent.intent_id), intent.intent_id)
+    return (intent.priority_class, intent.sim_minute, intent.actor_id, call_number(intent))
 
 
 class IntentQueue:
@@ -253,8 +263,9 @@ class IntentQueue:
                 raise ValueError(f"intent {intent.intent_id} has no priority class or minute")
         ids = [i.intent_id for i in intents]
         with self._lock:
-            if len(set(ids)) != len(ids) or any(i in self._items for i in ids):
-                raise ValueError(f"an intent of {ids} is queued twice")
+            twice = sorted({i for i in ids if ids.count(i) > 1 or i in self._items})
+            if twice:
+                raise ValueError(f"intents {twice} are queued twice")
             self._items.update(zip(ids, intents, strict=True))
 
     def drain(self) -> list[ActionIntent]:
@@ -280,6 +291,9 @@ class Turn:
     evidence_ids: tuple[str, ...]
 
 
+MAX_ACTOR_ID = 100
+
+
 @dataclass
 class FinanceActor:
     """An actor's mandate in one branch, and the turn its tool calls currently belong to."""
@@ -291,6 +305,13 @@ class FinanceActor:
     turn: Turn | None = None
     _n: int = field(default=0, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def __post_init__(self) -> None:
+        # Room for "i-r<round>-" and "-<n>" inside a C1 id of 128 characters.
+        if not 1 <= len(self.actor_id) <= MAX_ACTOR_ID:
+            raise ValueError(f"actor id {self.actor_id!r} is not 1 to {MAX_ACTOR_ID} characters")
+        if len(set(self.tools)) != len(self.tools):
+            raise ValueError(f"{self.actor_id} names a tool twice: {list(self.tools)}")
 
     @classmethod
     def from_spec(cls, spec: Mapping[str, Any], branch_id: str) -> FinanceActor:
@@ -365,7 +386,8 @@ def make_finance_tools(queue: IntentQueue, actor: FinanceActor) -> dict[str, Fin
     error back to the model as text anyway: oasis-seam.md S7); the guardrail validates a response
     with ``parse_tool_call`` before calling any tool, so its alert never depends on that string.
     A tool takes ``**kwargs`` (``from`` is a Python keyword), so camel cannot read its schema
-    off the signature: each carries ``openai_tool_schema`` for ``FunctionTool``. The closures
+    off the signature and ignores attributes: whoever hands a tool to camel wraps it as
+    ``FunctionTool(tool, openai_tool_schema=tool.openai_tool_schema)``. The closures
     hold the queue, the actor and the action, and nothing else.
     """
     if queue.branch_id != actor.branch_id:

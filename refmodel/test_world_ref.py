@@ -107,11 +107,11 @@ class Clearing(unittest.TestCase):
     def test_priority_classes_match_actors(self):
         self.assertEqual({a["actor_id"]: a["priority_class"] for a in ACTORS}, wr.PRIORITY)
 
-    def test_intent_id_tiebreak_is_lexicographic(self):
-        """FINDINGS W4: string sort puts tool call 10 before tool call 2 of the same response."""
+    def test_intent_id_tiebreak_is_call_order(self):
+        """FINDINGS W4, resolved in HANDOFF: tool call 2 clears before tool call 10."""
         a = {"priority_class": 1, "sim_minute": 0, "actor_id": "lender", "intent_id": "i-r5-lender-2"}
         b = dict(a, intent_id="i-r5-lender-10")
-        self.assertEqual([i["intent_id"] for i in wr.drain([a, b])], ["i-r5-lender-10", "i-r5-lender-2"])
+        self.assertEqual([i["intent_id"] for i in wr.drain([b, a])], ["i-r5-lender-2", "i-r5-lender-10"])
 
 
 class CoupledChain(unittest.TestCase):

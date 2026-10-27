@@ -130,8 +130,8 @@ def _turn(
     sim_minute: int | None,
     social_prompt: str | None,
 ) -> Generator[tuple[Messages, Tools], Sequence[RawCall], TurnResult]:
-    round = int(observation.body["round"])
-    minute = int(observation.body["t_hours"]) * 60 if sim_minute is None else sim_minute
+    round = observation.round
+    minute = observation.t_hours * 60 if sim_minute is None else sim_minute
     actor.begin_turn(Turn(round, minute, observation.obs_hash, observation.evidence_ids))
     tools = [tool_schema(a) for a in actor.tools]
     prompt = observation.to_prompt() + (f"\n\n{social_prompt}" if social_prompt else "")

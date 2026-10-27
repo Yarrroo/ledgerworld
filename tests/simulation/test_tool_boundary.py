@@ -223,8 +223,9 @@ def test_observation_scope_matches_the_fixture():
     assert sorted(observation.evidence_ids) == sorted(expect["included"])
     assert not set(observation.evidence_ids) & set(expect["excluded"])
     assert [i["id"] for i in observation.body["items"]] == list(observation.evidence_ids)
-    assert (observation.body["actor_id"], observation.body["round"],
-            observation.body["t_hours"]) == ("borrower-c", 4, 16)
+    assert (observation.body["actor_id"], observation.body["round"], observation.body["t"]) \
+        == ("borrower-c", 4, "2026-01-01T16:00:00Z")
+    assert (observation.round, observation.t_hours) == (4, 16)
     for item_id in expect["excluded"]:
         assert item_id not in canonical_json(observation.body)
 
@@ -240,6 +241,28 @@ def test_obs_hash_is_stable_and_excluded_items_change_nothing():
     # Anything the actor may see does change the hash.
     extra = {"id": "p-r4-1", "kind": "public_post", "owner": "feed", "visible_from_h": 16}
     assert scope_observation(SCOPE["world_items"] + [extra]).obs_hash != observation.obs_hash
+
+
+def test_obs_hash_matches_the_reference_model():
+    """The stdlib oracle (refmodel/tools_ref.py) pins this hash for the fixture."""
+    pinned = "c8430aaeae01473fc5aacc9915b72fa40af720189ebcb8db5dd3236b4bcbb1f0"
+    assert scope_observation().obs_hash == pinned
+    assert scope_observation().body["items"][0]["visible_from"] == "2026-01-01T00:00:00Z"
+
+
+def test_a_due_scheduled_event_is_seen_by_whom_it_concerns():
+    events = [
+        {"id": "sched:rumour@8h", "kind": "scheduled_event", "visible_from_h": 8},
+        {"id": "sched:to-c@8h", "kind": "scheduled_event", "to": "borrower-c",
+         "visible_from_h": 8},
+        {"id": "sched:to-treasury@8h", "kind": "scheduled_event", "to": "treasury",
+         "visible_from_h": 8},
+        {"id": "post:to-treasury", "kind": "public_post", "to": "treasury", "visible_from_h": 8},
+    ]
+    assert scope_observation(events).evidence_ids == ("sched:rumour@8h", "sched:to-c@8h")
+    treasury = build_observation("treasury", ACTORS["treasury"]["sees"], 4, 16, events)
+    # An addressed post enters through no scope: a post is public or it is a message.
+    assert treasury.evidence_ids == ("sched:rumour@8h", "sched:to-treasury@8h")
 
 
 def test_ownership_is_read_from_the_item_not_its_label():
@@ -433,15 +456,58 @@ def test_a_finished_turn_refuses_late_tool_calls():
     assert len(queue) == 1
 
 
-def test_a_response_that_cannot_be_built_queues_nothing():
-    """The tenth intent id outgrows the C1 id: none of the response is queued."""
-    actor_id = "a" * 121  # "i-r4-<id>-9" is 128 characters, "-10" is 129
-    actor = FinanceActor(actor_id, "shock", (FinancialActionType.NO_ACTION,), 1)
+def test_a_response_that_cannot_be_queued_queues_nothing():
+    """The second of three intents collides in the queue: none of the response is queued."""
+    actor = FinanceActor.from_spec(ACTORS["treasury"], "shock")
     queue = IntentQueue("shock")
-    observation = build_observation(actor_id, [], 4, 16, [])
-    with pytest.raises(ValueError):
-        run_turn(lambda m, t: [RawCall("no_action", "{}")] * 10, queue, actor, observation)
-    assert len(queue) == 0
+    queue.put(ActionIntent(intent_id="i-r4-treasury-2", branch_id="shock", round=4,
+                           actor_id="treasury", type="no_action", params={}, evidence_ids=[],
+                           obs_hash=HASH, priority_class=1, sim_minute=960))
+    observation = build_observation("treasury", ACTORS["treasury"]["sees"], 4, 16, [])
+    with pytest.raises(ValueError, match=r"\['i-r4-treasury-2'\] are queued twice"):
+        run_turn(lambda m, t: [RawCall("no_action", "{}")] * 3, queue, actor, observation)
+    assert [i.intent_id for i in queue.drain()] == ["i-r4-treasury-2"]
+
+
+def test_an_actor_id_leaves_room_for_the_intent_id():
+    with pytest.raises(ValueError, match="actor id"):
+        FinanceActor("a" * 101, "shock", (FinancialActionType.NO_ACTION,), 1)
+
+
+def test_a_mandate_naming_a_tool_twice_is_refused():
+    spec = {**ACTORS["treasury"], "tools": ["pay", "pay", "no_action"]}
+    with pytest.raises(ValueError, match="twice"):
+        FinanceActor.from_spec(spec, "shock")
+
+
+def test_a_reason_is_a_string_not_bytes():
+    refused = parse_tool_call("no_action", {"reason": b"abc"}, tuple(FinancialActionType))
+    assert isinstance(refused, ToolCallError)
+
+
+def test_an_id_of_another_shape_clears_after_the_standard_ones():
+    queue = IntentQueue("shock")
+    for intent_id in ["fb", "i-r4-x-10", "i-r4-x-2"]:
+        queue.put(ActionIntent(intent_id=intent_id, branch_id="shock", round=4, actor_id="x",
+                               type="no_action", params={}, evidence_ids=[], obs_hash=HASH,
+                               priority_class=1, sim_minute=960))
+    assert [i.intent_id for i in queue.drain()] == ["i-r4-x-2", "i-r4-x-10", "fb"]
+
+
+def test_social_tools_are_the_pinned_oasis_action_types():
+    """SOCIAL_TOOLS is a copy (oasis does not import here): read the enum from its source."""
+    import ast
+    import importlib.util
+
+    from oasis_finance.actions import SOCIAL_TOOLS
+
+    spec = importlib.util.find_spec("oasis")
+    source = Path(spec.origin).parent / "social_platform" / "typing.py"
+    enum = next(n for n in ast.parse(source.read_text()).body
+                if isinstance(n, ast.ClassDef) and n.name == "ActionType")
+    values = {n.value.value for n in enum.body
+              if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)}
+    assert values == SOCIAL_TOOLS
 
 
 @pytest.mark.parametrize("bad_id", ["", "x" * 129, 7], ids=["empty", "long", "int"])

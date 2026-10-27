@@ -2,14 +2,18 @@
 
 An actor sees its own accounts and contracts, messages addressed to it, public posts and public
 prices, and its own memory, each only if its scope (``actors.json`` ``sees``) names that class
-and the item is visible at or before the current time (system brief §7.1). A scheduled event is
-never seen: the scenario delivers it as a post, a message or a balance when it happens. An item
-of an unknown kind is never seen. Ownership is read from ``owner`` / ``parties`` / ``to``, never
-from a kind label, so an item labelled ``own_account`` but owned by another actor stays hidden.
+and the item is visible at or before the current time (system brief §7.1). A due scheduled
+event addressed to an actor (``to``) is private to it, like a message; an unaddressed one is
+public, like a post; an addressed item never enters through a public scope. An item of an unknown
+kind is never seen. Ownership is read from ``owner`` / ``parties`` / ``to``, never from a kind
+label, so an item labelled ``own_account`` but owned by another actor stays hidden.
 
 ``obs_hash`` is the sha256 of the observation's canonical JSON: sorted keys, no whitespace,
-money as integer minor units, times as ISO-8601 UTC. A float anywhere is refused: give money in
-minor units and a price or rate as a decimal string.
+UTF-8, money as integer minor units, and times as ISO-8601 UTC from the world's epoch: the
+observation's ``t`` and each item's time points (``visible_from_h`` becomes ``visible_from``).
+A float anywhere is refused: give money in minor units and a price or rate as a decimal string.
+This is the encoding of the reference model (``refmodel/tools_ref.py``), whose pinned hash for
+``observation-scope.json`` the tests reproduce.
 """
 
 from __future__ import annotations
@@ -18,15 +22,19 @@ import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+
+# The simulated clock counts hours; the world's start time turns them into ISO-8601 times.
+DEFAULT_EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
+TIME_POINTS = frozenset({"visible_from_h", "due_h", "expected_h", "to_h", "until_h"})
 
 # scope class -> the item kinds it admits, and whether the item must be the actor's own.
 SCOPES: dict[str, tuple[frozenset[str], str | None]] = {
     "own_accounts": (frozenset({"account", "own_account"}), "owner"),
     "own_contracts": (frozenset({"contract", "own_contract"}), "party"),
-    "messages_to_me": (frozenset({"message"}), "to"),
-    "public_posts": (frozenset({"public_post"}), None),
+    "messages_to_me": (frozenset({"message", "scheduled_event"}), "to"),
+    "public_posts": (frozenset({"public_post", "scheduled_event"}), None),
     "public_prices": (frozenset({"public_price"}), None),
     "memory": (frozenset({"memory"}), "owner"),
 }
@@ -49,9 +57,12 @@ def _canonical(value: Any, path: str = "$") -> Any:
     raise ValueError(f"{type(value).__name__} at {path} is not JSON")
 
 
+def _dumps(canonical: Any) -> str:
+    return json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
 def canonical_json(value: Any) -> str:
-    return json.dumps(_canonical(value), sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=False)
+    return _dumps(_canonical(value))
 
 
 def _sha256(text: str) -> str:
@@ -75,6 +86,8 @@ def visible(item: Mapping[str, Any], actor_id: str, sees: Iterable[str], t_hours
         if kind not in kinds:
             continue
         if mine is None:
+            if "to" in item:  # addressed: only messages_to_me admits it
+                continue
             return True
         if mine == "party":
             parties = item.get("parties", ())
@@ -92,11 +105,23 @@ class Observation:
     text: str  # the canonical JSON that obs_hash hashes
     obs_hash: str
     evidence_ids: tuple[str, ...]
+    round: int
+    t_hours: int
 
     def to_prompt(self) -> str:
         """The financial block, placed before the social feed in the actor's prompt."""
         return ("Your financial observation (only what you may see now; money in integer "
                 f"minor units):\n{self.text}")
+
+
+def iso_utc(t_hours: int, epoch: datetime = DEFAULT_EPOCH) -> str:
+    return _canonical(epoch + timedelta(hours=t_hours))
+
+
+def _observed(item: Mapping[str, Any], epoch: datetime) -> dict[str, Any]:
+    """The item as it enters the hash input: its time points become ISO-8601 UTC times."""
+    return {(k[:-2] if k in TIME_POINTS else k): (iso_utc(v, epoch) if k in TIME_POINTS else v)
+            for k, v in item.items()}
 
 
 def build_observation(
@@ -105,6 +130,7 @@ def build_observation(
     round: int,
     t_hours: int,
     items: Iterable[Mapping[str, Any]],
+    epoch: datetime = DEFAULT_EPOCH,
 ) -> Observation:
     """The scope-filtered observation of ``actor_id`` at ``t_hours`` from the world's items.
 
@@ -124,6 +150,7 @@ def build_observation(
     ids = [i["id"] for i in shown]
     if len(set(ids)) != len(ids):
         raise ValueError(f"item ids repeat in {actor_id}'s observation")
-    body = _canonical({"actor_id": actor_id, "round": round, "t_hours": t_hours, "items": shown})
-    text = canonical_json(body)
-    return Observation(body, text, _sha256(text), tuple(ids))
+    body = _canonical({"actor_id": actor_id, "round": round, "t": iso_utc(t_hours, epoch),
+                       "items": [_observed(i, epoch) for i in shown]})
+    text = _dumps(body)
+    return Observation(body, text, _sha256(text), tuple(ids), round, t_hours)
