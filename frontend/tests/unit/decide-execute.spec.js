@@ -1230,6 +1230,18 @@ describe('a POST answered after a query navigation stays with its own run', () =
     expect(disabled(w, 'review-plan')).toBe(true)
   })
 
+  it('another run is not reviewed while this view\'s approval POST from the last screen is unanswered', async () => {
+    const { w, hold } = await heldOn('POST /approvals')
+    await w.get('[data-test="confirm"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    expect(text(w, 'review-why')).toBe('A request sent from the last screen is not answered yet')
+    expect(disabled(w, 'review-plan')).toBe(true)
+    hold.release(approvalBody())
+    await flushPromises()
+    expect(disabled(w, 'review-plan')).toBe(false)
+  })
+
   it('another run is not reviewed while this view\'s POST from the last screen is unanswered', async () => {
     const { w, hold } = await heldOn('POST /executions')
     await approve(w)

@@ -500,7 +500,7 @@ async function executePlan () {
       if (!disposed) flow.message = `Execution ${id} for run ${runId} was accepted after this screen moved on.`
     }
   } catch (error) {
-    if (!unanswered(error)) { // refused: shown in the review it was asked in, which stays open
+    if (!unanswered(error)) { // refused: nothing was sent; said where it was asked, or by run once moved
       if (disposed) return
       if (moved(from)) flow.message = `Run ${runId}: ${refusal(error)}`
       else flow.invalid = refusal(error)
