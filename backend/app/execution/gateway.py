@@ -10,7 +10,7 @@ design/modules/execution/HANDOFF.md:
   wallet. Any refusal refuses the whole approval and writes nothing.
 - An accepted approval is marked used, its legs are queued and their ledger effects (a committed
   reservation, a pending flow) are written in one transaction; then the outbox drives the legs.
-- The outbox and the ledger share one SQLite connection and one transaction, so a leg settles
+- The outbox and the ledger share one store connection and one transaction, so a leg settles
   and its journal posts together (`Outbox(transaction=...)`).
 - `ConnectorProvider` adapts the Airwallex client to the outbox's `Provider`: a duplicate id or a
   409 is adopted by lookup, a timeout is unknown and looked up before any resend under the same
@@ -57,7 +57,7 @@ from app.finance.models import (
 from app.finance.schemas import EXPONENT, ApprovalLeg, BoundApproval, Mode, Money
 from app.finance.spendability import AccountView, spendability, state_of
 from app.finance.store import LedgerStore, _naive
-from sqlalchemy import Connection, select, update
+from sqlalchemy import Connection, select, text, update
 
 # Beside the design's `approvals`: the bound terms, to compare a presented approval against and
 # to give a restarted gateway each leg's facility and target currency.
@@ -258,6 +258,47 @@ class _Claims:
     holding: set[str] = field(default_factory=set)  # reservations a leg already spends
 
 
+class _Rows:
+    """Materialize a result before its pooled connection is returned."""
+
+    def __init__(self, result: Any) -> None:
+        self.rowcount = result.rowcount
+        names = result.keys() if result.returns_rows else ()
+        self.description = [(name,) for name in names] if result.returns_rows else None
+        self._rows = iter([tuple(row) for row in result] if result.returns_rows else [])
+        result.close()
+
+    def __iter__(self):
+        return self._rows
+
+    def fetchone(self):
+        return next(self._rows, None)
+
+    def fetchall(self):
+        return list(self._rows)
+
+
+class _StoreConnection:
+    """The execution SQL joins the same SQLAlchemy transaction as ledger writes.
+
+    The private queries use qmark binds; SQLAlchemy renders the driver's parameter style.
+    No raw driver connection survives a pool checkout, and reads leave no idle transaction.
+    """
+
+    def __init__(self, gateway: Gateway) -> None:
+        self.gateway = gateway
+
+    def execute(self, sql: str, args: tuple = ()) -> _Rows:
+        # Escape literal colons (such as ':out') before adding SQLAlchemy's named binds.
+        parts = sql.replace(":", "\\:").split("?")
+        if len(parts) != len(args) + 1:
+            raise ValueError("execution SQL bind count does not match its arguments")
+        statement = parts[0] + "".join(f":p{i}{part}" for i, part in enumerate(parts[1:]))
+        with self.gateway.transaction():
+            return _Rows(self.gateway.sa.execute(
+                text(statement), {f"p{i}": value for i, value in enumerate(args)}))
+
+
 class Gateway:
     """The execution legs of one observed ledger store, driven through one provider."""
 
@@ -284,12 +325,18 @@ class Gateway:
         self.provider = ConnectorProvider(
             client, leg_mode, target=lambda leg: self.bound(leg).to_currency,
             connected_account=connected_account, global_account_id=global_account_id)
-        proxy = store.engine.raw_connection()  # SQLite's StaticPool: the store's one connection
-        self.conn = proxy.driver_connection
-        proxy.close()
-        ob.install(self.conn)
-        self.conn.execute(TERMS_DDL)
+        proxy = store.engine.raw_connection()
+        try:
+            ob.install(proxy.driver_connection)
+            proxy.driver_connection.execute(TERMS_DDL)
+            proxy.commit()
+        except BaseException:
+            proxy.rollback()
+            raise
+        finally:
+            proxy.close()
         self._sa: Connection | None = None
+        self.conn = _StoreConnection(self)
         self.outbox = ob.Outbox(self.conn, self._post_journal,
                                 clock=lambda: self.clock().isoformat(), on_point=on_point,
                                 transaction=self.transaction)
