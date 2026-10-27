@@ -114,3 +114,26 @@ def test_a_global_account_carries_no_currency_key():
     deposit = client.simulate_deposit(amount=USD_1, global_account_id=usd)
     assert deposit.currency == "USD"
     assert transport.available("USD") == 10000000 + 100
+
+
+@pytest.mark.parametrize("account", [
+    {"id": "ga-eur-1", "currency": "EUR"},  # the shape before 2024-09-27
+    {"id": "ga-eur-1", "supported_features": [{"currency": "EUR", "type": "DEPOSIT"}]},
+])
+def test_a_deposit_lands_in_the_currency_the_client_reads_off_the_account(account):
+    transport, _, client = fake()
+    transport.global_accounts.append(account)
+    deposit = client.simulate_deposit(amount=EUR_100, global_account_id="ga-eur-1")
+    assert (deposit.currency, transport.available("EUR")) == ("EUR", 10000)
+
+
+def test_a_replayed_charge_keeps_the_documented_code():
+    transport = FakeTransport(clock=FakeClock(), connected=True)
+    wire = Wire(transport)
+    transport.balances["acct-borrower-a"]["USD"] = 500
+    charge = {"request_id": "ch-1", "amount": "1.00", "currency": "USD",
+              "source": "acct-borrower-a"}
+    assert wire("POST", "/api/v1/charges/create", charge).status == 201
+    replay = wire("POST", "/api/v1/charges/create", charge)
+    assert (replay.status, replay.json["code"]) == (400, "duplicate_request_id")
+    assert replay.json["trace_id"]

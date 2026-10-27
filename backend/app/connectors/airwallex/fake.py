@@ -4,8 +4,9 @@ It speaks the same paths, bodies and envelopes as the sandbox (system brief §10
 body through the wire encoding, and keeps state: balances per account, global accounts,
 beneficiaries, quotes, conversions, transfers, connected-account transfers, charges and deposits.
 What it pins, because the gateway's tests rely on it:
-- a replayed `request_id` is REJECTED — `400 request_id_duplicate` with no `trace_id` (a
-  conversion: `400 invalid_argument` "request_id '…' has been used in the past"), `409` while the
+- a replayed `request_id` is REJECTED — `400 request_id_duplicate` with no `trace_id` on a
+  transfer (a conversion: `400 invalid_argument` "request_id '…' has been used in the past"; the
+  rest per `REPLAY_REFUSALS`), `409` while the
   first call is held open — never answered with the original; the original is found by
   list-by-`request_id`;
 - transfer `SCHEDULED → PROCESSING → SENT → PAID`: the create answers `SCHEDULED` and the fake
@@ -80,6 +81,13 @@ COLLECTION_PATHS = {
     "charges": "/api/v1/charges",
 }
 MONEY_CREATES = {f"{path}/create": collection for collection, path in COLLECTION_PATHS.items()}
+# How a replayed `request_id` is refused, per collection: (code, carries a `trace_id`). A transfer
+# is the sandbox's run-2 answer; a conversion is refused with its own message (`_create`).
+REPLAY_REFUSALS = {
+    "transfers": ("request_id_duplicate", False),
+    "connected_account_transfers": ("request_id_duplicate", True),
+    "charges": ("duplicate_request_id", True),
+}
 # How long a quote lasts, in seconds, by the `validity` it was asked for.
 QUOTE_VALIDITIES = {"MIN_1": 60, "MIN_15": 900, "MIN_30": 1800, "HR_1": 3600, "HR_4": 14400,
                     "HR_8": 28800, "HR_24": 86400}
@@ -387,8 +395,8 @@ class FakeTransport:
             raise _Refuse(400, "invalid_argument",
                           f"request_id '{request_id}' has been used in the past", "request_id")
         if used:
-            raise _Refuse(400, "request_id_duplicate", "The request_id has been used",
-                          "request_id", traced=collection != "transfers")
+            code, traced = REPLAY_REFUSALS[collection]
+            raise _Refuse(400, code, "The request_id has been used", "request_id", traced=traced)
         obj = getattr(self, f"_new_{collection}")(body, account)
         self._serial += 1
         object_id = f"{collection[:-1].replace('_', '-')}-{self._serial}"
@@ -398,7 +406,7 @@ class FakeTransport:
         self.objects[collection][object_id] = obj
         answer = self._public(obj)
         if collection == "transfers":
-            obj["status"] = "PROCESSING"  # the sandbox moves a payout on by itself
+            self._set_status(obj, "PROCESSING")  # the sandbox moves a payout on by itself
         return answer
 
     def _new_transfers(self, body: Mapping, account: str) -> dict:
@@ -462,6 +470,8 @@ class FakeTransport:
                 "source": source}
 
     def _deposit(self, body: Mapping) -> dict:
+        from .client import account_currencies
+
         account = next((g for g in self.global_accounts if g["id"] == body.get("global_account_id")),
                        None)
         if account is None:
@@ -469,7 +479,11 @@ class FakeTransport:
         amount = body.get("amount")
         if isinstance(amount, bool) or not isinstance(amount, int | Decimal):
             raise _Refuse(400, "invalid_argument", "amount is a number", "amount")
-        currency = account["required_features"][0]["currency"]
+        currencies = account_currencies(account, own=True) or account_currencies(account)
+        if not currencies:
+            raise _Refuse(400, "invalid_argument", "the global account takes no currency",
+                          "global_account_id")
+        currency = currencies[0]
         minor = _to_minor(Decimal(amount), currency, None)
         if minor <= 0:
             raise _Refuse(400, "invalid_argument", "amount is positive", "amount")
