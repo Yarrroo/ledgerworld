@@ -301,6 +301,7 @@ def test_a_run_is_accepted_in_under_a_second_and_reads_queued(ran):
     assert ran["accepted"]["branch_ids"] == [base_branch(run_id)]
     queued = ran["queued"]
     assert (queued["status"], queued["committed_round"], queued["rounds"]) == ("queued", None, [])
+    assert queued["as_of"] == iso(WORLD.epoch)  # the run's simulated clock, not the observed one
 
 
 def test_the_worker_runs_the_family_and_every_committed_round_is_readable(ran):

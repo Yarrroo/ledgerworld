@@ -32,6 +32,7 @@ from ...jobs.runner import (
 )
 from ...simulation.clock import HORIZON_ROUNDS
 from ...simulation.interview import Interview, ReadOnlyViolation
+from ...simulation.scenarios import load_world
 from . import reports, views
 from .services import API_VERSION, APPROVER, Services
 
@@ -139,7 +140,8 @@ def submit_run():
     _token()
     req: c6.RunRequest = _body(c6.RunRequest)
     s = services()
-    world_snapshot = _world_snapshot_id()
+    world = load_world().snapshot
+    world_snapshot = world.snapshot_id
     if req.snapshot_id != world_snapshot:
         raise Refused(422, "unknown_snapshot",
                       f"runs start from the demo world's snapshot {world_snapshot}")
@@ -157,17 +159,11 @@ def submit_run():
     s.jobs.put("run", run_id, {"run_id": run_id, "snapshot_id": req.snapshot_id,
                                "committed_round": None, "rounds": [], "feed": [],
                                "cash_paths": [], "branches": [],
-                               "as_of": s.now().isoformat()})
+                               "as_of": world.as_of.isoformat()})  # the run's own clock
     job = queue.submit(RUN, run_id, {"run_id": run_id, "scenario": scenario,
                                      "rounds": req.rounds})
     return _reply(c6.JobAccepted, {"job_id": job.job_id, "run_id": run_id,
                                    "branch_ids": [base_branch(run_id)]}, 202)
-
-
-def _world_snapshot_id() -> str:
-    from ...simulation.scenarios import load_world
-
-    return load_world().snapshot.snapshot_id
 
 
 @bp.get("/runs/<run_id>")
