@@ -56,11 +56,13 @@ class Sandbox:
     (500); `stuck` makes every transition fail and move nothing. The sandbox moves a transfer on
     by itself: `drift` lists where each failed transition leaves it (None: where it was), `then`
     maps a made transition's status to the one it moves on to.
-    `reads_fail` answers every transfer read with a 404."""
+    `reads_fail` answers every transfer read with a 404; `flaky` fails that many transitions
+    the sandbox could make, moving nothing."""
 
     def __init__(self, *, stuck: bool = False, refuse: int = 500, drift: list | None = None,
                  then: dict | None = None, reads_fail: bool = False,
-                 accounts: list[dict] | None = None) -> None:
+                 accounts: list[dict] | None = None, flaky: int = 0) -> None:
+        self.flaky = flaky
         self.stuck, self.refuse, self.reads_fail = stuck, refuse, reads_fail
         self.drift, self.then = list(drift or []), then or {}
         self.accounts = [GLOBAL_ACCOUNT] if accounts is None else accounts
@@ -106,6 +108,9 @@ class Sandbox:
         if match := TRANSITION.fullmatch(path):
             transfer, target = self.transfers[match.group(1)], body["next_status"]
             self.transitions.append(target)
+            if self.flaky:
+                self.flaky -= 1
+                return httpx.Response(500, json={"code": "internal_error"})
             if self.stuck or NEXT.get(transfer["status"]) != target:
                 if self.drift and (moved := self.drift.pop(0)):
                     transfer["status"] = moved
@@ -240,12 +245,36 @@ def test_a_transition_the_sandbox_already_went_past_is_that_transfer(refuse):
     assert sandbox.transitions == ["SENT"]
 
 
-def test_a_transfer_the_sandbox_moved_toward_the_target_is_asked_again():
-    sandbox = Sandbox(drift=[None, "SENT"])  # PAID from PROCESSING: 500, 500 and on to SENT
+def test_a_transfer_the_sandbox_moved_on_to_the_step_before_is_asked_again():
+    sandbox = Sandbox(drift=["SENT"])  # PAID from PROCESSING: 500, and on to SENT itself
     client = paid_from(sandbox)
     moved = client.simulate_transition("tr-1", "PAID")
     assert moved.status == "PAID"
-    assert sandbox.transitions == ["PAID", "PAID", "PAID"]
+    assert sandbox.transitions == ["PAID", "PAID"]
+
+
+def test_a_transition_left_unknown_is_sent_again():
+    sandbox = Sandbox(flaky=2)
+    client = paid_from(sandbox)  # at PROCESSING: SENT fails twice, then is made
+    assert client.simulate_transition("tr-1", "SENT").status == "SENT"
+    assert sandbox.transitions == ["SENT"] * 3
+
+
+def test_a_step_skipped_is_not_sent_again():
+    sandbox = Sandbox()
+    client = paid_from(sandbox)  # at PROCESSING: PAID skips SENT
+    with pytest.raises(OutcomeUnknown) as unknown:
+        client.simulate_transition("tr-1", "PAID")
+    assert "transfer at PROCESSING" in str(unknown.value)
+    assert sandbox.transitions == ["PAID"]
+
+
+def test_the_check_takes_the_account_the_gateway_takes():
+    run = contract(Sandbox(accounts=[EUR_WITH_USD, USD_ONLY]))
+    assert run.global_accounts()[:2] == (True, "ga-usd")
+    pinned = check.ContractPass(live(Sandbox(accounts=[EUR_WITH_USD, USD_ONLY])), "run2",
+                                "ben-1", global_account_id="ga-eur")
+    assert pinned.global_accounts()[:2] == (True, "ga-eur")
 
 
 def test_the_check_passes_when_the_sandbox_pays_out_by_itself():

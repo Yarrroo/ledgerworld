@@ -41,10 +41,10 @@ from app.connectors.airwallex.client import (
     LOGIN_PATH,
     PAYOUT_PATH,
     AirwallexClient,
-    account_currencies,
     active_account,
     client_from_env,
     connected_setting,
+    global_accounts_by_currency,
 )
 from app.connectors.airwallex.errors import (
     AirwallexError,
@@ -272,12 +272,13 @@ class ContractPass:
     def global_accounts(self) -> tuple[bool, str | None, str]:
         accounts = self.client.global_accounts()
         self._observe()
-        wanted = [a for a in accounts if isinstance(a, dict) and "USD" in account_currencies(a)
-                  and self.global_account_id in (None, a.get("id"))]
-        if not wanted:
+        # The account the gateway would take: the pinned one if it takes USD, else its pick.
+        pinned = [a for a in accounts if isinstance(a, dict) and a.get("id") == self.global_account_id]
+        wanted = global_accounts_by_currency(pinned if self.global_account_id else accounts)
+        if "USD" not in wanted:
             return False, None, f"no USD global account among {len(accounts)}"
-        self.state["global_account"] = wanted[0]["id"]
-        return True, wanted[0]["id"], f"{len(accounts)} listed"
+        self.state["global_account"] = wanted["USD"]
+        return True, wanted["USD"], f"{len(accounts)} listed"
 
     def connected_probe(self) -> tuple[bool, str | None, str]:
         before = len(self.recorder.answers)

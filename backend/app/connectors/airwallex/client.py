@@ -501,9 +501,9 @@ class AirwallexClient:
         create) and answered a transition with a 500. So a transition that is refused or left
         unknown is read back, and a transfer at or past `next_status` on `PAYOUT_PATH` is the
         answer. A refusal otherwise stands. A step of `PAYOUT_PATH` left unknown, with the
-        transfer still before it, is sent again (it is keyed on the transfer and creates
-        nothing; the no-second-POST rule is for creates), at most `MAX_ATTEMPTS` times. Any
-        other unknown raises `OutcomeUnknown` naming the transfer and the status it holds."""
+        transfer still on the step before it, is sent again (it is keyed on the transfer and
+        creates nothing; the no-second-POST rule is for creates), at most `MAX_ATTEMPTS` times.
+        Any other unknown raises `OutcomeUnknown` naming the transfer and the status it holds."""
         body = {"next_status": next_status}
         if failure_type is not None:
             body["failure_type"] = failure_type
@@ -522,7 +522,7 @@ class AirwallexClient:
                     return now
                 if isinstance(failed, ProviderError):
                     raise
-                if attempt >= MAX_ATTEMPTS or not _before(now.status, next_status):
+                if attempt >= MAX_ATTEMPTS or not _just_before(now.status, next_status):
                     raise OutcomeUnknown(
                         None, f"transition to {next_status}: {failed.reason}, transfer at "
                         f"{now.status}", provider_id=transfer_id) from None
@@ -563,8 +563,8 @@ def account_currencies(account: Mapping[str, Any], *, own: bool = False) -> list
     candidates = [account.get("currency")]
     for key in ("required_features",) if own else ("required_features", "supported_features"):
         features = account.get(key)
-        candidates += [f.get("currency") for f in features if isinstance(f, dict)] if isinstance(
-            features, list) else []
+        if isinstance(features, list):
+            candidates += [f.get("currency") for f in features if isinstance(f, dict)]
     return list(dict.fromkeys(c for c in candidates if isinstance(c, str) and c))
 
 
@@ -589,10 +589,10 @@ def _reached(status: str | None, target: str) -> bool:
         PAYOUT_PATH.index(status) > PAYOUT_PATH.index(target))
 
 
-def _before(status: str | None, target: str) -> bool:
-    """`status` comes before `target` on `PAYOUT_PATH`."""
-    return status in PAYOUT_PATH and target in PAYOUT_PATH and (
-        PAYOUT_PATH.index(status) < PAYOUT_PATH.index(target))
+def _just_before(status: str | None, target: str) -> bool:
+    """`status` is the step before `target` on `PAYOUT_PATH`."""
+    return status in PAYOUT_PATH and target in PAYOUT_PATH[1:] and (
+        PAYOUT_PATH.index(status) + 1 == PAYOUT_PATH.index(target))
 
 
 def _replayed(status: int, code: str | None, envelope: Mapping[str, Any]) -> bool:
