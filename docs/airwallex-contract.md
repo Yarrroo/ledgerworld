@@ -10,6 +10,12 @@ accounts not enabled) · sandbox 14/14, fake 14/14. The fake's key sets are pinn
 `checks/airwallex_canon.json` and enforced offline by
 `backend/tests/finance/test_airwallex_fake_keys.py`.
 
+**Live demo run:** 2026-10-27, run `demo-20261027T190757Z-9674` · Mode B · scripted agents
+(`scripts/demo.sh --mode sandbox`, `LLM_BASE_URL=scripted://family`) · fresh branch
+`…-shock-integrated` (16 rounds) · advance `e7c4579c-9388-4191-93ac-67d80bc435ae` `SETTLED` ·
+payout `3e8e7a6d-620c-466b-98f9-e76c101ce8a5` `PAID` · reconciled, no incidents ·
+`checks/demo_receipt.py --require-live`: live checkpoints 3/3. The receipt stays in `var/demo/`.
+
 ## Verified behaviour
 
 | Step | Sandbox answer the fake reproduces |
