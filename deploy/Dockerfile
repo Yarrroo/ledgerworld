@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # One image for every LedgerWorld process: the API (which also serves the built frontend), and
 # the simulation worker. LEDGERWORLD_ROLE picks the process at start (deploy/entrypoint.sh).
 # Build from the repository root:  docker build -f deploy/Dockerfile .
@@ -7,7 +8,7 @@
 FROM node:22-slim AS frontend
 WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./frontend/
-RUN npm ci --prefix frontend
+RUN --mount=type=cache,target=/root/.npm npm ci --prefix frontend
 COPY locales ./locales
 COPY frontend ./frontend
 # "/" makes every API call relative to the page's own origin
@@ -28,17 +29,20 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY backend/pyproject.toml ./backend/
 COPY packages/oasis-finance/pyproject.toml ./packages/oasis-finance/
-RUN uv sync --frozen --no-dev --no-install-workspace
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-workspace
 
-# The workspace members and the data they read at run time (repo-root relative paths)
-COPY backend ./backend
+# The workspace members; of backend/ only the code, never a checkout's logs, uploads or job dirs
+COPY backend/app ./backend/app
+COPY backend/scripts ./backend/scripts
 COPY packages ./packages
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
+
+# The data the code reads at run time, by repo-root relative path
 COPY contracts ./contracts
 COPY fixtures ./fixtures
 COPY scenarios ./scenarios
 COPY locales ./locales
 COPY prp/2026-10-20-ledgerworld/design/modules/execution ./prp/2026-10-20-ledgerworld/design/modules/execution
-RUN uv sync --frozen --no-dev
 COPY --from=frontend /src/frontend/dist ./frontend/dist
 COPY deploy/entrypoint.sh ./deploy/entrypoint.sh
 

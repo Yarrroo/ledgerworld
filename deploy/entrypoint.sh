@@ -5,13 +5,16 @@
 #   sim     the simulation job worker (python -m app.jobs)
 #   worker  the same job worker: its jobs are simulation, so it runs as sim
 # The sim role starts with every AIRWALLEX_* name removed from its environment and with
-# LEDGERWORLD_ROLE=sim exported, under which the live connector refuses to be imported.
+# LEDGERWORLD_ROLE=sim exported, so code that checks the role sees a simulation process.
+# Every role takes its settings from the environment alone: the app loads a .env file with
+# override on import, which would put back what the scrub removed, so dotenv is disabled.
 # With arguments, the role's environment is prepared and the arguments run in it instead
 # (a shell, a one-off script): `entrypoint.sh env` shows exactly what the role would see.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 role="${LEDGERWORLD_ROLE:-}"
+export PYTHON_DOTENV_DISABLED=1
 
 case "$role" in
   api) ;;
@@ -39,8 +42,11 @@ if [[ "$role" == sim ]]; then
   exec python -m app.jobs
 fi
 
-# api: the app and the built frontend from one origin; a path that is not a file of the build
-# and not an API route gets index.html, so the frontend's own routes survive a reload.
+# api: the app and the built frontend from one origin. A GET for a frontend route (not an API
+# path, no file extension) that is not a file of the build gets index.html, so the frontend's
+# own routes survive a reload; anything else the build lacks goes to the app, which 404s it.
+# It starts without backend/run.py's key check on purpose: with no model or graph-memory key the
+# app still serves the scripted, fake-provider demo.
 exec python - "$root/frontend/dist" <<'PY'
 import sys
 from pathlib import Path
@@ -52,18 +58,19 @@ from app import create_app
 
 app = create_app()
 dist = Path(sys.argv[1])
-index = dist / "index.html"
+index = (dist / "index.html").read_bytes() if (dist / "index.html").is_file() else None
 
 
 def pages(environ, start_response):
     path = environ.get("PATH_INFO", "/")
-    if path.startswith("/api/") or path == "/health" or not index.is_file():
+    route = (environ.get("REQUEST_METHOD") in ("GET", "HEAD") and not path.startswith("/api/")
+             and path != "/health" and "." not in path.rsplit("/", 1)[-1])
+    if index is None or not route:
         return app(environ, start_response)
-    body = index.read_bytes()
     start_response("200 OK", [("Content-Type", "text/html; charset=utf-8"),
-                              ("Content-Length", str(len(body))),
+                              ("Content-Length", str(len(index))),
                               ("Cache-Control", "no-cache")])
-    return [body]
+    return [index]
 
 
 served = SharedDataMiddleware(pages, {"/": str(dist)}) if dist.is_dir() else app

@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import json
 import re
+import runpy
 import shlex
 import subprocess
+import sys
 import tomllib
+import types
 from pathlib import Path
 
 import pytest
@@ -65,16 +68,24 @@ def dockerfile() -> list[tuple[str, str]]:
 
 
 def stages() -> dict[str, list[tuple[str, str]]]:
+    """Each build stage's instructions by its name; every stage is named."""
     named: dict[str, list[tuple[str, str]]] = {}
     current = None
     for word, rest in dockerfile():
         if word == "FROM":
-            parts = rest.split()
-            current = parts[2] if len(parts) == 3 and parts[1].upper() == "AS" else str(len(named))
+            _image, as_, current = rest.split()
+            assert as_.upper() == "AS", f"FROM {rest} names no stage"
             named[current] = []
         assert current is not None, "the Dockerfile has an instruction before its first FROM"
         named[current].append((word, rest))
     return named
+
+
+def copy_sources() -> set[str]:
+    """Every path the Dockerfile copies from the build context."""
+    return {source.rstrip("/") for word, rest in dockerfile()
+            if word == "COPY" and not rest.startswith("--from")
+            for source in shlex.split(rest)[:-1]}
 
 
 def compose() -> dict:
@@ -84,13 +95,14 @@ def compose() -> dict:
 def environment(service: dict) -> dict[str, str | None]:
     """A service's environment as name → value (None: passed through from the host)."""
     env = service.get("environment") or {}
-    if isinstance(env, dict):
-        return {k: (None if v is None else str(v)) for k, v in env.items()}
-    out: dict[str, str | None] = {}
-    for item in env:
-        name, sep, value = item.partition("=")
-        out[name] = value if sep else None
-    return out
+    assert isinstance(env, dict), "compose writes each environment as a map"
+    return {k: (None if v is None else str(v)) for k, v in env.items()}
+
+
+def secret_names() -> set[str]:
+    """The .env.example names whose value is a credential."""
+    names = {n for n in env_example() if n.endswith(("_KEY", "_SECRET", "_TOKEN"))}
+    return names | {"AIRWALLEX_CLIENT_ID"}
 
 
 def our_services() -> dict[str, dict]:
@@ -107,6 +119,13 @@ def run_entrypoint(env: dict[str, str], *args: str) -> subprocess.CompletedProce
                           capture_output=True, text=True, timeout=30, check=False)
 
 
+def entrypoint_env(env: dict[str, str]) -> dict[str, str]:
+    """The environment the entrypoint hands its process, given ``env``."""
+    result = run_entrypoint(env, "env")
+    assert result.returncode == 0, result.stderr
+    return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+
 # ---------------------------------------------------------------------------------- Dockerfile
 
 def test_the_dockerfile_parses_into_known_instructions():
@@ -118,7 +137,8 @@ def test_the_dockerfile_parses_into_known_instructions():
 
 def test_the_image_is_python_312_slim_with_the_built_frontend():
     named = stages()
-    final = list(named.values())[-1]
+    final = named["app"]
+    assert list(named)[-1] == "app"
     assert final[0] == ("FROM", "python:3.12-slim AS app")
     assert "frontend" in named
     assert any(w == "RUN" and "run build" in r for w, r in named["frontend"])
@@ -127,16 +147,18 @@ def test_the_image_is_python_312_slim_with_the_built_frontend():
 
 
 def test_every_copied_path_exists_in_the_repo():
-    for word, rest in dockerfile():
-        if word != "COPY" or rest.startswith("--from"):
-            continue
-        sources = shlex.split(rest)[:-1]
-        missing = [s for s in sources if not (ROOT / s).exists()]
-        assert not missing, f"COPY {rest}"
+    assert not [s for s in copy_sources() if not (ROOT / s).exists()]
+
+
+def test_the_image_copies_sources_not_a_checkout_s_run_time_output():
+    """backend/ also holds a checkout's logs, uploads and job dirs; only its code is copied."""
+    copied = copy_sources()
+    assert "backend" not in copied
+    assert {"backend/app", "backend/scripts"} <= copied
 
 
 def test_the_entrypoint_is_the_role_switch():
-    final = list(stages().values())[-1]
+    final = stages()["app"]
     entry = [json.loads(r) for w, r in final if w == "ENTRYPOINT"]
     assert entry == [["bash", "/app/deploy/entrypoint.sh"]]
     assert ("EXPOSE", str(host()["host"]["internal_port"])) in final
@@ -175,11 +197,9 @@ def test_every_name_compose_reads_is_in_env_example():
 
 def test_no_value_in_compose_is_a_credential():
     """A credential is passed through by name, never written with a value."""
-    secret_names = {n for n in env_example() if n.endswith(("_KEY", "_SECRET", "_TOKEN"))}
-    secret_names.add("AIRWALLEX_CLIENT_ID")
     for service in our_services().values():
         env = environment(service)
-        assert all(env[name] is None for name in secret_names & set(env))
+        assert all(env[name] is None for name in secret_names() & set(env))
 
 
 def test_the_sim_role_environment_has_no_airwallex_name():
@@ -189,6 +209,14 @@ def test_the_sim_role_environment_has_no_airwallex_name():
     for service in sims:
         assert "env_file" not in service
         assert not [n for n in environment(service) if n.upper().startswith("AIRWALLEX_")]
+
+
+def test_the_sim_role_holds_no_credential_at_all():
+    """The job worker builds no model client, so it is given no key of any provider."""
+    for service in compose()["services"].values():
+        env = environment(service)
+        if env.get("LEDGERWORLD_ROLE") == "sim":
+            assert not secret_names() & set(env)
 
 
 def test_the_app_is_published_only_on_loopback_and_checks_the_v1_health():
@@ -209,19 +237,30 @@ def test_every_name_the_entrypoint_reads_is_in_env_example():
 def test_the_sim_role_starts_with_every_airwallex_name_removed(role):
     planted = {name: "x" for name in env_example() if name.startswith("AIRWALLEX_")}
     planted["airwallex_lowercase"] = "x"
-    result = run_entrypoint({"LEDGERWORLD_ROLE": role, "REDIS_URL": "x", **planted}, "env")
-    assert result.returncode == 0, result.stderr
-    seen = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    seen = entrypoint_env({"LEDGERWORLD_ROLE": role, "REDIS_URL": "x", **planted})
     assert not [n for n in seen if n.upper().startswith("AIRWALLEX_")]
     assert seen["LEDGERWORLD_ROLE"] == "sim"
     assert seen["REDIS_URL"] == "x"
 
 
+def test_no_role_reads_a_dotenv_file(tmp_path):
+    """A stray .env in the image cannot put back what the sim role's scrub removed: the app
+    loads .env with override on import, so every role runs with dotenv loading disabled."""
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("".join(f"{name}=x\n" for name in sorted(env_example())
+                              if name.startswith("AIRWALLEX_")))
+    probe = ("import os, sys, dotenv; dotenv.load_dotenv(sys.argv[1], override=True); "
+             "print(sorted(n for n in os.environ if n.startswith('AIRWALLEX_')))")
+    for role in ("sim", "api"):
+        result = run_entrypoint({"LEDGERWORLD_ROLE": role}, sys.executable, "-c", probe,
+                                str(dotenv))
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "[]"
+
+
 def test_the_api_role_keeps_its_environment():
     planted = {name: "x" for name in ("AIRWALLEX_MODE", "AIRWALLEX_API_KEY")}
-    result = run_entrypoint({"LEDGERWORLD_ROLE": "api", **planted}, "env")
-    assert result.returncode == 0, result.stderr
-    seen = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    seen = entrypoint_env({"LEDGERWORLD_ROLE": "api", **planted})
     assert {n: seen.get(n) for n in planted} == planted
 
 
@@ -230,6 +269,48 @@ def test_an_unknown_role_is_refused(role):
     result = run_entrypoint({"LEDGERWORLD_ROLE": role}, "env")
     assert result.returncode == 64
     assert "LEDGERWORLD_ROLE must be" in result.stderr and not result.stdout
+
+
+@pytest.fixture
+def served(tmp_path, monkeypatch):
+    """The api role's server program, run as the entrypoint runs it, on a stub app and a built
+    frontend of two files; the WSGI app it would serve is captured instead of listening."""
+    import werkzeug.serving
+    from flask import Flask
+    from werkzeug.test import Client
+
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html>index</html>")
+    (dist / "assets" / "app.js").write_text("app()")
+    stub = Flask("stub")
+    stub.add_url_rule("/api/v1/health", "health", lambda: {"ok": True})
+    monkeypatch.setitem(sys.modules, "app", types.SimpleNamespace(create_app=lambda: stub))
+    captured = {}
+    monkeypatch.setattr(werkzeug.serving, "run_simple",
+                        lambda host, port, wsgi, **kw: captured.update(wsgi=wsgi, port=port))
+    monkeypatch.setattr(sys, "argv", ["-", str(dist)])
+    program = tmp_path / "serve.py"
+    program.write_text(ENTRYPOINT.read_text().split("<<'PY'\n", 1)[1].rsplit("\nPY\n", 1)[0])
+    runpy.run_path(str(program), run_name="__main__")
+    assert captured["port"] == host()["host"]["internal_port"]
+    return Client(captured["wsgi"])
+
+
+def test_the_api_serves_the_api_the_build_and_the_frontend_routes(served):
+    assert served.get("/api/v1/health").json == {"ok": True}
+    assert served.get("/assets/app.js").get_data(as_text=True) == "app()"
+    for path in ("/", "/simulation/run-1"):
+        page = served.get(path)
+        assert page.status_code == 200 and page.get_data(as_text=True) == "<html>index</html>"
+    assert served.head("/decisions").status_code == 200
+
+
+def test_a_missing_file_or_a_write_is_not_answered_with_the_index(served):
+    assert served.get("/assets/index-old.js").status_code == 404
+    assert served.get("/favicon.ico").status_code == 404
+    assert served.post("/simulation/run-1").status_code in (404, 405)
+    assert served.get("/api/v1/nope").status_code == 404
 
 
 # --------------------------------------------------------------------------------- host config

@@ -27,6 +27,8 @@ sim = "sim"
 # Needed from the first deploy: the write routes admit nobody without it.
 required = ["LEDGERWORLD_DEMO_TOKEN"]
 # Set when the sandbox keys land, together with AIRWALLEX_MODE = "sandbox"; only the app gets them.
+# Not before the upstream engine's simulation subprocesses, which the app starts with a copy of
+# its own environment (backend/app/services/simulation_runner.py), run with these names removed.
 airwallex = ["AIRWALLEX_CLIENT_ID", "AIRWALLEX_API_KEY", "AIRWALLEX_WEBHOOK_SECRET"]
 # Set for a live model and graph memory; without them the model is scripted.
 model = ["LLM_API_KEY", "LLM_BOOST_API_KEY", "ZEP_API_KEY"]

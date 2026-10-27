@@ -1,8 +1,8 @@
 # LedgerWorld on one machine: the app (API + built frontend), the simulation worker, PostgreSQL 16
 # (the ledger of record) and Redis 7 (the job queue).
 #   docker compose -f deploy/compose.yml --env-file .env up -d --build
-# Every value comes from the environment by name (.env.example): a bare name is passed through
-# when it is set and left unset otherwise. With none set it starts in fake provider mode on a
+# Every value comes from the environment by name (.env.example): a name with no value is passed
+# through when it is set and left unset otherwise. With none set it starts in fake provider mode on a
 # scripted model. Only the app is published, on the host's loopback; postgres and redis stay on
 # the compose network, so they need no password of their own.
 
@@ -14,33 +14,42 @@ x-image: &image
     dockerfile: deploy/Dockerfile
   image: ledgerworld:local
   restart: unless-stopped
+  deploy:
+    resources:
+      limits:
+        cpus: "1.5"
+        memory: 2g
+
+# The backing stores both processes share
+x-stores: &stores
+  LEDGER_DATABASE_URL: ${LEDGER_DATABASE_URL:-postgresql+psycopg://ledgerworld@postgres:5432/ledgerworld}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
 
 services:
   app:
     <<: *image
     environment:
-      - LEDGERWORLD_ROLE=api
-      - LEDGER_DATABASE_URL=${LEDGER_DATABASE_URL:-postgresql+psycopg://ledgerworld@postgres:5432/ledgerworld}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - LEDGERWORLD_DEMO_TOKEN
-      - LEDGERWORLD_URL
-      - LEDGERWORLD_LLM_DAILY_USD=${LEDGERWORLD_LLM_DAILY_USD:-5}
-      - AIRWALLEX_MODE=${AIRWALLEX_MODE:-fake}
-      - AIRWALLEX_BASE_URL
-      - AIRWALLEX_CLIENT_ID
-      - AIRWALLEX_API_KEY
-      - AIRWALLEX_CONNECTED=${AIRWALLEX_CONNECTED:-auto}
-      - AIRWALLEX_WEBHOOK_SECRET
-      - AIRWALLEX_API_VERSION
-      - AIRWALLEX_GLOBAL_ACCOUNT_ID
-      - LLM_API_KEY
-      - LLM_BASE_URL
-      - LLM_MODEL_NAME
-      - LLM_BOOST_API_KEY
-      - LLM_BOOST_BASE_URL
-      - LLM_BOOST_MODEL_NAME
-      - ZEP_API_KEY
-      - SECRET_KEY
+      <<: *stores
+      LEDGERWORLD_ROLE: api
+      LEDGERWORLD_DEMO_TOKEN:
+      LEDGERWORLD_URL:
+      LEDGERWORLD_LLM_DAILY_USD: ${LEDGERWORLD_LLM_DAILY_USD:-5}
+      AIRWALLEX_MODE: ${AIRWALLEX_MODE:-fake}
+      AIRWALLEX_BASE_URL:
+      AIRWALLEX_CLIENT_ID:
+      AIRWALLEX_API_KEY:
+      AIRWALLEX_CONNECTED: ${AIRWALLEX_CONNECTED:-auto}
+      AIRWALLEX_WEBHOOK_SECRET:
+      AIRWALLEX_API_VERSION:
+      AIRWALLEX_GLOBAL_ACCOUNT_ID:
+      LLM_API_KEY:
+      LLM_BASE_URL:
+      LLM_MODEL_NAME:
+      LLM_BOOST_API_KEY:
+      LLM_BOOST_BASE_URL:
+      LLM_BOOST_MODEL_NAME:
+      ZEP_API_KEY:
+      SECRET_KEY:
     ports:
       - "127.0.0.1:5001:5001"  # a reverse proxy or tunnel on the host makes it public
     volumes:
@@ -56,44 +65,26 @@ services:
       timeout: 10s
       start_period: 60s
       retries: 3
-    deploy:
-      resources:
-        limits:
-          cpus: "1.5"
-          memory: 2g
 
   # The simulation worker: no AIRWALLEX_* name is passed to it, and its entrypoint removes any
-  # that would arrive anyway. It starts after the app, which migrates the ledger schema.
+  # that would arrive anyway. It runs scripted families and builds no model client, so it gets
+  # no provider key at all. It starts after the app, which migrates the ledger schema.
   sim:
     <<: *image
     environment:
-      - LEDGERWORLD_ROLE=sim
-      - LEDGER_DATABASE_URL=${LEDGER_DATABASE_URL:-postgresql+psycopg://ledgerworld@postgres:5432/ledgerworld}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-      - LEDGERWORLD_LLM_DAILY_USD=${LEDGERWORLD_LLM_DAILY_USD:-5}
-      - LLM_API_KEY
-      - LLM_BASE_URL
-      - LLM_MODEL_NAME
-      - LLM_BOOST_API_KEY
-      - LLM_BOOST_BASE_URL
-      - LLM_BOOST_MODEL_NAME
-      - ZEP_API_KEY
+      <<: *stores
+      LEDGERWORLD_ROLE: sim
     depends_on:
       app:
         condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          cpus: "1.5"
-          memory: 2g
 
   postgres:
     image: postgres:16
     restart: unless-stopped
     environment:
-      - POSTGRES_USER=ledgerworld
-      - POSTGRES_DB=ledgerworld
-      - POSTGRES_HOST_AUTH_METHOD=trust
+      POSTGRES_USER: ledgerworld
+      POSTGRES_DB: ledgerworld
+      POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
