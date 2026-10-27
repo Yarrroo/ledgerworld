@@ -251,7 +251,9 @@
       "tests/simulation/test_branches.py::test_a_replay_runs_under_the_branchs_coordinator_and_memory",
       "tests/simulation/test_branches.py::test_a_replay_of_the_checkpoints_own_branch_carries_its_graph_memory",
       "tests/simulation/test_branches.py::test_a_replay_may_not_make_an_ancestor_its_child",
-      "tests/simulation/test_branches.py::test_a_failed_replay_can_be_retried_in_the_same_workdir"
+      "tests/simulation/test_branches.py::test_a_failed_replay_can_be_retried_in_the_same_workdir",
+      "tests/simulation/test_branches.py::test_a_replay_on_the_originals_memory_backend_leaves_its_graph_alone",
+      "tests/simulation/test_branches.py::test_a_failed_replay_on_the_originals_backend_removes_only_its_own_graph"
     ]},
     {"id": "six_families_run", "name": "six families run", "tests": [
       "tests/simulation/test_scenarios.py::test_the_world_validates_against_c5_and_so_does_every_family_snapshot",
