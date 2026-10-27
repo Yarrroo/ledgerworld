@@ -2,11 +2,12 @@
 
 ``run_round`` captures the world, then runs the ten steps inside one ledger transaction:
 
-1. advance the clock · 2. deliver the scheduled events due now, land due inflows (an advance in
+1. advance the round clock and OASIS's with it, so every social write of the round is stamped
+with it · 2. deliver the scheduled events due now, land due inflows (an advance in
 transit included) and mark ``overdue`` every pending_in promised by now that did not land ·
 3. publish the scheduled posts · 4. build each actor's scoped observation · 5. ``env.step``:
-every agent answers at once and its tool calls queue C1 intents; the OASIS clock must then read
-this round · 6. validate the drained intents (C1 schema, the tool's argument schema, branch,
+every agent answers at once and its tool calls queue C1 intents; the step's own advance of the
+OASIS clock is taken back, so it still reads this round (``Clock.settle_step``) · 6. validate the drained intents (C1 schema, the tool's argument schema, branch,
 round, mandate, an id used once and fitting the ledger) · 7. clear them in
 ``(priority class, minute, actor, call)`` order against the ledger · 8. run the mandatory
 settlements · 9. keep the C2 results for delivery next round · 10. record the transcript and
@@ -714,7 +715,7 @@ class Coordinator:
         world.unusable = None
 
     async def _steps(self, world: World, conn: Connection, trans: Any) -> RoundResult:
-        round_ = world.clock.advance()  # 1
+        round_ = world.clock.advance(world.platform.sandbox_clock)  # 1: before any social write
         ctx = RoundContext(round_, conn)
         await self._hook("advanced", world, ctx)
         posts, arrivals = deliver(world, conn)  # 2
@@ -727,7 +728,7 @@ class Coordinator:
         await self._hook("observed", world, ctx)
         await world.env.step({agent: world.oasis.LLMAction()  # 5
                               for agent in world.agents.values()})
-        world.clock.check(world.platform.sandbox_clock.time_step)
+        world.clock.settle_step(world.platform.sandbox_clock)
         world.ingest_posts()
         await self._hook("stepped", world, ctx)
         intents = await self._hook("intents", world, ctx, world.queue.drain())

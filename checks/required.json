@@ -179,6 +179,7 @@
       "tests/simulation/test_coupled.py::test_public_shock_traceable_response",
       "tests/simulation/test_coupled.py::test_the_advance_lands_at_the_next_round_boundary",
       "tests/simulation/test_coupled.py::test_the_oasis_clock_and_the_round_clock_agree",
+      "tests/simulation/test_coupled.py::test_a_rounds_posts_and_traces_are_stamped_with_that_round",
       "tests/simulation/test_coupled.py::test_clearing_order_does_not_depend_on_arrival",
       "tests/simulation/test_coupled.py::test_the_coordinator_sorts_whatever_order_it_is_handed",
       "tests/simulation/test_coupled.py::test_a_late_receipt_is_overdue_before_observations",
