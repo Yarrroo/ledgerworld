@@ -432,7 +432,9 @@ def _request_advance(world: World, c: Connection, intent: ActionIntent) -> Journ
         for request in world.state.requests.values():  # an accepted request it answers
             if request["facility_id"] == facility_id:
                 request["status"] = "disbursed"
-        # The offer drawn on, for the trace: the intent names a facility, or none at all.
+        # The item drawn on, for the trace, which cannot find it from the intent: a draw names
+        # its facility by ledger id, or not at all. A snapshot's offered facility has no offer
+        # item, only its contract.
         offer = f"offer:{facility_id}"
         world.state.acted_on[intent.intent_id] = (
             offer if any(i.get("id") == offer for i in world.state.items)
