@@ -24,7 +24,7 @@
     <p v-if="flow.message" class="lw-note" role="status" data-test="message">{{ flow.message }}</p>
     <p v-for="[run, held] in waiting" :key="run" class="lw-actions">
       <RouterLink class="lw-button lw-button--quiet" data-test="elsewhere"
-                  :to="{ path: route.path, query: { run_id: run, execution_id: held.followedId } }">
+                  :to="{ path: route.path, query: { run_id: run, execution_id: held.unseen === 'execution' ? held.followedId : undefined } }">
         <template v-if="held.unseen === 'execution'">Read execution {{ held.followedId }} of run {{ run }}</template>
         <template v-else>Open run {{ run }}: approval outcome unknown</template>
       </RouterLink>
@@ -292,7 +292,7 @@ const reviewWhy = computed(() => {
   if (held?.unseen === 'execution') {
     return `Execution ${held.followedId} of this run answered while you were away: read it first`
   }
-  if (inflight.has(state.body.run_id) && !flow.submitting) {
+  if (inflight.has(state.body.run_id) && !(flow.submitting && sentFrom === screen)) {
     return 'A request for this run, sent from a screen since left, is not answered yet'
   }
   return ''
@@ -339,6 +339,7 @@ function hold (runId, patch) {
 }
 
 let screen = 0 // bumped by every navigation to another run or execution, and on leaving the view
+let sentFrom = -1 // the screen this view's own POST in flight was sent from
 
 /** Where a POST was sent from, fixed when it is sent: the run, and the screen it was asked on. */
 const origin = () => ({ run: state.body.run_id, screen })
@@ -370,6 +371,7 @@ async function confirmApproval () {
   const from = origin()
   const runId = from.run
   flow.submitting = true
+  sentFrom = screen
   inflight.add(runId)
   flow.message = ''
   try {
@@ -411,6 +413,7 @@ async function executePlan () {
   const from = origin()
   const runId = from.run
   flow.submitting = true
+  sentFrom = screen
   inflight.add(runId)
   flow.executed = true
   try {
@@ -577,10 +580,9 @@ watch(() => state.body, (body) => {
 // What the tab holds for the run on screen is shown as soon as it changes, not only on the next
 // load: an answer that found its run already on screen (sent from a screen since left, or before
 // a navigation to the same run), or the quarantine forgotten. A load is the body watcher's.
-watch(() => {
-  const held = state.body && unresolved.get(state.body.run_id)
-  return [state.body?.run_id, held?.blocked, held?.followedId, held?.unseen]
-}, ([run], [before]) => {
+const heldHere = () => state.body && unresolved.get(state.body.run_id)
+watch([() => state.body?.run_id, () => heldHere()?.blocked, () => heldHere()?.followedId,
+  () => heldHere()?.unseen], ([run], [before]) => {
   if (state.status === 'loaded' && run === before) restore(state.body)
 })
 

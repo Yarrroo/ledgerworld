@@ -786,15 +786,13 @@ describe('a POST answered after a query navigation stays with its own run', () =
     ])
   })
 
-  it('an outcome delivered to its run closes a review opened there meanwhile', async () => {
+  it('an outcome answered after moving to the same run is shown there, with no review opened meanwhile', async () => {
     const { w, hold } = await heldOn('POST /executions')
     await approve(w)
     await w.get('[data-test="execute"]').trigger('click')
     await w.vm.$router.push('/execution?run_id=run-1')
     await flushPromises()
-    await w.get('[data-test="review-plan"]').trigger('click')
-    await flushPromises()
-    expect(w.find('[data-test="review"]').exists()).toBe(true)
+    expect(disabled(w, 'review-plan')).toBe(true)
     hold.release({ as_of: '2026-11-05T10:00:05Z', mode: 'fake', execution_id: 'apr-1' })
     await flushPromises()
     expect(w.find('[data-test="review"]').exists()).toBe(false)
@@ -944,6 +942,19 @@ describe('a POST answered after a query navigation stays with its own run', () =
     held.fail(timeout())
     await flushPromises()
     expect(text(w, 'elsewhere')).toBe('Open run run-1: approval outcome unknown')
+    expect(w.get('[data-test="elsewhere"]').attributes('href')).toBe('/execution?run_id=run-1')
+  })
+
+  it('returning to a run in the same view while its POST is unanswered does not offer a review', async () => {
+    const { w } = await heldOn('POST /executions')
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await w.vm.$router.push('/execution?run_id=run-2')
+    await flushPromises()
+    await w.vm.$router.push('/execution')
+    await flushPromises()
+    expect(text(w, 'review-why')).toBe('A request for this run, sent from a screen since left, is not answered yet')
+    expect(disabled(w, 'review-plan')).toBe(true)
   })
 
   it('a refusal for another run is shown even while this run is blocked', async () => {
