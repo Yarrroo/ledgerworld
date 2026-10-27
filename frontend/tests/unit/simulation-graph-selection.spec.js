@@ -66,9 +66,6 @@ async function open (answer) {
   const w = mount(Simulation, { attachTo: document.body, global: { plugins: [router, i18n] } })
   await flushPromises()
   mounted.push(w)
-  // The upstream view draws on a data change or a window resize, not when it mounts.
-  window.dispatchEvent(new Event('resize'))
-  await flushPromises()
   return { w, router, gets: () => gets }
 }
 

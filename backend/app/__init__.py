@@ -5,6 +5,10 @@ MiroFish Backend - Flask应用工厂
 import os
 import warnings
 
+from .execution.boundary import bootstrap
+
+bootstrap()
+
 # 抑制 multiprocessing resource_tracker 的警告（来自第三方库如 transformers）
 # 需要在所有其他导入之前设置
 warnings.filterwarnings("ignore", message=".*resource_tracker.*")
@@ -13,6 +17,7 @@ from flask import Flask, request
 from flask_cors import CORS
 
 from .config import Config
+bootstrap()
 from .utils.logger import setup_logger, get_logger
 
 

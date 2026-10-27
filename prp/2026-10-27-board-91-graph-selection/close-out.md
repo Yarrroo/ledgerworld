@@ -27,6 +27,7 @@ it from the graph but left its details open. The upstream `GraphPanel` keeps its
   avoid merge collisions; a selection-reconciling `GraphPanel` would change upstream behaviour).
 
 ## Follow-ups / known gaps
-- The upstream graph view draws on a data change or a resize, never on mount, and the screen
-  mounts it only after the run loads: a finished run opens with an empty graph until the operator
-  scrubs or resizes. Pre-existing; a fix for its own item.
+- None open. The blank first graph noted at first close was fixed beside this item by board item
+  89 (`LiveGraph.vue` hands `GraphPanel` its data after mount). On merging main, the screen holds
+  `LiveGraph`, which passes `closeDetailPanel` through, and the selection spec no longer
+  dispatches a resize to get a drawing.

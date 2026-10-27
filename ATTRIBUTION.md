@@ -15,8 +15,28 @@ an upstream path is modified or deleted and not listed in the second table.
 | `CLAUDE.md` | rules for coding agents working on this repo |
 | `pyproject.toml`, `uv.lock` | the root uv workspace (`backend`, `packages/oasis-finance`) and its lock |
 | `packages/oasis-finance/` | finance extensions of camel-oasis: the finance tool boundary (typed tools that queue C1 intents, scoped observations, one-repair guardrail) |
+| `backend/app/finance/` | money and contract schemas, the double-entry ledger store and its migrations, spendability, lending, collateral |
+| `backend/app/simulation/` | the coupled agent world: clock, coordinator, observations, branches, memory, transcripts, scenario families, interview |
+| `backend/app/decisions/` | the three policies, feasibility, objective, nonanticipativity, reverse stress |
+| `backend/app/execution/` | approval binding, the execution gateway, outbox, leg states, reconciliation |
+| `backend/app/connectors/` | the Airwallex connector: client, fake and live sandbox transports, webhooks |
+| `backend/app/api/v1/` | the `/api/v1` routes (contract C6) |
+| `backend/app/jobs/` | the run queue, its worker and its records |
+| `backend/app/reports/` | grounded reports |
+| `backend/app/demo/` | the seven-beat demo |
+| `backend/app/testing/` | `ScriptedModel`, `FakeGraphMemory` and their scripted plans |
+| `backend/tests/finance/` | ledger tests placed beside the upstream backend tests |
+| `contracts/` | JSON Schemas C1–C6 and their valid and invalid examples |
+| `fixtures/`, `scenarios/` | the synthetic money fixtures LF-1 and LF-2, the demo world and the six scenario families |
+| `frontend/src/views/Overview.vue`, `Treasury.vue`, `Lending.vue`, `Simulation.vue` | the new screens |
+| `frontend/src/api/v1.js`, `frontend/src/components/ActionFeed.vue`, `CashPaths.vue`, `Scrubber.vue`, `frontend/src/styles/tokens.css` | their API client, components and design tokens |
+| `frontend/tests/unit/`, `frontend/vitest.config.js` | frontend unit tests |
+| `deploy/` | one-machine deployment: compose file, image, role entrypoint, host settings, their tests |
+| `scripts/demo.sh` | the one-command demo |
+| `refmodel/` | reference models and findings used to check the simulation design |
+| `tests/` (except the upstream `test_local_star_*` files) | the offline test suite by area, and the tests of the merge gate (`tests/test_skeleton.py`) |
+| `docs/` | architecture, schema and screenshots |
 | `checks/` | the merge gate and its checks |
-| `tests/test_skeleton.py` | tests of the merge gate and its checks |
 | `.github/workflows/ci.yml` | CI: merge gate, PostgreSQL tests |
 | `prp/` | system brief, design and task briefs |
 
@@ -27,7 +47,8 @@ an upstream path is modified or deleted and not listed in the second table.
 | `README.md` | replaced by this project's README; the upstream text stays in the import commit and `README-ZH.md` |
 | `.env.example` | lists every variable this project reads, names only, no values |
 | `.gitignore` | adds `var/` and `frontend/dist/` to the upstream rules |
-| `backend/app/__init__.py` | registers the `/api/v1` blueprint (`app.api.v1.register`) in `create_app` |
+| `backend/app/__init__.py` | registers the `/api/v1` blueprint (`app.api.v1.register`) in `create_app`; wires the simulation boundary around config loading |
+| `backend/app/services/simulation_runner.py` | wires the shared scrubbed environment into all upstream simulation subprocess launches |
 | `frontend/src/router/index.js` | adds the `/overview`, `/treasury`, `/lending` and `/simulation` routes; upstream routes unchanged |
 | `frontend/src/components/GraphPanel.vue` | exposes its own `closeDetailPanel` so the `/simulation` screen closes a selection when the round or run changes |
 | `frontend/package.json` | adds the `test:unit` script and its dev dependencies (vitest, happy-dom, @vue/test-utils) |
