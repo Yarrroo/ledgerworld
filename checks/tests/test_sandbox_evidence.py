@@ -7,6 +7,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 CHECKS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CHECKS))
 
@@ -46,7 +48,13 @@ def test_submission_cites_the_receipt():
     text = (ROOT / "docs" / "submission.md").read_text()
     assert "evidence/sandbox-receipt.json" in text
     assert RUN_ID in text
-    assert "no sandbox receipt is committed" not in text.lower()
+
+
+@pytest.mark.parametrize("doc", ["README.md", "docs/submission.md"])
+def test_doc_no_longer_says_no_receipt_is_committed(doc):
+    text = " ".join((ROOT / doc).read_text().lower().split())
+    assert "evidence/sandbox-receipt.json" in text
+    assert "no sandbox receipt is committed" not in text
 
 
 def test_evidence_readme_labels_the_run():

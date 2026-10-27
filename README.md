@@ -120,8 +120,9 @@ are in [docs/schema.md](docs/schema.md).
   connector finds a Mode B deposit by its exact reference (`find_deposit`) and waits on it
   (`wait_for_deposit`, at most ten reads one second apart) until it shows a terminal status; one
   still pending or unreadable after that wait stays unknown for the operator and is never resent.
-  The receipt says which mode ran. No sandbox
-  receipt is committed in this repository yet.
+  The receipt says which mode ran. One sandbox receipt is committed as evidence:
+  [docs/evidence/sandbox-receipt.json](docs/evidence/sandbox-receipt.json) (Mode B, scripted
+  model, 3/3 checkpoints live; [what it is](docs/evidence/README.md)).
 - **Scripted vs live model:** in fake mode, the actors' choices come from a `ScriptedModel` plan.
   That proves the wiring, not an independent model's judgement. The demo receipt records
   `model: scripted` or `live`. The deployed worker runs scripted families only, and
