@@ -14,20 +14,23 @@
 - `frontend/tests/unit/decide-execute.spec.js`: "unmount with a request pending", eight cases:
   six red before the fix, two pinning the merge order below.
 - `prp/2026-10-27-t19-decide-execute/design.md` §7: polling ends when the screen is left.
+- Merged with the one-generation status read (design.md §7: a status poll never overwrites a
+  newer read): `poll()` keeps that answer/failure logic, behind the abort signal and the
+  disposal checks.
 - Merged with the execution quarantine (prp/2026-10-27-xreview-t19-execution-quarantine: an
   unresolved block survives leaving and returning): a late POST answer still records an unknown
   outcome in tab memory before the disposal guard, so returning restores the block and resumes
   the lookup. Two seam tests pin that order; both fail if the guard moves above `hold()`.
 
 ## Verification
-- `npx vitest run` (frontend): 116 tests passed before the merge with main, 149 after (main
-  brought more). The spec ran 20 times with 0 red runs both before and after (fake timers).
+- `npx vitest run` (frontend): 116 tests passed before merging main, 155 after the two merges
+  (main brought more). The spec ran 20 times with 0 red runs at each stage (fake timers).
   `vite build` green.
 - Browser (Playwright, mocked API, 390×844 · 768×1024 · 1440×900): one status read held, the
   user goes to Overview, the read is released and the browser waits 12 s. Status reads stayed
   at 2. With the pre-fix `Execution.vue` swapped in at 390×844 they reached 4. No horizontal
   overflow at any tier.
-- Review: two rounds on the fix and two on the merge, nothing left open.
+- Review: two rounds on the fix and one or two on each merge, nothing left open.
 
 ## Follow-ups / known gaps
 - `useReading` (src/api/v1.js) has no unmount awareness: its loader reads are not cancelled.
