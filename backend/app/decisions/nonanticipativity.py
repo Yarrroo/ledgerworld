@@ -95,8 +95,10 @@ class Leaf:
         return self.versions[0][0] if self.versions else NEVER
 
     def visible_at(self, t_h: int) -> tuple[bool, Any]:
-        seen = [value for h, value in self.versions if h <= t_h]
-        return (True, seen[-1]) if seen else (False, None)
+        for h, value in reversed(self.versions):
+            if h <= t_h:
+                return True, value
+        return False, None
 
 
 World = Mapping[str, Leaf]
@@ -229,12 +231,11 @@ def paired_history_check(policy: Policy, tree: ScenarioTree) -> dict[str, list[D
     """
     decisions = {sid: [guarded_decide(policy, world, r) for r in range(tree.rounds)]
                  for sid, world in tree.scenarios.items()}
+    seen = {sid: [d.obs_hash for d in ds] for sid, ds in decisions.items()}
+    acted = {sid: [canonical(d.actions) for d in ds] for sid, ds in decisions.items()}
     for r in range(tree.rounds):
         for a, b in combinations(decisions, 2):
-            seen_a = [d.obs_hash for d in decisions[a][: r + 1]]
-            seen_b = [d.obs_hash for d in decisions[b][: r + 1]]
-            if seen_a == seen_b and (canonical(decisions[a][r].actions)
-                                     != canonical(decisions[b][r].actions)):
+            if seen[a][: r + 1] == seen[b][: r + 1] and acted[a][r] != acted[b][r]:
                 raise AnticipationViolation.side_channel(r, [a, b])
     return decisions
 
