@@ -18,7 +18,8 @@
   platform's task draws from it for its whole life, and wraps that env's `step`, so the
   recommender `env.step` runs directly draws from it whoever calls it. `capture`, `restore` and
   `fingerprint` read and write it, with `setstate` in place, never by replacing the object.
-  `World.seed` (dead) is gone. The coordinator is unchanged.
+  `World.seed` stays: T09's checkpoint records it so a fork starts from the same stream. The
+  coordinator is unchanged.
 - `checks/required.json`: the three new tests join `failed_round_rolls_back` (g2).
 
 ## Verification
@@ -65,3 +66,15 @@
   no longer shared with camel's draws). No fixture or stored evidence pins OASIS recommendations.
 - T09 (`branches.fork`) must restore `rng_state` with `world.rng.setstate`, not by assigning a new
   `Random`: the platform task holds the object.
+
+## Red return from the landing train (d5d6b9a)
+- The train failed this order's three RNG tests. Cause: the train's shared venv installs the
+  workspace members editable from one train worktree, so a candidate gated in another worktree
+  imported `app` and `oasis_finance` from that tree (without this change) while running its own
+  tests. Reproduced by putting a `main` checkout's sources on `PYTHONPATH`: the same three fail.
+  Fix: pytest's `pythonpath` now lists `backend` and `packages/oasis-finance/src` after `.`, ahead
+  of site-packages. Under the same shadowing they pass, and the full collection passes
+  (1049 passed, 1 skipped).
+- Merging main brought T09 (`branches.py`), which reads `World.seed`; round 1 had removed it as
+  dead, so it is back. T09's notes that the RNG is process-global are corrected, and
+  `test_parent_unchanged` now compares the RNG too.
