@@ -88,7 +88,9 @@ def _earliest_unmet(policy: str, evals: list[Evaluation]) -> dict | None:
         f = e.feasibility
         for o in f.unmet:
             found.append(((o.due_h, 0), {"kind": "obligation", "id": o.id, "due_h": o.due_h,
-                                         "short_minor": o.short_minor, "scenario": e.scenario}))
+                                         "short_minor": o.short_minor, "scenario": e.scenario,
+                                         **{k: v for k, v in (("account", o.account),
+                                                              ("currency", o.currency)) if v}}))
         if f.breached:
             found.append(((f.floor.breach_h[0], 1), {
                 "kind": "reserve_floor", "account": f.account, "at_h": f.floor.breach_h[0],
@@ -116,12 +118,14 @@ def _binding(earliest: dict, evals: list[Evaluation], tried: list[Evaluation],
     e = next(e for e in evals if e.scenario == earliest["scenario"])
     if earliest["kind"] == "obligation":
         o = next(o for o in e.feasibility.obligations if o.id == earliest["id"])
-        owed = f"{o.id} {grouped(o.amount_minor, currency)}" + (
+        # An obligation in another currency than the account's says which, beside each amount.
+        cur, tag = (o.currency, f" {o.currency}") if o.currency else (currency, "")
+        owed = f"{o.id} {grouped(o.amount_minor, cur)}{tag}" + (
             "" if o.overdue_h is None else f" overdue since t={o.due_h}")
         at = f"t={o.checked_h}{_unknown(e.feasibility, o.checked_h)}"
         if not o.short_minor:  # the cash was there; it went out late, or not at all
             return f"{owed} not paid by its deadline, though free cash covered it at {at}"
-        return (f"free cash {grouped(o.amount_minor - o.short_minor, currency)} at {at} < "
+        return (f"free cash {grouped(o.amount_minor - o.short_minor, cur)}{tag} at {at} < "
                 f"{owed}; no reservation is touched")
     f = e.feasibility.floor
     return (f"min cash {grouped(f.min_cash, currency)} at t={f.at_h}"

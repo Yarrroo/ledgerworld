@@ -280,6 +280,13 @@ def _n(minor: int) -> str:
     return f"{minor:,}"
 
 
+def replayable(obs: Mapping[str, Any]) -> bool:
+    """Whether the one-account, one-currency replay world can hold this position: every
+    obligation is on the home account in its currency (an idle holding is left out, as before)."""
+    return all(o["currency"] == obs["currency"] and "account" not in o
+               for o in obs["obligations"])
+
+
 def replay_world(selected: Any, b: Baseline, events: Sequence[Mapping[str, Any]] = (),
                  *, actor: str = "treasury",
                  pool_state: tuple[int, dict[str, int]] | None = None) -> ReplayPath:
@@ -289,6 +296,9 @@ def replay_world(selected: Any, b: Baseline, events: Sequence[Mapping[str, Any]]
     events = resolve(b, [*b.shock, *events])
     obs0 = snapshot_observation(b.snapshot, epoch=b.epoch, account=_account(b).id,
                                 terms=b.terms, horizon_h=b.horizon_h)
+    if not replayable(obs0):
+        raise ValueError("not_replayable: the rules-replay world holds one account in one "
+                         "currency, and this treasury owes on another")
     t0 = obs0["t_h"]
     start, end = t0 // HOURS_PER_ROUND, b.horizon_h // HOURS_PER_ROUND
     if b.horizon_h % HOURS_PER_ROUND:
