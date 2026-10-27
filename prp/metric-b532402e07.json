@@ -1,0 +1,17 @@
+{
+  "board_item": 41,
+  "goal": "g4",
+  "goal_text": "A judge can follow it",
+  "line_id": "l_b532402e07",
+  "outcome": "A judge opening the deployed URL cold, with no token, walks Overview -> Live Simulation -> Decisions -> Execution in four read-only clicks (Open simulation, Compare policies, View execution, Open receipt) on the backend's prepared demonstration run, with every screen's assertions passing (cash, payroll deadline, min projected cash vs floor, mode banner; mid-shock scrubber; three policies with integrated beside no-action; a reconciled receipt with provider_id, journal_id, as_of and its simulated/sandbox label), end to end in 60 seconds or less at every viewport and theme. Measured on the live URL, never counted from tasks closed.",
+  "name": "judge_path_s",
+  "unit": "seconds of wall clock from just before the initial navigation until the fourth click's receipt assertions pass, maximum over the 390/1280/1440 px widths and light/dark themes; 999 means any run failed or the path could not run",
+  "source": "bash scripts/judge-path.sh \"$LEDGERWORLD_URL\" --max-seconds 60 (T26: Playwright chromium, prints the seconds, non-zero over the limit or on any failed assertion); bound to the goal by python3 checks/kpi.py g4 --print (T22), which prints 999 when LEDGERWORLD_URL is unset or the script fails. Defined in prp/2026-10-20-ledgerworld/00-system.md section 17, row g4 (KPI judge_path_s, target <= 60).",
+  "baseline": 999,
+  "baseline_observed_at": "2026-10-27T02:43:07Z",
+  "target": 60,
+  "target_comparison": "<=",
+  "direction": "down",
+  "observation": "Against the deployed URL at the commit under test, run python3 checks/kpi.py g4 --print (or bash scripts/judge-path.sh \"$LEDGERWORLD_URL\" --max-seconds 60 directly) and read the printed seconds. A failed assertion, a missing prepared run or reconciled receipt, any write request, a 404, an unset or unreachable URL, or a missing script records 999. Observe after every deploy and before the build freeze (2026-11-12) and submission close (2026-11-13 18:29 UTC). Met when the value is <= 60.",
+  "evidence": "Definition: 00-system.md section 17 (g4: KPI judge_path_s, target <= 60, seconds of scripts/judge-path.sh $LEDGERWORLD_URL, 999 on failure) and section 13 (the judge's first 60 seconds: Overview -> Live Simulation -> Decisions -> Execution, four clicks). briefs/T22.md: kpi.py g4 prints 999 when unset or failing, baseline in a bare checkout. briefs/T26.md and design/modules/ui/HANDOFF.md: judge-path.sh accept, timing window, max over widths and themes, 999 on any failed run. design/modules/ui/fixtures/judge-path.json: entry route, four clicks with routes and assertions, limit_seconds 60, failure_cases, no_observed_duration_yet true. Baseline observed 2026-10-27T02:43:07Z in this checkout at 47d43f6: LEDGERWORLD_URL unset; bash scripts/judge-path.sh -> 'No such file or directory', exit 127; python3 checks/kpi.py g4 --print -> no such file, exit 2. The path cannot run, so it records the failure value 999."
+}
