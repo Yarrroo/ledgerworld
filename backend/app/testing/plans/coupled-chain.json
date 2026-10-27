@@ -1,0 +1,57 @@
+{
+ "about": "The coupled-chain plan, copied unchanged from the agent-world fixture coupled-chain.json; tests/testing/test_doubles.py asserts the two stay equal.",
+ "source": "prp/2026-10-20-ledgerworld/design/modules/agent-world/fixtures/coupled-chain.json",
+ "plan": [
+  {
+   "actor_id": "borrower-c",
+   "round": 4,
+   "when_seen": [
+    "p-r3-1"
+   ],
+   "tool_calls": [
+    {
+     "name": "request_advance",
+     "args": {
+      "amount_minor": 1200000,
+      "currency": "USD",
+      "from": "lender",
+      "reason": "precaution after the venue rumour"
+     }
+    }
+   ]
+  },
+  {
+   "actor_id": "lender",
+   "round": 5,
+   "when_seen": [
+    "req:borrower-c:r4"
+   ],
+   "tool_calls": [
+    {
+     "name": "accept",
+     "args": {
+      "request": "req:borrower-c:r4"
+     }
+    },
+    {
+     "name": "disburse",
+     "args": {
+      "request": "req:borrower-c:r4",
+      "amount_minor": 1200000,
+      "currency": "USD",
+      "from_account": "lender/operating"
+     }
+    }
+   ]
+  },
+  {
+   "default": true,
+   "tool_calls": [
+    {
+     "name": "no_action",
+     "args": {}
+    }
+   ]
+  }
+ ]
+}
