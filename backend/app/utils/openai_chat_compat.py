@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from .llm_budget import metered
+
 
 def is_gpt5_family(model: Optional[str]) -> bool:
     """Return True when model belongs to GPT-5 family aliases/snapshots."""
@@ -54,7 +56,7 @@ def create_chat_completion(
         else:
             kwargs["max_tokens"] = max_tokens
 
-    return client.chat.completions.create(**kwargs)
+    return metered(client, model, messages, lambda: client.chat.completions.create(**kwargs))
 
 
 def extract_chat_completion_text(response: Any) -> str:

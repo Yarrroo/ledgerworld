@@ -174,6 +174,8 @@ except ImportError as e:
     sys.exit(1)
 
 
+from app.utils.llm_budget import budgeted
+
 # Twitter可用动作（不包含INTERVIEW，INTERVIEW只能通过ManualAction手动触发）
 TWITTER_ACTIONS = [
     ActionType.CREATE_POST,
@@ -1031,10 +1033,10 @@ def create_model(config: Dict[str, Any], use_boost: bool = False):
     
     print(f"{config_label} model={llm_model}, base_url={llm_base_url[:40] if llm_base_url else '默认'}...")
     
-    return ModelFactory.create(
+    return budgeted(ModelFactory.create(
         model_platform=ModelPlatformType.OPENAI,
         model_type=llm_model,
-    )
+    ))
 
 
 def get_active_agents_for_round(

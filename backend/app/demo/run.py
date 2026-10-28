@@ -184,11 +184,13 @@ def model_factory(source: str) -> Any:
     from camel.models import ModelFactory
     from camel.types import ModelPlatformType
 
+    from ..utils.llm_budget import budgeted
+
     def live(actor_id: str, w: Any) -> Any:
-        return ModelFactory.create(
+        return budgeted(ModelFactory.create(
             model_platform=ModelPlatformType.OPENAI_COMPATIBLE_MODEL,
             model_type=os.environ["LLM_MODEL_NAME"], api_key=os.environ["LLM_API_KEY"],
-            url=os.environ["LLM_BASE_URL"])
+            url=os.environ["LLM_BASE_URL"]))
 
     return live
 

@@ -351,4 +351,6 @@ class ScriptedModel(BaseModelBackend):
         def create(*, messages, tools=None, **_ignored) -> ChatCompletion:
             return self.run(list(messages), tools=tools)
 
-        return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        # ``scripted``: a scripted answer is free, so the live model budget never meters it.
+        return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+                               scripted=True)
