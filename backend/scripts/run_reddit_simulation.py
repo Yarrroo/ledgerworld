@@ -118,6 +118,7 @@ def setup_oasis_logging(log_dir: str):
 try:
     from camel.models import ModelFactory
     from camel.types import ModelPlatformType
+    from app.utils.llm_budget import budgeted
     import oasis
     from oasis import (
         ActionType,
@@ -461,10 +462,10 @@ class RedditSimulationRunner:
         
         print(f"LLM配置: model={llm_model}, base_url={llm_base_url[:40] if llm_base_url else '默认'}...")
         
-        return ModelFactory.create(
+        return budgeted(ModelFactory.create(
             model_platform=ModelPlatformType.OPENAI,
             model_type=llm_model,
-        )
+        ))
     
     def _get_active_agents_for_round(
         self, 
