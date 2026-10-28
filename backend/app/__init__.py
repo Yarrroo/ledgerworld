@@ -74,6 +74,8 @@ def create_app(config_class=Config):
     app.register_blueprint(report_bp, url_prefix='/api/report')
     from .api import v1
     v1.register(app)
+    from .api.legacy_security import register as register_legacy_security
+    register_legacy_security(app)
     
     # 健康检查
     @app.route('/health')
