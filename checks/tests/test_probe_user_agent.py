@@ -51,17 +51,17 @@ def test_each_probe_sends_named_user_agent(monkeypatch, probe):
     monkeypatch.setenv("LEDGERWORLD_URL", DEMO)
     if probe == "url_ok":
         assert url_ok.main([DEMO]) == 0
+        expected_calls = [DEMO]
     elif probe == "recording_ready":
         assert recording_ready.http_get(DEMO + "/api/v1/health") == (200, body)
+        expected_calls = [DEMO + "/api/v1/health"]
     elif probe == "submission_links":
         assert submission_links.fetch(DEMO) == (200, json.dumps(body))
+        expected_calls = [DEMO]
     else:
         run_monitor()
-    assert calls == (
-        [DEMO + "/api/v1/health", DEMO + "/api/v1/overview"]
-        if probe == "monitor"
-        else [DEMO + "/api/v1/health"] if probe == "recording_ready" else [DEMO]
-    )
+        expected_calls = [DEMO + "/api/v1/health", DEMO + "/api/v1/overview"]
+    assert calls == expected_calls
 
 
 @pytest.mark.parametrize("path", ["docs/submission.md", "README.md", "deploy/host.toml"])
