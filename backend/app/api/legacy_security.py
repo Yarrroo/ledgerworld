@@ -4,7 +4,12 @@ from pathlib import Path
 
 from flask import Flask, current_app, jsonify, request
 
-from ..legacy_paths import resource_path, validate_resource_id
+from ..legacy_paths import (
+    contained_path,
+    resource_path,
+    validate_resource_id,
+    validate_resource_links,
+)
 
 RESOURCE_FIELDS = ("project_id", "simulation_id", "report_id")
 
@@ -16,14 +21,17 @@ def resource_exists(field: str, resource_id: str) -> bool:
     from ..services.report_agent import ReportManager
     from ..services.simulation_manager import SimulationManager
 
+    roots = {"project_id": ProjectManager.PROJECTS_DIR,
+             "simulation_id": SimulationManager.SIMULATION_DATA_DIR,
+             "report_id": ReportManager.REPORTS_DIR}
+    validate_resource_links(roots[field], resource_id)
     if field == "project_id":
         return Path(ProjectManager._get_project_meta_path(resource_id)).is_file()
     if field == "simulation_id":
         return (Path(SimulationManager()._get_simulation_dir(resource_id)) / "state.json").is_file()
     folder = Path(ReportManager._get_report_folder(resource_id))
     legacy = Path(resource_path(ReportManager.REPORTS_DIR, resource_id) + ".json")
-    if not legacy.resolve().is_relative_to(Path(ReportManager.REPORTS_DIR).resolve()):
-        raise ValueError("Resource path is outside its storage root")
+    contained_path(ReportManager.REPORTS_DIR, legacy)
     return folder.is_dir() or legacy.is_file()
 
 

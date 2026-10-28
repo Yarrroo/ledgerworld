@@ -2547,10 +2547,8 @@ class ReportManager:
     @classmethod
     def get_report_by_simulation(cls, simulation_id: str) -> Optional[Report]:
         """根据模拟ID获取报告"""
-        if not os.path.isdir(cls.REPORTS_DIR):
-            return None
-        
-        for item in os.listdir(cls.REPORTS_DIR):
+        from ..legacy_paths import resource_entries
+        for item in resource_entries(cls.REPORTS_DIR, legacy_json=True):
             item_path = os.path.join(cls.REPORTS_DIR, item)
             # 新格式：文件夹
             if os.path.isdir(item_path):
@@ -2569,11 +2567,9 @@ class ReportManager:
     @classmethod
     def list_reports(cls, simulation_id: Optional[str] = None, limit: int = 50) -> List[Report]:
         """列出报告"""
-        if not os.path.isdir(cls.REPORTS_DIR):
-            return []
-        
+        from ..legacy_paths import resource_entries
         reports = []
-        for item in os.listdir(cls.REPORTS_DIR):
+        for item in resource_entries(cls.REPORTS_DIR, legacy_json=True):
             item_path = os.path.join(cls.REPORTS_DIR, item)
             # 新格式：文件夹
             if os.path.isdir(item_path):

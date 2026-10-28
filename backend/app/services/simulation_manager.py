@@ -478,10 +478,11 @@ class SimulationManager:
     
     def list_simulations(self, project_id: Optional[str] = None) -> List[SimulationState]:
         """列出所有模拟"""
+        from ..legacy_paths import resource_entries
         simulations = []
         
         if os.path.exists(self.SIMULATION_DATA_DIR):
-            for sim_id in os.listdir(self.SIMULATION_DATA_DIR):
+            for sim_id in resource_entries(self.SIMULATION_DATA_DIR):
                 # 跳过隐藏文件（如 .DS_Store）和非目录文件
                 sim_path = os.path.join(self.SIMULATION_DATA_DIR, sim_id)
                 if sim_id.startswith('.') or not os.path.isdir(sim_path):

@@ -140,3 +140,47 @@ def test_allowed_id_boundaries_reach_existing_resources(client, legacy_storage, 
     (folder / "progress.json").write_text('{"status":"generating"}')
     assert client.get(f"/api/report/{resource_id}/progress").status_code == 200
 
+
+@pytest.mark.parametrize(("field", "path"), [
+    ("project_id", "/api/graph/project/list"),
+    ("simulation_id", "/api/simulation/list"),
+    ("report_id", "/api/report/list"),
+])
+def test_lists_skip_non_resource_entries(client, legacy_storage, field, path):
+    root = legacy_storage[field]
+    root.mkdir()
+    (root / ".DS_Store").write_text("metadata")
+    (root / "bad.name").mkdir()
+    assert client.get(path).status_code == 200
+
+
+def test_cyclic_symlink_is_a_controlled_refusal(client, legacy_storage):
+    root = legacy_storage["simulation_id"]
+    root.mkdir()
+    (root / "loop").symlink_to("loop")
+    assert client.get("/api/simulation/loop").status_code == 400
+
+
+@pytest.mark.parametrize("field", ["project_id", "simulation_id", "report_id"])
+def test_nested_resource_file_cannot_escape_root(client, legacy_storage, tmp_path, field):
+    project = ProjectManager.create_project()
+    if field == "project_id":
+        resource_id, filename = project.project_id, "project.json"
+        path = f"/api/graph/project/{resource_id}"
+    elif field == "simulation_id":
+        state = SimulationManager().create_simulation(project.project_id, "graph_existing")
+        resource_id, filename = state.simulation_id, "state.json"
+        path = f"/api/simulation/{resource_id}"
+    else:
+        resource_id, filename = "report_existing", "progress.json"
+        path = f"/api/report/{resource_id}/progress"
+    folder = legacy_storage[field] / resource_id
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / filename
+    outside = tmp_path / "outside.json"
+    outside.write_text(target.read_text() if target.exists() else '{"status":"outside"}')
+    if target.exists():
+        target.unlink()
+    target.symlink_to(outside)
+    assert client.get(path).status_code == 400
+

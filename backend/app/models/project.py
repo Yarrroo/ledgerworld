@@ -212,11 +212,9 @@ class ProjectManager:
         Returns:
             项目列表，按创建时间倒序
         """
-        if not os.path.isdir(cls.PROJECTS_DIR):
-            return []
-        
+        from ..legacy_paths import resource_entries
         projects = []
-        for project_id in os.listdir(cls.PROJECTS_DIR):
+        for project_id in resource_entries(cls.PROJECTS_DIR):
             project = cls.get_project(project_id)
             if project:
                 projects.append(project)
