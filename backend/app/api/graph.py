@@ -801,7 +801,7 @@ def _build_graph_impl():
             except Exception as e:
                 # 更新项目状态为失败
                 build_logger.error(f"[{task_id}] 图谱构建失败: {str(e)}")
-                build_logger.debug(traceback.format_exc())
+                build_logger.error(traceback.format_exc())
                 
                 with _project_build_lock(project_id):
                     project.status = ProjectStatus.FAILED
@@ -812,7 +812,7 @@ def _build_graph_impl():
                         task_id,
                         status=TaskStatus.FAILED,
                         message=t('progress.buildFailed', error=str(e)),
-                        error=traceback.format_exc()
+                        error=str(e)
                     )
         
         # 启动后台线程
@@ -832,10 +832,10 @@ def _build_graph_impl():
     except GraphInUseError as e:
         return jsonify({"success": False, "error": str(e)}), 409
     except Exception as e:
+        logger.error(traceback.format_exc())
         return jsonify({
             "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()
+            "error": str(e)
         }), 500
 
 
@@ -897,10 +897,10 @@ def get_graph_data(graph_id: str):
         })
         
     except Exception as e:
+        logger.error(traceback.format_exc())
         return jsonify({
             "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()
+            "error": str(e)
         }), 500
 
 
@@ -956,8 +956,8 @@ def delete_graph(graph_id: str):
     except GraphInUseError as e:
         return jsonify({"success": False, "error": str(e)}), 409
     except Exception as e:
+        logger.error(traceback.format_exc())
         return jsonify({
             "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()
+            "error": str(e)
         }), 500

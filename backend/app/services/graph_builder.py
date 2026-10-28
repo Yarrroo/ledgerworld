@@ -14,6 +14,7 @@ from zep_cloud import BatchAddItem, EntityEdgeSourceTarget, NotFoundError
 
 from ..config import Config
 from ..models.task import TaskManager, TaskStatus
+from ..utils.logger import get_logger
 from ..utils.zep_paging import fetch_all_nodes, fetch_all_edges
 from ..utils.ontology import (
     MAX_ONTOLOGY_TYPES,
@@ -29,6 +30,8 @@ from ..utils.zep import (
 )
 from .text_processor import TextProcessor
 from ..utils.locale import t, get_locale, set_locale
+
+logger = get_logger('mirofish.graph_builder')
 
 
 @dataclass
@@ -212,8 +215,8 @@ class GraphBuilderService:
             
         except Exception as e:
             import traceback
-            error_msg = f"{str(e)}\n{traceback.format_exc()}"
-            self.task_manager.fail_task(task_id, error_msg)
+            logger.error(traceback.format_exc())
+            self.task_manager.fail_task(task_id, str(e))
     
     def create_graph(
         self,
