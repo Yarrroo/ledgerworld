@@ -2,8 +2,9 @@
 
 Every POST/PUT/PATCH/DELETE, on any blueprint, counts against its client in a fixed window; one
 over the limit answers 429 with Retry-After. The client is the CF-Connecting-IP header the
-Cloudflare tunnel sets, else the socket's address. Reads are never counted: the judge path is all
-GETs. The counters live in Redis (REDIS_URL) so every thread and process shares them, else in
+Cloudflare tunnel sets, honoured only from a loopback or private peer (the tunnel's own hop), else
+the socket's address. Reads are never counted: the judge path is all GETs; nor is the provider's
+webhook, which its signature already authenticates and whose events a 429 would only delay. The counters live in Redis (REDIS_URL) so every thread and process shares them, else in
 this process; a Redis that fails lets the write through rather than taking the app down.
 
 A body over the app's MAX_CONTENT_LENGTH (5 MB, `Config`) answers 413 before anything reads it.
@@ -11,6 +12,7 @@ A body over the app's MAX_CONTENT_LENGTH (5 MB, `Config`) answers 413 before any
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import math
 import os
@@ -26,6 +28,8 @@ WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 DEFAULT_LIMIT = 60  # writes per client per window
 DEFAULT_WINDOW_S = 60
 KEY_PREFIX = "ledgerworld:writes"
+EXEMPT_PATHS = frozenset({"/api/v1/webhooks/airwallex"})
+REDIS_TIMEOUT_S = 0.5  # a hung Redis fails the hit, which lets the write through
 
 log = logging.getLogger("ledgerworld.rate_limit")
 
@@ -61,9 +65,20 @@ class RedisCounter:
         return int(count)
 
 
+def _trusted_peer(addr: str | None) -> bool:
+    try:
+        ip = ipaddress.ip_address(addr or "")
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_private
+
+
 def client_key() -> str:
+    peer = request.remote_addr
     forwarded = (request.headers.get("CF-Connecting-IP") or "").strip()
-    return forwarded[:64] or request.remote_addr or "unknown"
+    if forwarded and _trusted_peer(peer):
+        return forwarded[:64]
+    return peer or "unknown"
 
 
 def _counter_from_env() -> MemoryCounter | RedisCounter:
@@ -72,7 +87,8 @@ def _counter_from_env() -> MemoryCounter | RedisCounter:
         return MemoryCounter()
     import redis as redis_lib
 
-    return RedisCounter(redis_lib.Redis.from_url(url))
+    return RedisCounter(redis_lib.Redis.from_url(
+        url, socket_timeout=REDIS_TIMEOUT_S, socket_connect_timeout=REDIS_TIMEOUT_S))
 
 
 def _refusal(status: int, code: str, detail: str) -> Response:
@@ -94,7 +110,7 @@ def install(app: Flask, *, counter: MemoryCounter | RedisCounter | None = None,
         cap = app.config.get("MAX_CONTENT_LENGTH")
         if cap is not None and (request.content_length or 0) > cap:
             raise RequestEntityTooLarge()
-        if request.method not in WRITE_METHODS:
+        if request.method not in WRITE_METHODS or request.path in EXEMPT_PATHS:
             return None
         now = clock()
         window = int(now // window_s)

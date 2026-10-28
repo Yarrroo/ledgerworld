@@ -6,6 +6,7 @@ import fakeredis
 import pytest
 from app import create_app
 from app.api.v1 import rate_limit
+from flask import Flask
 
 
 @pytest.fixture
@@ -46,6 +47,28 @@ def test_the_limit_is_per_client_keyed_on_cf_connecting_ip(app):
     assert c.post("/api/v1/runs", json={}).status_code != 429
 
 
+def test_cf_connecting_ip_from_a_public_peer_is_not_trusted(app):
+    c = app.test_client()
+    public = {"REMOTE_ADDR": "8.8.8.8"}
+    statuses = [c.post("/api/v1/runs", json={}, environ_base=public,
+                       headers={"CF-Connecting-IP": f"203.0.113.{i}"}).status_code
+                for i in range(4)]
+    assert statuses[3] == 429  # a fresh header per request is not a fresh client
+
+
+def test_the_signed_webhook_is_not_limited(app):
+    c = app.test_client()
+    statuses = [c.post("/api/v1/webhooks/airwallex", data=b"{}").status_code for _ in range(6)]
+    assert 429 not in statuses
+
+
+def test_the_redis_counter_times_out_instead_of_hanging(monkeypatch):
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6399/0")
+    counter = rate_limit._counter_from_env()
+    kwargs = counter.redis.connection_pool.connection_kwargs
+    assert kwargs["socket_timeout"] == kwargs["socket_connect_timeout"] == 0.5
+
+
 def test_upstream_blueprints_are_limited_too(app):
     c = app.test_client()
     statuses = [c.post("/api/graph/ontology/generate").status_code for _ in range(4)]
@@ -67,8 +90,6 @@ def test_the_window_resets_and_redis_holds_the_counts_for_every_process():
     now = [1_000.0 * 60]
 
     def make():
-        from flask import Flask
-
         app = Flask(__name__)
         app.add_url_rule("/w", "w", lambda: "ok", methods=["POST"])
         rate_limit.install(app, counter=rate_limit.RedisCounter(redis), limit=2, window_s=60,
@@ -86,8 +107,6 @@ def test_the_window_resets_and_redis_holds_the_counts_for_every_process():
 
 
 def test_a_failing_counter_lets_the_write_through():
-    from flask import Flask
-
     class Broken:
         def hit(self, *_):
             raise ConnectionError("redis is down")
