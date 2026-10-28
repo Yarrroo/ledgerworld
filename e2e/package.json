@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "description": "The judge path in a real browser: run it with scripts/judge-path.sh URL",
   "scripts": {
-    "judge-path": "playwright test --config playwright.config.ts"
+    "judge-path": "playwright test --config playwright.config.ts",
+    "test:guard": "playwright test --config guard.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1"

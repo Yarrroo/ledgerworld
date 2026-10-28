@@ -12,14 +12,15 @@
  * - "accessibility": the same four clicks untimed, with the checks at each screen, then
  *   Treasury and Lending; reduced motion is on for this one.
  *
- * Both are anonymous and read-only. Every request other than GET/HEAD is aborted before it leaves
- * the browser and fails the test: no approval, no execution, no fork, no interview. The prepared
- * demonstration run and its execution come from the deployment (Overview's `demo`); when either
- * is missing the path fails and says so, it never falls back to another run or receipt.
+ * Both are anonymous and read-only (guard.ts). Every request other than GET/HEAD, bar the
+ * Cloudflare edge's own same-origin /cdn-cgi/, is aborted before it leaves the browser and fails
+ * the test: no approval, no execution, no fork, no interview. The prepared demonstration run and
+ * its execution come from the deployment (Overview's `demo`); when either is missing the path fails and says so, it never falls back to another run or receipt.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { readOnly } from './guard'
 
 const UI = join(__dirname, '..', 'prp', '2026-10-20-ledgerworld', 'design', 'modules', 'ui', 'fixtures')
 const JUDGE = JSON.parse(readFileSync(join(UI, 'judge-path.json'), 'utf-8'))
@@ -30,18 +31,6 @@ const MODES = ['Simulated provider', 'Airwallex sandbox']
 const OUT = process.env.JUDGE_PATH_OUT
 
 interface Demo { run_id: string | null, execution_id: string | null }
-
-/** Abort and remember every write; the path is read-only by construction, not by luck. */
-async function readOnly (page: Page): Promise<string[]> {
-  const writes: string[] = []
-  await page.route('**/*', async (route) => {
-    const method = route.request().method()
-    if (method === 'GET' || method === 'HEAD') return route.continue()
-    writes.push(`${method} ${route.request().url()}`)
-    return route.abort('blockedbyclient')
-  })
-  return writes
-}
 
 const test$ = (page: Page, id: string): Locator => page.locator(`[data-test="${id}"]`)
 
@@ -250,8 +239,8 @@ async function accessible (page: Page, screen: string, phone: boolean): Promise<
 
 // -------------------------------------------------------------------------------- the tests
 
-test('timed path: Overview → Live simulation → Decisions → Execution → receipt', async ({ page }, info) => {
-  const writes = await readOnly(page)
+test('timed path: Overview → Live simulation → Decisions → Execution → receipt', async ({ page, baseURL }, info) => {
+  const writes = await readOnly(page, baseURL!)
   const started = performance.now() // just before the initial navigation
   const demo = await overview(page)
   await simulation(page, demo)
@@ -271,9 +260,9 @@ test('timed path: Overview → Live simulation → Decisions → Execution → r
 test.describe('accessibility', () => {
   test.use({ reducedMotion: 'reduce' })
 
-  test('the four screens of the path, then Treasury and Lending, read-only', async ({ page }, info) => {
+  test('the four screens of the path, then Treasury and Lending, read-only', async ({ page, baseURL }, info) => {
     const phone = (info.project.use.viewport?.width ?? 1280) < 600
-    const writes = await readOnly(page)
+    const writes = await readOnly(page, baseURL!)
     const demo = await overview(page)
     await accessible(page, 'Overview', phone)
     await focusByKeyboard(page, page.locator('a[data-test="open-simulation"]'), 'Open simulation')

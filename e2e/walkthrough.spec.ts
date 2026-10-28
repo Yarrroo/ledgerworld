@@ -8,13 +8,14 @@
  * is late, the next starts at once: the lateness is the measurement, never hidden by a shorter hold.
  * Per-beat planned and actual seconds go to $WALKTHROUGH_OUT/beats.json after every beat.
  *
- * Anonymous and read-only like judge-path.spec.ts: every request other than GET/HEAD is aborted
- * and fails the run. The fresh fork and the interview are operator POSTs, so they are not driven.
+ * Anonymous and read-only like judge-path.spec.ts (guard.ts): every request other than GET/HEAD,
+ * bar the Cloudflare edge's own same-origin /cdn-cgi/, is aborted and fails the run. The fresh fork and the interview are operator POSTs, so they are not driven.
  * A beat whose screen does not load is recorded as unreached and the run continues to the next.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
+import { readOnly } from './guard'
 
 interface Beat { beat: string, start: number, end: number, route: string, caption: string, note: string }
 interface Result {
@@ -83,15 +84,9 @@ function runs (beats: Beat[]): [number, number][] {
   return out
 }
 
-test('walkthrough rehearsal: seven timed beats, captioned and recorded', async ({ page }) => {
+test('walkthrough rehearsal: seven timed beats, captioned and recorded', async ({ page, baseURL }) => {
   mkdirSync(OUT, { recursive: true })
-  const writes: string[] = []
-  await page.route('**/*', async (route) => {
-    const method = route.request().method()
-    if (method === 'GET' || method === 'HEAD') return route.continue()
-    writes.push(`${method} ${route.request().url()}`)
-    return route.abort('blockedbyclient')
-  })
+  const writes = await readOnly(page, baseURL!)
 
   // the prepared demonstration run, as Overview names it: the other screens open on it, as the
   // judge path's clicks do; without one they open bare and the screen's own error marks them unreached
