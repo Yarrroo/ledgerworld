@@ -55,7 +55,7 @@ an upstream path is modified or deleted and not listed in the second table.
 | `frontend/package.json` | adds the `test:unit` script and its dev dependencies (vitest, happy-dom, @vue/test-utils) |
 | `frontend/package-lock.json` | the lock for those dev dependencies |
 | `backend/app/utils/openai_chat_compat.py` | `create_chat_completion` sends its request through the daily model budget (`app.utils.llm_budget.metered`) |
-| `backend/app/services/oasis_profile_generator.py` | its persona retry loop re-raises a daily model budget refusal (`LLMBudgetExceeded`) instead of retrying it |
+| `backend/app/services/oasis_profile_generator.py` | its persona retry loop takes a daily model budget refusal (`LLMBudgetExceeded`) straight to the rule-based profile instead of retrying it |
 | `backend/app/services/simulation_config_generator.py` | its config retry loop re-raises a daily model budget refusal (`LLMBudgetExceeded`) instead of retrying it |
 | `backend/scripts/run_twitter_simulation.py` | its live camel model is wrapped in the daily model budget (`app.utils.llm_budget.budgeted`) |
 | `backend/scripts/run_reddit_simulation.py` | its live camel model is wrapped in the daily model budget (`app.utils.llm_budget.budgeted`) |

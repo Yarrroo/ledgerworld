@@ -157,6 +157,10 @@ def test_prices_round_up_and_unknown_models_are_priced_high():
     assert cost_micro_usd("gpt-5-pro", 1_000_000, 0) == 15_000_000
     assert cost_micro_usd("gpt-4-turbo", 1_000_000, 0) == 10_000_000
     assert cost_micro_usd("o1", 0, 1_000_000) == 60_000_000
+    assert cost_micro_usd("o1-pro", 1_000_000, 0) == 150_000_000
+    assert cost_micro_usd("o3-pro", 1_000_000, 0) == 20_000_000
+    assert cost_micro_usd("gpt-4.5-preview", 1_000_000, 0) == 75_000_000
+    assert cost_micro_usd("qwen-plus", 1_000_000, 0) == 1_600_000
     assert cost_micro_usd("some-new-model", 1_000_000, 1_000_000) == 135_000_000
 
 
@@ -183,14 +187,30 @@ def test_concurrent_calls_hold_the_cap_before_any_returns(shared):
     assert started == 7 and len(refused) == 13
 
 
-def test_a_failed_call_gives_its_hold_back(shared):
+def test_a_failed_call_keeps_its_hold(shared):
+    # a request that timed out may still have been billed, so its prompt stays counted
     class Failing(FakeModelClient):
         def _create(self, **kwargs):
             raise TimeoutError("provider timed out")
 
     with pytest.raises(TimeoutError):
         call(Failing())
-    assert int(shared.get("ledgerworld:llm:spend:2026-10-28")) == 0
+    assert int(shared.get("ledgerworld:llm:spend:2026-10-28")) == 2  # 10 tokens at $0.15/M
+
+
+def test_a_lost_expiry_does_not_refuse_the_call(redis, clock, monkeypatch):
+    def down(*args, **kwargs):
+        raise ConnectionError("down")
+
+    monkeypatch.setattr(redis, "expire", down)
+    previous = llm_budget.use_budget(LLMBudget(redis, cap_micro_usd=1_000_000, clock=clock))
+    try:
+        client = FakeModelClient()
+        call(client)
+        assert client.calls == 1
+        assert int(redis.get("ledgerworld:llm:spend:2026-10-28")) == 150_000
+    finally:
+        llm_budget.use_budget(previous)
 
 
 def test_a_paid_response_is_returned_when_its_cost_cannot_be_written(clock):
@@ -217,15 +237,16 @@ def test_a_paid_response_is_returned_when_its_cost_cannot_be_written(clock):
         llm_budget.use_budget(previous)
 
 
-def test_the_profile_generator_stops_at_the_cap_instead_of_retrying(shared, monkeypatch):
+def test_the_profile_generator_falls_back_at_the_cap_instead_of_retrying(shared, monkeypatch):
     from app.services import oasis_profile_generator as gen
 
     shared.set("ledgerworld:llm:spend:2026-10-28", 1_000_000)
     monkeypatch.setattr("time.sleep", lambda s: pytest.fail("a refused call was retried"))
     generator = gen.OasisProfileGenerator(api_key="test-not-a-key", zep_api_key="")
     generator.client = FakeModelClient()
-    with pytest.raises(LLMBudgetExceeded):
-        generator._generate_profile_with_llm("Ada", "person", "a lender", {}, "")
+    rule_based = generator._generate_profile_rule_based("Ada", "person", "a lender", {})
+    profile = generator._generate_profile_with_llm("Ada", "person", "a lender", {}, "")
+    assert profile.keys() == rule_based.keys()
     assert generator.client.calls == 0
 
 

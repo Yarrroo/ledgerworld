@@ -614,8 +614,10 @@ class OasisProfileGenerator:
                     
                     last_error = je
                     
-            except LLMBudgetExceeded:
-                raise
+            except LLMBudgetExceeded as e:
+                # a refusal is not retried: the rule-based profile below stands in for it
+                last_error = e
+                break
             except Exception as e:
                 logger.warning(f"LLM调用失败 (attempt {attempt+1}): {str(e)[:80]}")
                 last_error = e

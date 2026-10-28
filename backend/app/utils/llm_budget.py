@@ -6,8 +6,9 @@ Every live model call passes through here: the upstream Chat Completions helper
 shared store; when the spend before that hold, other calls' holds included, has reached the cap,
 the call is refused with ``LLMBudgetExceeded`` and never leaves the process. After a call, the
 hold is replaced by its cost from the provider's reported token usage (or, when none is reported,
-from the text length at four characters a token); a call that fails gives its hold back. A
-scripted model is free and never metered.
+from the text length at four characters a token). A call that fails keeps its hold, since a
+request that timed out or was cancelled may still have been billed. A scripted model is free and
+never metered.
 
 Spend is kept in integer micro-USD per UTC day. The store is Redis at ``REDIS_URL``, shared by the
 API, the worker and every simulation subprocess; with no ``REDIS_URL`` the count is this process's
@@ -48,20 +49,25 @@ PRICES: dict[str, tuple[Decimal, Decimal]] = {
     "gpt-4.1-mini": (Decimal("0.40"), Decimal("1.60")),
     "gpt-4.1": (Decimal("2.00"), Decimal("8.00")),
     "gpt-4-turbo": (Decimal("10.00"), Decimal("30.00")),
+    "gpt-4.5": (Decimal("75.00"), Decimal("150.00")),
     "gpt-4": (Decimal("30.00"), Decimal("60.00")),
     "gpt-5-nano": (Decimal("0.05"), Decimal("0.40")),
     "gpt-5-mini": (Decimal("0.25"), Decimal("2.00")),
     "gpt-5-pro": (Decimal("15.00"), Decimal("120.00")),
     "gpt-5": (Decimal("1.25"), Decimal("10.00")),
     "o1-mini": (Decimal("1.10"), Decimal("4.40")),
+    "o1-pro": (Decimal("150.00"), Decimal("600.00")),
     "o1": (Decimal("15.00"), Decimal("60.00")),
     "o3-mini": (Decimal("1.10"), Decimal("4.40")),
+    "o3-pro": (Decimal("20.00"), Decimal("80.00")),
     "o3": (Decimal("2.00"), Decimal("8.00")),
     "o4-mini": (Decimal("1.10"), Decimal("4.40")),
     "claude-haiku": (Decimal("1.00"), Decimal("5.00")),
     "claude-sonnet": (Decimal("3.00"), Decimal("15.00")),
     "claude-opus": (Decimal("15.00"), Decimal("75.00")),
     "llama": (Decimal("1.00"), Decimal("3.00")),
+    "qwen": (Decimal("1.60"), Decimal("6.40")),
+    "deepseek": (Decimal("0.60"), Decimal("2.20")),
 }
 DEFAULT_PRICE = (Decimal("15.00"), Decimal("120.00"))
 
@@ -182,11 +188,11 @@ class LLMBudget:
         hold = cost_micro_usd(model, _estimate(_tokens(messages)), 0)
         try:
             total = int(self.store.incrby(key, hold))
-            self.store.expire(key, KEY_TTL_S)
         except Exception as error:
             raise LLMBudgetUnavailable(
                 f"the live model spend store is unreachable ({type(error).__name__}); "
                 f"live model calls are refused while {ENV_CAP} cannot be enforced") from error
+        self._expire(key)
         before = total - hold
         if before >= cap:
             self.release(key, hold)
@@ -194,6 +200,12 @@ class LLMBudget:
                 f"live model budget reached: {_usd(before)} spent on {day} (UTC) against "
                 f"{ENV_CAP}={_usd(cap)}; live model calls are refused until 00:00 UTC")
         return key, hold
+
+    def _expire(self, key: str) -> None:
+        try:
+            self.store.expire(key, KEY_TTL_S)
+        except Exception as error:  # noqa: BLE001 — the hold is written; a lost TTL is not a refusal
+            logger.warning("live model spend key %s has no expiry (%s)", key, type(error).__name__)
 
     def _adjust(self, key: str, amount: int) -> None:
         """Best effort, after the call: a store error is logged, never raised over a response."""
@@ -204,7 +216,7 @@ class LLMBudget:
                            type(error).__name__, amount, key)
 
     def release(self, key: str, hold: int) -> None:
-        """Give back the hold of a call that was refused or failed."""
+        """Give back the hold of a refused call."""
         if hold:
             self._adjust(key, -hold)
 
@@ -253,11 +265,7 @@ def metered(client: Any, model: str | None, messages: Any, call: Callable[[], An
         return call()
     meter = budget()
     key, hold = meter.reserve(model, messages)
-    try:
-        response = call()
-    except BaseException:
-        meter.release(key, hold)
-        raise
+    response = call()
     meter.settle(key, hold, model, messages, response)
     return response
 
@@ -269,11 +277,7 @@ async def ametered(client: Any, model: str | None, messages: Any,
         return await call()
     meter = budget()
     key, hold = meter.reserve(model, messages)
-    try:
-        response = await call()
-    except BaseException:
-        meter.release(key, hold)
-        raise
+    response = await call()
     meter.settle(key, hold, model, messages, response)
     return response
 
