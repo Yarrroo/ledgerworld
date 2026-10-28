@@ -4,33 +4,20 @@
  */
 import { expect, test } from '@playwright/test'
 import { readOnly } from '../guard'
-
-const ROUTES = [
-  { path: '/overview', title: 'Overview' },
-  { path: '/treasury', title: 'Treasury' },
-  { path: '/lending', title: 'Lending' },
-  { path: '/simulation', title: 'Live simulation', run: true },
-  { path: '/decisions', title: 'Decisions', run: true },
-  { path: '/execution', title: 'Execution', run: true }
-]
+import { ROUTES, demoRunId, settled, sideways, urlOf } from './routes'
 
 test('the six routes open on the prepared run', async ({ page, request, baseURL }) => {
   const writes = await readOnly(page, baseURL!)
-  const overview = await request.get('/api/v1/overview')
-  expect(overview.status()).toBe(200)
-  const runId: string | null = (await overview.json()).demo?.run_id ?? null
-  expect(runId, 'the app names no prepared demonstration run').toBeTruthy()
+  const runId = await demoRunId(request)
 
   for (const route of ROUTES) {
-    const response = await page.goto(route.run ? `${route.path}?run_id=${runId}` : route.path)
+    const response = await page.goto(urlOf(route, runId))
     expect(response?.status(), route.path).toBe(200)
     await expect(page.locator('h1'), route.path).toHaveText(route.title)
-    await expect(page.locator('main.lw-main')).toHaveAttribute('aria-busy', 'false')
+    await settled(page)
     await expect(page.locator('[data-test="mode"]').first()).toHaveText(/Simulated provider/)
     await expect(page.locator('[data-test="error"]'), `${route.path} shows a load error`).toHaveCount(0)
-    const overflow = await page.evaluate(() =>
-      document.documentElement.scrollWidth - document.documentElement.clientWidth)
-    expect(overflow, `${route.path} scrolls sideways`).toBeLessThanOrEqual(0)
+    expect(await sideways(page), `${route.path} scrolls sideways`).toBeLessThanOrEqual(0)
   }
   expect(writes, 'the smoke walk sent a write').toEqual([])
 })

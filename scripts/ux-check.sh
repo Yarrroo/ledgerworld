@@ -4,9 +4,9 @@
 #   bash scripts/ux-check.sh SPEC        e.g. bash scripts/ux-check.sh e2e/ux/smoke.spec.ts
 #
 # Builds the frontend into a fresh mktemp directory, starts the app offline (scripts/ux_app.py:
-# fake provider, SQLite, the prepared demonstration run, an in-process job queue when REDIS_URL
-# is unset), runs SPEC at 1440, 834 and 390 px with video on (e2e/ux.config.ts), then the judge
-# path (scripts/judge-path.sh) against the same app. Installs the frontend and e2e dependencies
+# fake provider, SQLite, the prepared demonstration run, an in-process job queue), runs SPEC at
+# 1440, 834 and 390 px with video on (e2e/ux.config.ts), then the judge path
+# (scripts/judge-path.sh) against the same app. Installs the frontend and e2e dependencies
 # and chromium when missing. A passing run removes its directory; a failing one keeps it (videos,
 # screenshots, the app log) and names it. Exit 0 only when both runs passed.
 set -uo pipefail
@@ -36,7 +36,6 @@ fi
 (cd "$root/frontend" && VITE_API_BASE_URL=/ npx --no-install vite build --outDir "$out/dist" \
   --emptyOutDir >"$out/build.log" 2>&1) || fail "the frontend build failed (build.log)"
 
-export PYTHONPATH="$root/backend:$root/packages/oasis-finance/src${PYTHONPATH:+:$PYTHONPATH}"
 uv run --project "$root" python "$root/scripts/ux_app.py" --dist "$out/dist" --data "$out/data" \
   >"$out/app.log" 2>&1 &
 app=$!

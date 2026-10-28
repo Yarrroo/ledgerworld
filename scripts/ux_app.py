@@ -3,9 +3,10 @@
     uv run python scripts/ux_app.py --dist DIR --data DIR [--port N]
 
 One process holds what the deployed pair (api + sim) holds: the app and the built frontend from
-one origin (deploy/serve.py), a simulation worker on a thread, and the job queue on REDIS_URL, or
-on an in-process fakeredis when REDIS_URL is unset. The ledger and the job records are a SQLite
-file in --data. Before it serves, it prepares the demonstration run and its reconciled execution
+one origin (deploy/serve.py), a simulation worker on a thread, and the job queue on an in-process
+fakeredis. The ledger and the job records are a SQLite file in --data. An inherited REDIS_URL is
+removed, never used: a worker here would take another deployment's jobs, and a fresh database
+here could not answer them. Before it serves, it prepares the demonstration run and its reconciled execution
 with the operator command's own code (app.demo.prepare), so Overview names a run and Execution a
 receipt, as on a prepared deployment.
 
@@ -23,18 +24,21 @@ import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRUB = ("AIRWALLEX_", "LLM_", "ZEP_", "LEDGERWORLD_DEMO_TOKEN")
+SCRUB = ("AIRWALLEX_", "LLM_", "ZEP_", "LEDGERWORLD_DEMO_TOKEN", "REDIS_URL")
 
 
-def offline_env(data: Path) -> None:
-    """The environment of a fake-provider, scripted-model app on ``data``'s SQLite file."""
+def offline_env(data: Path) -> str:
+    """Make this process a fake-provider, scripted-model app on ``data``'s SQLite file, with no
+    queue of anyone else's; return that file's URL."""
     for name in list(os.environ):
         if name.upper().startswith(SCRUB):
             del os.environ[name]
+    url = f"sqlite:///{data / 'app.sqlite'}"
     os.environ["AIRWALLEX_MODE"] = "fake"
-    os.environ["LEDGER_DATABASE_URL"] = f"sqlite:///{data / 'app.sqlite'}"
+    os.environ["LEDGER_DATABASE_URL"] = url
     # the upstream config loads a .env with override on import; nothing may come back from one
     os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+    return url
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,12 +54,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"{dist} holds no index.html: build the frontend first")
     data = args.data.resolve()
     data.mkdir(parents=True, exist_ok=True)
-    offline_env(data)
+    url = offline_env(data)
     sys.path[:0] = [str(ROOT / "backend"), str(ROOT / "packages/oasis-finance/src"),
                     str(ROOT / "deploy")]
     os.chdir(data)  # the upstream engine writes ./log beside its working directory
 
-    import redis as redis_lib
+    import fakeredis
     from app.api.v1.services import Services, gateway_from_env
     from app.demo import prepare
     from app.finance.store import LedgerStore
@@ -65,13 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     from app.simulation.scenarios import load_world
     from werkzeug.serving import make_server
 
-    url = os.environ["LEDGER_DATABASE_URL"]
-    if os.environ.get("REDIS_URL"):
-        redis = redis_lib.Redis.from_url(os.environ["REDIS_URL"])
-    else:
-        import fakeredis
-
-        redis = fakeredis.FakeRedis()
+    redis = fakeredis.FakeRedis()
     world = load_world()
     services = Services.build(world.snapshot, store=LedgerStore(url), redis=redis,
                               epoch=world.epoch, mode="fake", token=None,
