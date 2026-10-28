@@ -99,6 +99,8 @@ function serve (body, posts = {}) {
   vi.stubGlobal('fetch', vi.fn(async (url, init = {}) => {
     const path = new URL(url).pathname.replace('/api/v1', '')
     const method = init.method || 'GET'
+    // the shell's own read of the model label, not one of the screen's
+    if (path === '/health') return { ok: true, status: 200, json: async () => ({ ok: true, model: 'scripted' }) }
     calls.push({ path, method, headers: init.headers, body: init.body ? JSON.parse(init.body) : undefined })
     let answer = method === 'GET' && path === `/runs/${ctx.run_id}` ? body : posts[path]
     if (typeof answer === 'function') answer = await answer()

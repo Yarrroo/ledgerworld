@@ -331,7 +331,6 @@ export function useReading (load) {
   return { state, refresh }
 }
 
-
 // ------------------------------------------------------------------------------ the shell
 
 /** The faceted LedgerWorld mark in the logo blue: a drawn stand-in until the vector asset lands. */
@@ -352,9 +351,15 @@ function icon (d) {
 }
 
 let health = null
-/** The model the deployment runs its agents on, from /health once per page load; null if unread. */
-function modelSource () {
-  health ??= request('/health').then((b) => b?.model ?? null).catch(() => null)
+/**
+ * The model the deployment runs its agents on, from /health: read once per page load when it
+ * answers, read again by the next screen when it did not; null while unknown.
+ */
+export function modelSource () {
+  health ??= request('/health').then((b) => b?.model ?? null).catch(() => {
+    health = null
+    return null
+  })
   return health
 }
 
@@ -367,6 +372,8 @@ function panelId (label, taken) {
   return id
 }
 
+const PHONE = '(max-width: 767px)'
+
 /**
  * One screen, in the handoff's shell (prp/2026-10-29-ux-shell/design.md): the logo and six
  * labelled links with the current one marked (a 208 px sidebar, a 72 px icon rail below 1200 px,
@@ -376,9 +383,10 @@ function panelId (label, taken) {
  * is a body. The mode label is shown only from a loaded answer: nothing inherits an authoritative
  * badge from an earlier render.
  *
- * The panel index lists every element the screen marks `data-panel="<name>"`; the one at the top
- * of the view carries aria-current while the page scrolls. Choosing one scrolls to it and leaves
- * focus where it was.
+ * The drawer is modal while open: the page behind it is inert, Escape, the scrim or any link
+ * closes it, and leaving the phone width closes it. The panel index lists every element the
+ * screen marks `data-panel="<name>"`; the one at the top of the view carries aria-current while
+ * the page scrolls. Choosing one scrolls to it, keeps it marked, and leaves focus where it was.
  */
 export const ScreenShell = defineComponent({
   name: 'ScreenShell',
@@ -399,12 +407,17 @@ export const ScreenShell = defineComponent({
     const mainEl = ref(null)
     const contextEl = ref(null)
     const indexEl = ref(null)
-    const topbarEl = ref(null)
     const menuButton = ref(null)
+    let elements = [] // the panels' elements, in page order
+    let pinned = null // the panel last chosen from the index
     let stickyH = 0
     let frame = 0
-    let observer = null
+    let stale = { panels: true, size: true }
+    let mutations = null
+    let resizes = null
+    let phone = null
 
+    /** The sticky context bar's height, and the bottom of the sticky header the panels scroll under. */
     function measure () {
       const page = pageEl.value
       if (!page) return
@@ -412,57 +425,72 @@ export const ScreenShell = defineComponent({
       const contextH = ctx && getComputedStyle(ctx).position === 'sticky' ? ctx.offsetHeight : 0
       page.style.setProperty('--lw-context-h', `${contextH}px`)
       const index = indexEl.value
-      const bar = topbarEl.value
-      const barH = bar && getComputedStyle(bar).display !== 'none' ? bar.offsetHeight : 0
-      stickyH = index ? (parseFloat(getComputedStyle(index).top) || 0) + index.offsetHeight
-        : Math.max(contextH, barH)
+      stickyH = index ? (parseFloat(getComputedStyle(index).top) || 0) + index.offsetHeight : 0
       page.style.setProperty('--lw-sticky-h', `${stickyH}px`)
     }
 
-    /** The panel at the top of the view: the last one whose top has reached the sticky header. */
+    /**
+     * The panel at the top of the view: the last one whose top has reached the sticky header; at
+     * the page's end, the chosen one while it is in view, else the last.
+     */
     function track () {
-      const list = panels.value
-      if (!list.length) return
-      const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2
-      let current = list[0].id
-      for (const p of list) {
-        const el = document.getElementById(p.id)
-        if (el && el.getBoundingClientRect().top <= stickyH + 16) current = p.id
+      if (!elements.length) return
+      let current = elements[0]
+      for (const el of elements) {
+        if (el.getBoundingClientRect().top <= stickyH + 16) current = el
       }
-      if (atEnd && window.scrollY > 0) current = list[list.length - 1].id
-      active.value = current
+      const chosen = pinned && elements.find((el) => el.id === pinned)
+      const top = chosen?.getBoundingClientRect().top
+      if (!chosen || top < 0 || top >= window.innerHeight) pinned = null
+      const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2
+      if (atEnd && window.scrollY > 0) current = pinned ? chosen : elements[elements.length - 1]
+      active.value = current.id
     }
 
+    /** Whether the marked panels changed since the last look. */
     function collect () {
       const taken = new Set()
-      const found = mainEl.value
-        ? [...mainEl.value.querySelectorAll('[data-panel]')].map((el) => {
-            if (!el.id || taken.has(el.id)) el.id = panelId(el.dataset.panel, taken)
-            else taken.add(el.id)
-            return { id: el.id, label: el.dataset.panel }
-          })
-        : []
-      const key = (list) => list.map((p) => `${p.id}=${p.label}`).join('|')
-      if (key(found) !== key(panels.value)) panels.value = found
+      const found = mainEl.value ? [...mainEl.value.querySelectorAll('[data-panel]')] : []
+      for (const el of found) {
+        if (!el.id || taken.has(el.id)) el.id = panelId(el.dataset.panel, taken)
+        else taken.add(el.id)
+      }
+      const same = found.length === elements.length &&
+        found.every((el, n) => el === elements[n] && el.dataset.panel === panels.value[n].label)
+      elements = found
+      if (!same) panels.value = found.map((el) => ({ id: el.id, label: el.dataset.panel }))
+      return !same
     }
 
-    function schedule () {
+    /** Batch the work into one frame: re-read the panels or the sizes only when they may have changed. */
+    function schedule (what) {
+      if (what) stale = { ...stale, [what]: true }
       if (frame) return
-      frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(async () => {
         frame = 0
-        measure()
+        const { panels: rescan, size } = stale
+        stale = { panels: false, size: false }
+        if (rescan && collect()) await nextTick() // the index renders before it is measured
+        if (rescan || size) measure()
         track()
       })
     }
+    const onScroll = () => schedule()
+    const onResize = () => schedule('size')
 
     function closeMenu (refocus) {
       if (!menu.value) return
       menu.value = false
-      if (refocus) menuButton.value?.focus()
+      // the page stops being inert on the next render; only then can Menu take focus
+      if (refocus) nextTick(() => menuButton.value?.focus())
     }
 
     function onKey (event) {
       if (event.key === 'Escape') closeMenu(true)
+    }
+
+    function onPhone (event) {
+      if (!event.matches) closeMenu(false)
     }
 
     watch(() => route.fullPath, () => closeMenu(false))
@@ -472,39 +500,41 @@ export const ScreenShell = defineComponent({
       const nav = document.getElementById('lw-nav')
       ;(nav?.querySelector('a[aria-current="page"]') ?? nav?.querySelector('ul a'))?.focus()
     })
-    watch(panels, () => nextTick(schedule))
 
     onMounted(() => {
       modelSource().then((m) => { model.value = m })
-      collect()
-      observer = new MutationObserver(() => { collect(); schedule() })
-      if (mainEl.value) {
-        observer.observe(mainEl.value, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-panel'] })
+      mutations = new MutationObserver(() => schedule('panels'))
+      mutations.observe(mainEl.value, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-panel'] })
+      if (window.ResizeObserver) {
+        resizes = new ResizeObserver(onResize)
+        resizes.observe(contextEl.value)
       }
-      window.addEventListener('scroll', schedule, { passive: true })
-      window.addEventListener('resize', schedule)
+      phone = window.matchMedia?.(PHONE)
+      phone?.addEventListener?.('change', onPhone)
+      window.addEventListener('scroll', onScroll, { passive: true })
+      window.addEventListener('resize', onResize)
       window.addEventListener('keydown', onKey)
-      schedule()
+      schedule('panels')
     })
     onBeforeUnmount(() => {
-      observer?.disconnect()
+      mutations?.disconnect()
+      resizes?.disconnect()
+      phone?.removeEventListener?.('change', onPhone)
       if (frame) cancelAnimationFrame(frame)
-      window.removeEventListener('scroll', schedule)
-      window.removeEventListener('resize', schedule)
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onResize)
       window.removeEventListener('keydown', onKey)
     })
 
     /** A link to Overview that is never marked current: the nav link and the crumb say where you are. */
     function home (attrs, children) {
-      return h('a', {
-        ...attrs,
-        href: router.resolve('/overview').href,
-        onClick: (event) => {
-          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button) return
-          event.preventDefault()
-          router.push('/overview')
-        }
-      }, children)
+      return h(RouterLink, { to: '/overview', custom: true }, {
+        default: ({ href, navigate }) => h('a', {
+          ...attrs,
+          href,
+          onClick: (event) => { closeMenu(false); navigate(event) }
+        }, children)
+      })
     }
 
     function jump (event, id) {
@@ -513,6 +543,7 @@ export const ScreenShell = defineComponent({
       if (!el) return
       const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
       el.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' })
+      pinned = id
       active.value = id
     }
 
@@ -521,34 +552,33 @@ export const ScreenShell = defineComponent({
       const busy = status === 'loading'
       const time = formatTime(body?.as_of)
       const mode = body ? (LABELS[body.mode] || body.mode) : 'Provider mode not loaded'
-      const brand = (where) => home({ class: 'lw-brand', 'aria-label': 'LedgerWorld, Overview', 'data-test': `brand-${where}` },
+      const brand = (attrs) => home({ class: 'lw-brand', 'aria-label': 'LedgerWorld, Overview', ...attrs },
         [logo(), h('span', 'LedgerWorld')])
 
-      const topbar = h('header', { class: 'lw-topbar', ref: topbarEl }, [
-        brand('header'),
+      const topbar = h('header', { class: 'lw-topbar', inert: menu.value }, [
+        brand(),
         h('span', { class: 'lw-topbar__mode' }, body ? mode : ''),
         h('button', {
           type: 'button', class: 'lw-menu', ref: menuButton, 'data-test': 'menu',
           'aria-expanded': menu.value ? 'true' : 'false', 'aria-controls': 'lw-nav',
           onClick: () => { menu.value = !menu.value }
-        }, [icon(menu.value ? 'M6 6l12 12M18 6L6 18' : 'M4 7h16M4 12h16M4 17h16'), h('span', 'Menu')])
+        }, [icon('M4 7h16M4 12h16M4 17h16'), h('span', 'Menu')])
       ])
 
-      const nav = h('nav', {
-        id: 'lw-nav', class: ['lw-nav', { 'is-open': menu.value }], 'aria-label': 'Screens', 'data-test': 'nav'
-      }, [
-        brand('nav'),
+      const nav = h('nav', { id: 'lw-nav', class: ['lw-nav', { 'is-open': menu.value }], 'aria-label': 'Screens' }, [
+        brand({ 'data-test': 'brand-nav' }),
         h('ul', screens.value.map((s) => h('li', { key: s.path }, [
           h(RouterLink, {
             to: s.path,
             'aria-current': route.path === s.path ? 'page' : undefined,
-            'data-test': `nav-${s.path.slice(1)}`
+            onClick: () => closeMenu(false)
           }, () => [icon(s.icon), h('span', s.label)])
         ])))
       ])
       const scrim = menu.value && h('div', { class: 'lw-scrim', 'aria-hidden': 'true', onClick: () => closeMenu(true) })
 
-      const run = typeof route.query.run_id === 'string' ? route.query.run_id : null
+      const queried = typeof route.query.run_id === 'string' ? route.query.run_id : null
+      const run = body?.run_id ?? queried
       const crumbs = h('nav', { class: 'lw-crumbs', 'aria-label': 'Breadcrumb', 'data-test': 'breadcrumb' }, [
         h('ol', [
           h('li', [home({}, 'LedgerWorld')]),
@@ -559,7 +589,7 @@ export const ScreenShell = defineComponent({
       const context = h('div', { class: 'lw-context', ref: contextEl, 'data-test': 'banner' }, [
         crumbs,
         h('div', { class: 'lw-context__bar' }, [
-          h('span', { class: 'lw-banner__mode', 'data-test': 'mode' }, mode),
+          h('span', { class: 'lw-context__mode', 'data-test': 'mode' }, mode),
           model.value && h('span', { class: 'lw-context__item', 'data-test': 'model' }, ['Model ', h('b', model.value)]),
           body && h('span', { class: 'lw-context__item', 'data-test': 'context-as-of' },
             ['As of ', h('b', time.utc), ` · ${time.local}`]),
@@ -602,7 +632,7 @@ export const ScreenShell = defineComponent({
       const footer = SOURCE_URL && h('p', { class: 'lw-source' }, [
         h('a', { href: SOURCE_URL }, 'Source code (AGPL-3.0)')
       ])
-      const main = h('main', { class: 'lw-main', ref: mainEl, 'aria-busy': busy ? 'true' : 'false' }, [
+      const main = h('main', { class: 'lw-main', ref: mainEl, inert: menu.value, 'aria-busy': busy ? 'true' : 'false' }, [
         context, h('h1', props.title), index, ...notices, content, footer
       ])
       return h('div', { class: 'lw-page', ref: pageEl }, [topbar, nav, scrim, main])
