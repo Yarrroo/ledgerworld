@@ -11,7 +11,7 @@ from app.services.simulation_manager import SimulationManager
 
 
 @pytest.fixture
-def client(legacy_storage, monkeypatch):
+def client(legacy_storage, monkeypatch, offline_legacy_services):
     token = uuid.uuid4().hex
     monkeypatch.setenv("LEDGERWORLD_DEMO_TOKEN", token)
     app = create_app()

@@ -7,7 +7,7 @@ from app.api.v1.services import Services
 from app.simulation.scenarios import load_world
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def offline_legacy_services(monkeypatch):
     def from_env(cls):
         world = load_world()

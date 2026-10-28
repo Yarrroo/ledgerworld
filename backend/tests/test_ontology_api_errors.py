@@ -24,6 +24,7 @@ def _post_ontology(client):
 def test_ontology_api_returns_safe_truncation_error_and_failed_project(
     tmp_path,
     monkeypatch,
+    offline_legacy_services,
 ):
     class FailingGenerator:
         def generate(self, **kwargs):
@@ -50,7 +51,7 @@ def test_ontology_api_returns_safe_truncation_error_and_failed_project(
     assert project.error == response.json["error"]
 
 
-def test_ontology_api_does_not_expose_provider_error_body(tmp_path, monkeypatch):
+def test_ontology_api_does_not_expose_provider_error_body(tmp_path, monkeypatch, offline_legacy_services):
     class ProviderError(RuntimeError):
         status_code = 401
         request_id = "request-safe-id"

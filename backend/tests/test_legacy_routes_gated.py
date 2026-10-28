@@ -10,7 +10,7 @@ PREFIXES = ("/api/graph", "/api/simulation", "/api/report")
 
 
 @pytest.fixture
-def legacy_app(monkeypatch, legacy_storage):
+def legacy_app(monkeypatch, legacy_storage, offline_legacy_services):
     for field, root in legacy_storage.items():
         folder = root / "existing_id"
         folder.mkdir(parents=True)
@@ -68,7 +68,7 @@ def test_legacy_get_remains_public(legacy_app):
             assert app.test_client().get(rule_path(rule)).status_code == 200
 
 
-def test_unconfigured_token_admits_nobody(monkeypatch):
+def test_unconfigured_token_admits_nobody(monkeypatch, offline_legacy_services):
     monkeypatch.delenv("LEDGERWORLD_DEMO_TOKEN", raising=False)
     app = create_app()
     app.extensions["ledgerworld"].token = None
@@ -84,7 +84,7 @@ def test_other_routes_keep_their_own_auth(legacy_app):
     assert client.post("/api/v1/runs", json={}).status_code == 401
 
 
-def test_app_fixture_never_builds_a_provider_gateway(monkeypatch):
+def test_app_fixture_never_builds_a_provider_gateway(monkeypatch, offline_legacy_services):
     from app.api.v1 import services
 
     calls = []

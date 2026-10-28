@@ -31,7 +31,7 @@ def _write_failed_state(root, simulation_id="sim_failed"):
     return simulation_id
 
 
-def test_realtime_endpoints_expose_terminal_failure(tmp_path, monkeypatch):
+def test_realtime_endpoints_expose_terminal_failure(tmp_path, monkeypatch, offline_legacy_services):
     simulation_id = _write_failed_state(tmp_path)
     monkeypatch.setattr(Config, "OASIS_SIMULATION_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(SimulationManager, "SIMULATION_DATA_DIR", str(tmp_path))
