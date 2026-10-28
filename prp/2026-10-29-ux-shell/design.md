@@ -13,13 +13,14 @@ rebuilt; the six views keep their bodies and gain only `data-panel` labels.
 |---|---|
 | ≥1200 px | 208 px sidebar: logo + wordmark, six labelled links, active link marked (`aria-current="page"`, sage fill + forest rule) |
 | 768–1199 px | 72 px icon rail; each link an icon with its name beneath (accessible name = the name) |
-| <768 px | 48 px header: logo, mode, Menu button; a drawer (`nav.lw-nav`) lists all six; Escape and link choice close it, focus returns to Menu |
+| <768 px | 48 px header: logo, mode, Menu button; a modal drawer (`nav.lw-nav`, the page behind it inert) lists all six; Escape, the scrim, any link or a wider layout closes it; Escape returns focus to Menu |
 
 Above the page title on every width: breadcrumb (`LedgerWorld › Screen`, plus `run <id>` when the
 route carries one) and a context bar — mode (`data-test="mode"`), model, as of (UTC · local),
 snapshot / source (`data-test="source"`). Below it, the **panel index**: one link per element the
 view marks `data-panel="<name>"`; the one nearest the top of the viewport carries
-`aria-current="true"` and updates while scrolling (scroll listener + rAF, no focus moves).
+`aria-current="true"` and updates while scrolling (one rAF per frame, no focus moves); a panel
+chosen from the index stays marked even where the page's end stops the scroll short of it.
 
 Visual system: tokens in `frontend/src/styles/tokens.css` — ivory `#FAF8F3`, ink `#17251E`,
 forest `#174A38` (primary/buttons), logo blue `#2469E8` (logo only), sage `#E9EEE7` (selected),

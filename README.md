@@ -91,6 +91,10 @@ app, the simulation worker, PostgreSQL 16 and Redis 7. With no variables set, it
 **Tests.** The merge gate runs offline. Tests marked `live` or `pg` are skipped by default.
 `uv run pytest -m pg` runs the PostgreSQL tests against `LEDGER_DATABASE_URL`, and
 `npm --prefix frontend run test:unit` runs the frontend unit tests.
+`bash scripts/ux-check.sh e2e/ux/<spec>.spec.ts` checks a screen flow in a real browser: it builds
+the frontend, starts the app offline on this machine (fake provider, SQLite, a prepared
+demonstration run), runs the spec at 1440, 834 and 390 px with video on, then the judge path
+against the same app.
 
 ## Architecture
 
