@@ -57,6 +57,13 @@ def test_doc_no_longer_says_no_receipt_is_committed(doc):
     assert "no sandbox receipt is committed" not in text
 
 
+def test_airwallex_contract_points_at_the_committed_receipt():
+    text = " ".join((ROOT / "docs" / "airwallex-contract.md").read_text().split())
+    assert RUN_ID in text
+    assert "evidence/sandbox-receipt.json" in text
+    assert "the receipt stays in `var/demo/`" not in text.lower()
+
+
 def test_evidence_readme_labels_the_run():
     text = (EVIDENCE / "README.md").read_text()
     for label in (RUN_ID, "2024-09-27", "Mode B", "scripted", "command-line demo store"):
