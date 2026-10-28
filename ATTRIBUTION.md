@@ -44,7 +44,7 @@ an upstream path is modified or deleted and not listed in the second table.
 
 | Path | Why |
 |---|---|
-| `README.md` | replaced by this project's README; the upstream text stays in the import commit and `README-ZH.md` |
+| `README.md` | replaced by this project's README, linking the stable demo origin; the upstream text stays in the import commit and `README-ZH.md` |
 | `.env.example` | lists every variable this project reads, names only, no values |
 | `.gitignore` | adds `var/` and `frontend/dist/` to the upstream rules |
 | `backend/app/__init__.py` | registers the `/api/v1` blueprint (`app.api.v1.register`) in `create_app`; wires the simulation boundary around config loading |

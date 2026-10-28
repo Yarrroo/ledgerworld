@@ -98,7 +98,7 @@ association. A green offline test proves neither sandbox execution nor a working
 ## Links
 
 - Repository: https://github.com/Yarrroo/ledgerworld
-- Demo: https://peterson-prefix-assumptions-hits.trycloudflare.com
+- Demo: https://ledgerworld.moonward.net
 - Video: pending recording and publication; the [shot list](video-script.md) is not a video URL.
 - Setup: [README](../README.md#setup)
 - Architecture: [System and boundaries](architecture.md)
