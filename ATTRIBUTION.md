@@ -48,7 +48,7 @@ an upstream path is modified or deleted and not listed in the second table.
 | `README.md` | replaced by this project's README, linking the stable demo origin; the upstream text stays in the import commit and `README-ZH.md` |
 | `.env.example` | lists every variable this project reads, names only, no values |
 | `.gitignore` | adds `var/` and `frontend/dist/` to the upstream rules |
-| `backend/app/__init__.py` | registers the `/api/v1` blueprint (`app.api.v1.register`) in `create_app`; wires the simulation boundary around config loading; installs the write limit and body cap (`app.api.v1.rate_limit.install`) |
+| `backend/app/__init__.py` | registers the `/api/v1` blueprint (`app.api.v1.register`) in `create_app`; wires the simulation boundary around config loading; installs the write limit and body cap (`app.api.v1.rate_limit.install`) and the id check on the upstream routes (`app.api.v1.legacy_ids.install`) |
 | `backend/app/config.py` | `MAX_CONTENT_LENGTH` is 5 MB, not 50 MB: a larger body answers 413 |
 | `backend/app/services/simulation_runner.py` | wires the shared scrubbed environment into all upstream simulation subprocess launches |
 | `frontend/src/router/index.js` | adds the `/overview`, `/treasury`, `/lending`, `/simulation`, `/decisions` and `/execution` routes; `/` redirects to `/overview` and the upstream home page moves to `/home`; other upstream routes unchanged |
@@ -61,3 +61,4 @@ an upstream path is modified or deleted and not listed in the second table.
 | `backend/scripts/run_twitter_simulation.py` | its live camel model is wrapped in the daily model budget (`app.utils.llm_budget.budgeted`) |
 | `backend/scripts/run_reddit_simulation.py` | its live camel model is wrapped in the daily model budget (`app.utils.llm_budget.budgeted`) |
 | `backend/scripts/run_parallel_simulation.py` | its live camel model is wrapped in the daily model budget (`app.utils.llm_budget.budgeted`) |
+| `backend/app/services/simulation_manager.py` | `_get_simulation_dir` creates a simulation's directory only when its state is saved, never on a read |

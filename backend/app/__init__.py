@@ -47,6 +47,9 @@ def create_app(config_class=Config):
     # Security 6: the 5 MB body cap and the per-client write limit, ahead of every other hook
     from .api.v1 import rate_limit
     rate_limit.install(app)
+    # Security 2: a malformed id never reaches an upstream route
+    from .api.v1 import legacy_ids
+    legacy_ids.install(app)
 
     # 启用CORS
     CORS(app, resources={r"/api/*": {"origins": "*"}})
