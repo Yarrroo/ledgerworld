@@ -2,26 +2,28 @@
 
 Every live model call passes through here: the upstream Chat Completions helper
 (``openai_chat_compat.create_chat_completion``) and every camel model backend wrapped by
-``budgeted``. Before a call, the day's spend is read from the shared store; once it has reached
-the cap the call is refused with ``LLMBudgetExceeded`` and never leaves the process. After a call,
-its cost is estimated from the provider's reported token usage (or, when none is reported, from
-the text length at four characters a token) and added to the day's total. A scripted model is
-free and never metered.
+``budgeted``. Before a call, the prompt's estimated cost is held against the day's spend in the
+shared store; when the spend before that hold, other calls' holds included, has reached the cap,
+the call is refused with ``LLMBudgetExceeded`` and never leaves the process. After a call, the
+hold is replaced by its cost from the provider's reported token usage (or, when none is reported,
+from the text length at four characters a token); a call that fails gives its hold back. A
+scripted model is free and never metered.
 
 Spend is kept in integer micro-USD per UTC day. The store is Redis at ``REDIS_URL``, shared by the
 API, the worker and every simulation subprocess; with no ``REDIS_URL`` the count is this process's
-own. A call that is already in flight when the cap is reached still completes, so one round of
-concurrent calls can overshoot the cap by their own cost.
+own. Because a hold covers the prompt only, calls admitted together can overshoot the cap by their
+completions' cost. A response already paid for is always returned, even when its cost cannot be
+written back.
 """
 
 from __future__ import annotations
 
 import functools
-import inspect
 import json
+import logging
 import os
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from typing import Any
@@ -33,20 +35,35 @@ KEY_TTL_S = 2 * 24 * 3600
 CHARS_PER_TOKEN = 4
 MICRO = Decimal(1_000_000)
 
-# USD per million tokens (input, output), matched by the longest model-name prefix. A model not
-# listed is priced at DEFAULT_PRICE, deliberately high, so an unknown model reaches the cap early
-# rather than late.
+logger = logging.getLogger(__name__)
+
+# USD per million tokens (input, output), matched by the longest model-name prefix after any
+# "provider/" part. A model not listed is priced at DEFAULT_PRICE, the top of the market, so an
+# unknown model reaches the cap early rather than late. A family prefix carries the price of its
+# dearest common member.
 PRICES: dict[str, tuple[Decimal, Decimal]] = {
     "gpt-4o-mini": (Decimal("0.15"), Decimal("0.60")),
     "gpt-4o": (Decimal("2.50"), Decimal("10.00")),
     "gpt-4.1-nano": (Decimal("0.10"), Decimal("0.40")),
     "gpt-4.1-mini": (Decimal("0.40"), Decimal("1.60")),
     "gpt-4.1": (Decimal("2.00"), Decimal("8.00")),
+    "gpt-4-turbo": (Decimal("10.00"), Decimal("30.00")),
+    "gpt-4": (Decimal("30.00"), Decimal("60.00")),
     "gpt-5-nano": (Decimal("0.05"), Decimal("0.40")),
     "gpt-5-mini": (Decimal("0.25"), Decimal("2.00")),
+    "gpt-5-pro": (Decimal("15.00"), Decimal("120.00")),
     "gpt-5": (Decimal("1.25"), Decimal("10.00")),
+    "o1-mini": (Decimal("1.10"), Decimal("4.40")),
+    "o1": (Decimal("15.00"), Decimal("60.00")),
+    "o3-mini": (Decimal("1.10"), Decimal("4.40")),
+    "o3": (Decimal("2.00"), Decimal("8.00")),
+    "o4-mini": (Decimal("1.10"), Decimal("4.40")),
+    "claude-haiku": (Decimal("1.00"), Decimal("5.00")),
+    "claude-sonnet": (Decimal("3.00"), Decimal("15.00")),
+    "claude-opus": (Decimal("15.00"), Decimal("75.00")),
+    "llama": (Decimal("1.00"), Decimal("3.00")),
 }
-DEFAULT_PRICE = (Decimal("2.50"), Decimal("10.00"))
+DEFAULT_PRICE = (Decimal("15.00"), Decimal("120.00"))
 
 
 class LLMBudgetExceeded(RuntimeError):
@@ -152,34 +169,51 @@ class LLMBudget:
         return self.cap_micro_usd if self.cap_micro_usd is not None else daily_cap_micro_usd()
 
     def spent(self, day: str | None = None) -> int:
+        return int(self.store.get(self._key(day or self._day())) or 0)
+
+    def reserve(self, model: str | None, messages: Any) -> tuple[str, int]:
+        """Hold the prompt's estimated cost before a call, or refuse the call at the cap.
+
+        Returns the day's key and the hold, for ``settle`` or ``release``.
+        """
+        day = self._day()
+        key = self._key(day)
+        cap = self.cap()
+        hold = cost_micro_usd(model, _estimate(_tokens(messages)), 0)
         try:
-            raw = self.store.get(self._key(day or self._day()))
+            total = int(self.store.incrby(key, hold))
+            self.store.expire(key, KEY_TTL_S)
         except Exception as error:
             raise LLMBudgetUnavailable(
                 f"the live model spend store is unreachable ({type(error).__name__}); "
                 f"live model calls are refused while {ENV_CAP} cannot be enforced") from error
-        return int(raw or 0)
-
-    def check(self) -> None:
-        """Refuse a live call once the day's spend has reached the cap."""
-        day = self._day()
-        cap = self.cap()
-        spent = self.spent(day)
-        if spent >= cap:
+        before = total - hold
+        if before >= cap:
+            self.release(key, hold)
             raise LLMBudgetExceeded(
-                f"live model budget reached: {_usd(spent)} spent on {day} (UTC) against "
+                f"live model budget reached: {_usd(before)} spent on {day} (UTC) against "
                 f"{ENV_CAP}={_usd(cap)}; live model calls are refused until 00:00 UTC")
+        return key, hold
 
-    def charge(self, model: str | None, prompt_tokens: int, completion_tokens: int) -> int:
-        """Add one call's cost to the day's total and return the new total."""
-        key = self._key(self._day())
-        total = int(self.store.incrby(key, cost_micro_usd(model, prompt_tokens,
-                                                          completion_tokens)))
-        self.store.expire(key, KEY_TTL_S)
-        return total
+    def _adjust(self, key: str, amount: int) -> None:
+        """Best effort, after the call: a store error is logged, never raised over a response."""
+        try:
+            self.store.incrby(key, amount)
+        except Exception as error:  # noqa: BLE001 — any store failure: the response stands
+            logger.warning("live model spend not written back (%s): %d micro-USD on %s",
+                           type(error).__name__, amount, key)
 
-    def record(self, model: str | None, messages: Any, response: Any) -> int:
-        return self.charge(model, *_usage(response, messages))
+    def release(self, key: str, hold: int) -> None:
+        """Give back the hold of a call that was refused or failed."""
+        if hold:
+            self._adjust(key, -hold)
+
+    def settle(self, key: str, hold: int, model: str | None, messages: Any, response: Any) -> int:
+        """Replace a call's hold by its cost, and return the cost."""
+        cost = cost_micro_usd(model, *_usage(response, messages))
+        if cost != hold:
+            self._adjust(key, cost - hold)
+        return cost
 
 
 _budget: LLMBudget | None = None
@@ -214,38 +248,48 @@ def is_scripted(client: Any) -> bool:
 
 
 def metered(client: Any, model: str | None, messages: Any, call: Callable[[], Any]) -> Any:
-    """Run one Chat Completions call under the cap, unless ``client`` is scripted."""
+    """Run one model call under the cap, unless ``client`` is scripted."""
     if is_scripted(client):
         return call()
     meter = budget()
-    meter.check()
-    response = call()
-    meter.record(model, messages, response)
+    key, hold = meter.reserve(model, messages)
+    try:
+        response = call()
+    except BaseException:
+        meter.release(key, hold)
+        raise
+    meter.settle(key, hold, model, messages, response)
+    return response
+
+
+async def ametered(client: Any, model: str | None, messages: Any,
+                   call: Callable[[], Awaitable[Any]]) -> Any:
+    """``metered`` for an awaitable call."""
+    if is_scripted(client):
+        return await call()
+    meter = budget()
+    key, hold = meter.reserve(model, messages)
+    try:
+        response = await call()
+    except BaseException:
+        meter.release(key, hold)
+        raise
+    meter.settle(key, hold, model, messages, response)
     return response
 
 
 def budgeted(backend: Any) -> Any:
-    """Meter a live camel model backend: its ``_run`` and ``_arun`` check and charge the cap."""
+    """Meter a live camel model backend: its ``_run`` and ``_arun`` are held to the cap."""
     model = str(getattr(backend, "model_type", "") or "")
     run, arun = backend._run, backend._arun
 
     @functools.wraps(run)
     def _run(messages, *args, **kwargs):
-        meter = budget()
-        meter.check()
-        response = run(messages, *args, **kwargs)
-        meter.record(model, messages, response)
-        return response
+        return metered(backend, model, messages, lambda: run(messages, *args, **kwargs))
 
     @functools.wraps(arun)
     async def _arun(messages, *args, **kwargs):
-        meter = budget()
-        meter.check()
-        response = arun(messages, *args, **kwargs)
-        if inspect.isawaitable(response):
-            response = await response
-        meter.record(model, messages, response)
-        return response
+        return await ametered(backend, model, messages, lambda: arun(messages, *args, **kwargs))
 
     backend._run, backend._arun = _run, _arun
     return backend

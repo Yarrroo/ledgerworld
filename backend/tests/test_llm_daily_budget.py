@@ -112,8 +112,8 @@ def test_a_response_without_usage_is_estimated_from_its_text(shared):
     client = FakeModelClient()
     client.usage = None
     call(client, model="unknown-model")
-    # json of MESSAGES is 38 chars: 10 tokens at the default $2.50 per million input tokens
-    assert int(shared.get("ledgerworld:llm:spend:2026-10-28")) == 25
+    # json of MESSAGES is 38 chars: 10 tokens at the default $15 per million input tokens
+    assert int(shared.get("ledgerworld:llm:spend:2026-10-28")) == 150
 
 
 def test_cap_defaults_to_five_dollars_and_rejects_nonsense():
@@ -135,7 +135,7 @@ def test_a_zero_cap_refuses_every_live_call(shared, monkeypatch):
 
 def test_an_unreachable_store_refuses_live_calls(clock, monkeypatch):
     class Down:
-        def get(self, key):
+        def incrby(self, key, amount):
             raise ConnectionError("down")
 
     previous = llm_budget.use_budget(LLMBudget(Down(), clock=clock))
@@ -152,7 +152,92 @@ def test_prices_round_up_and_unknown_models_are_priced_high():
     assert cost_micro_usd("gpt-4o-mini", 1, 0) == 1  # 0.15 micro-USD rounds up
     assert cost_micro_usd("openai/gpt-4o-mini", 1_000_000, 1_000_000) == 750_000
     assert cost_micro_usd("gpt-4o", 1_000_000, 0) == 2_500_000
-    assert cost_micro_usd("Llama-4-Maverick", 1_000_000, 0) == 2_500_000
+    assert cost_micro_usd("meta-llama/Llama-4-Maverick-17B", 1_000_000, 0) == 1_000_000
+    # a dearer member of a priced family is not priced as the family
+    assert cost_micro_usd("gpt-5-pro", 1_000_000, 0) == 15_000_000
+    assert cost_micro_usd("gpt-4-turbo", 1_000_000, 0) == 10_000_000
+    assert cost_micro_usd("o1", 0, 1_000_000) == 60_000_000
+    assert cost_micro_usd("some-new-model", 1_000_000, 1_000_000) == 135_000_000
+
+
+def test_concurrent_calls_hold_the_cap_before_any_returns(shared):
+    # A round of agents calls at once: each holds its prompt's cost before answering, so only
+    # the calls that fit under the $1 cap reach the model.
+    started = 0
+
+    class Backend(FakeBackend):
+        async def _arun(self, messages, response_format=None, tools=None):
+            nonlocal started
+            started += 1
+            await asyncio.sleep(0.01)
+            return self._response()
+
+    big = [{"role": "user", "content": "x" * 4_000_000}]  # ~1M tokens, $0.15 held each
+
+    async def round_():
+        backends = [budgeted(Backend()) for _ in range(20)]
+        return await asyncio.gather(*(b._arun(big) for b in backends), return_exceptions=True)
+
+    results = asyncio.run(round_())
+    refused = [r for r in results if isinstance(r, LLMBudgetExceeded)]
+    assert started == 7 and len(refused) == 13
+
+
+def test_a_failed_call_gives_its_hold_back(shared):
+    class Failing(FakeModelClient):
+        def _create(self, **kwargs):
+            raise TimeoutError("provider timed out")
+
+    with pytest.raises(TimeoutError):
+        call(Failing())
+    assert int(shared.get("ledgerworld:llm:spend:2026-10-28")) == 0
+
+
+def test_a_paid_response_is_returned_when_its_cost_cannot_be_written(clock):
+    class Flaky:
+        def __init__(self):
+            self.value, self.calls = 0, 0
+
+        def incrby(self, key, amount):
+            self.calls += 1
+            if self.calls > 1:
+                raise ConnectionError("down")
+            self.value += amount
+            return self.value
+
+        def expire(self, key, seconds):
+            return True
+
+    previous = llm_budget.use_budget(LLMBudget(Flaky(), cap_micro_usd=1_000_000, clock=clock))
+    try:
+        client = FakeModelClient()
+        assert call(client).usage is client.usage
+        assert client.calls == 1
+    finally:
+        llm_budget.use_budget(previous)
+
+
+def test_the_profile_generator_stops_at_the_cap_instead_of_retrying(shared, monkeypatch):
+    from app.services import oasis_profile_generator as gen
+
+    shared.set("ledgerworld:llm:spend:2026-10-28", 1_000_000)
+    monkeypatch.setattr("time.sleep", lambda s: pytest.fail("a refused call was retried"))
+    generator = gen.OasisProfileGenerator(api_key="test-not-a-key", zep_api_key="")
+    generator.client = FakeModelClient()
+    with pytest.raises(LLMBudgetExceeded):
+        generator._generate_profile_with_llm("Ada", "person", "a lender", {}, "")
+    assert generator.client.calls == 0
+
+
+def test_the_config_generator_stops_at_the_cap_instead_of_retrying(shared, monkeypatch):
+    from app.services import simulation_config_generator as gen
+
+    shared.set("ledgerworld:llm:spend:2026-10-28", 1_000_000)
+    monkeypatch.setattr("time.sleep", lambda s: pytest.fail("a refused call was retried"))
+    generator = gen.SimulationConfigGenerator(api_key="test-not-a-key")
+    generator.client = FakeModelClient()
+    with pytest.raises(LLMBudgetExceeded):
+        generator._call_llm_with_retry("prompt", "system")
 
 
 class FakeBackend:
