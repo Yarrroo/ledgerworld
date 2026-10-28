@@ -38,7 +38,10 @@ jobs:
 
           # These GETs read existing state; never run the demo, fork, execute, or call a provider.
           for path in ("/api/v1/health", "/api/v1/overview"):
-              request = Request(base + path, headers={"Accept": "application/json"}, method="GET")
+              request = Request(base + path, headers={
+                  "Accept": "application/json",
+                  "User-Agent": "ledgerworld-monitor/1",
+              }, method="GET")
               with urlopen(request, timeout=20) as response:
                   if response.status != 200:
                       raise SystemExit(f"{path}: expected HTTP 200")

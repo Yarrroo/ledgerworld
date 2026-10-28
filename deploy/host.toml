@@ -26,9 +26,8 @@ project = "ledgerworld"
 public_service = "app"
 internal_port = 5001
 url_env = "LEDGERWORLD_URL"
-# The public address the deploy answers on today (fake mode, behind a quick tunnel; it changes
-# when the tunnel is recreated, and then this line and the README's live URL line change with it).
-url = "https://peterson-prefix-assumptions-hits.trycloudflare.com"
+# Stable public demo origin behind Cloudflare; keep the README and submission links in sync.
+url = "https://ledgerworld.moonward.net"
 health_path = "/api/v1/health"
 
 # Which compose service runs which LEDGERWORLD_ROLE.
