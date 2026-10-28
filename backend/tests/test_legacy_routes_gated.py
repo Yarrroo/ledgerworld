@@ -10,12 +10,7 @@ PREFIXES = ("/api/graph", "/api/simulation", "/api/report")
 
 
 @pytest.fixture
-def legacy_app(monkeypatch, legacy_storage, offline_legacy_services):
-    for field, root in legacy_storage.items():
-        folder = root / "existing_id"
-        folder.mkdir(parents=True)
-        if field != "report_id":
-            (folder / ("project.json" if field == "project_id" else "state.json")).write_text("{}")
+def legacy_app(monkeypatch, offline_legacy_services):
     token = uuid.uuid4().hex
     monkeypatch.setenv("LEDGERWORLD_DEMO_TOKEN", token)
     app = create_app()
@@ -71,7 +66,6 @@ def test_legacy_get_remains_public(legacy_app):
 def test_unconfigured_token_admits_nobody(monkeypatch, offline_legacy_services):
     monkeypatch.delenv("LEDGERWORLD_DEMO_TOKEN", raising=False)
     app = create_app()
-    app.extensions["ledgerworld"].token = None
     response = app.test_client().post("/api/simulation/create", json={})
     assert response.status_code == 401
 
@@ -98,6 +92,18 @@ def test_auth_precedes_body_validation(legacy_app):
     response = app.test_client().post("/api/simulation/create",
                                       json={"project_id": "../invalid"})
     assert response.status_code == 401
+
+
+def test_offline_fixture_never_builds_a_redis_client(monkeypatch, request):
+    import redis
+
+    def unexpected_redis(*args, **kwargs):
+        raise AssertionError("Offline tests must not build a Redis client")
+
+    monkeypatch.setenv("REDIS_URL", "redis://unused.invalid:6379/0")
+    monkeypatch.setattr(redis.Redis, "from_url", unexpected_redis)
+    request.getfixturevalue("offline_legacy_services")
+    create_app()
 
 
 def test_app_fixture_never_builds_a_provider_gateway(monkeypatch, offline_legacy_services):
