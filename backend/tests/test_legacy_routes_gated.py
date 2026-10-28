@@ -72,3 +72,20 @@ def test_other_routes_keep_their_own_auth(legacy_app):
     assert client.get("/health").status_code == 200
     assert client.get("/api/v1/health").status_code == 200
     assert client.post("/api/v1/runs", json={}).status_code == 401
+
+
+def test_app_fixture_never_builds_a_provider_gateway(monkeypatch):
+    from app.api.v1 import services
+
+    calls = []
+
+    def unexpected_gateway(*args, **kwargs):
+        calls.append(True)
+        raise AssertionError("Offline tests must not build a provider gateway")
+
+    monkeypatch.setattr(services, "gateway_from_env", unexpected_gateway)
+    monkeypatch.setenv("AIRWALLEX_MODE", "sandbox")
+    monkeypatch.setenv("LEDGER_DATABASE_URL", "sqlite://")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    create_app()
+    assert calls == []
