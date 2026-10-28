@@ -7,7 +7,7 @@
       · the plan executed is the one the server bound on the observed snapshot, never a branch.
     </p>
 
-    <section class="lw-tile" aria-labelledby="authority-heading" data-test="authority">
+    <section class="lw-tile" aria-labelledby="authority-heading" data-test="authority" data-panel="Approval">
       <h2 id="authority-heading">Approval</h2>
       <p class="lw-time">Reading needs no token. Approving and executing take the operator token,
         entered in the review; it stays in this tab's memory and is forgotten on reload.</p>
@@ -31,7 +31,7 @@
     </p>
 
     <section v-if="incidents.length" class="lw-alert" role="alert" aria-labelledby="incident-heading"
-             data-test="incident">
+             data-test="incident" data-panel="Incident">
       <h2 id="incident-heading">Incident</h2>
       <ul>
         <li v-for="line in incidents" :key="line">{{ line }}</li>
@@ -39,7 +39,7 @@
       <p>No reversal or resend is offered here; the operator resolves it with the provider.</p>
     </section>
 
-    <section aria-labelledby="receipts-heading" data-test="receipts">
+    <section aria-labelledby="receipts-heading" data-test="receipts" data-panel="Legs and receipts">
       <h2 id="receipts-heading">Provider state and receipts</h2>
       <p v-if="notFound" class="lw-note" role="status" data-test="not-found">
         <template v-if="followedId === activeId">

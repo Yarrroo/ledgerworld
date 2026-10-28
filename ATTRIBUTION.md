@@ -54,8 +54,9 @@ an upstream path is modified or deleted and not listed in the second table.
 | `backend/app/services/simulation_runner.py` | wires the shared scrubbed environment into all upstream simulation subprocess launches |
 | `frontend/src/router/index.js` | adds the `/overview`, `/treasury`, `/lending`, `/simulation`, `/decisions` and `/execution` routes; `/` redirects to `/overview` and the upstream home page moves to `/home`; other upstream routes unchanged |
 | `frontend/src/components/GraphPanel.vue` | exposes its own `closeDetailPanel` so the `/simulation` screen closes a selection when the round or run changes |
-| `frontend/package.json` | adds the `test:unit` script and its dev dependencies (vitest, happy-dom, @vue/test-utils) |
-| `frontend/package-lock.json` | the lock for those dev dependencies |
+| `frontend/package.json` | adds the `test:unit` script and its dev dependencies (vitest, happy-dom, @vue/test-utils), and the self-hosted fonts (`@fontsource-variable/inter`, `@fontsource-variable/source-serif-4`, SIL OFL 1.1) |
+| `frontend/package-lock.json` | the lock for those dependencies |
+| `frontend/index.html` | no longer loads fonts from a font CDN: the finance screens bundle their own; the upstream screens fall back to local fonts |
 | `backend/app/utils/openai_chat_compat.py` | `create_chat_completion` sends its request through the daily model budget (`app.utils.llm_budget.metered`) |
 | `backend/app/services/oasis_profile_generator.py` | its persona retry loop takes a daily model budget refusal (`LLMBudgetExceeded`) straight to the rule-based profile instead of retrying it |
 | `backend/app/services/simulation_config_generator.py` | its config retry loop re-raises a daily model budget refusal (`LLMBudgetExceeded`) instead of retrying it |

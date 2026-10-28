@@ -288,6 +288,8 @@ test.describe('accessibility', () => {
     await accessible(page, 'Execution receipt', phone)
 
     for (const screen of JUDGE.outside_timed_path.read_only_visits as string[]) {
+      // on a phone the six screens sit in the menu drawer
+      if (await test$(page, 'menu').isVisible()) await test$(page, 'menu').click()
       await page.locator('nav.lw-nav').getByRole('link', { name: screen, exact: true }).click()
       await expect(page).toHaveURL(new RegExp(`/${screen.toLowerCase()}$`))
       await expect(page.locator('h1')).toHaveText(screen)

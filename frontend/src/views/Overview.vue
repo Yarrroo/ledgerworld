@@ -10,7 +10,7 @@
       say Stale; an unknown one has no value. Lender capacity counts known balances only.
     </p>
 
-    <section class="lw-strip" aria-label="Answer">
+    <section class="lw-strip" aria-label="Answer" data-panel="Cash strip">
       <article class="lw-tile" data-test="settled">
         <div class="lw-tile__label">Settled cash</div>
         <div class="lw-figure">{{ metricText(body.cash) }}</div>
@@ -93,7 +93,7 @@
       </article>
     </section>
 
-    <div class="lw-actions">
+    <div class="lw-actions" data-panel="Scenario entry">
       <RouterLink v-if="simulationTarget" class="lw-button" :to="simulationTarget"
                   data-test="open-simulation">Open simulation</RouterLink>
       <template v-else>

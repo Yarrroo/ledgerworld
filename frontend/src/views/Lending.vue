@@ -5,7 +5,7 @@
       observed revenue and outstanding balance.
     </p>
 
-      <section class="lw-strip" aria-label="Answer">
+      <section class="lw-strip" aria-label="Answer" data-panel="Capacity">
         <article class="lw-tile" data-test="capacity">
           <div class="lw-tile__label">Pool capacity K_p · {{ body.pool }}</div>
           <div class="lw-figure" data-test="capacity-value">{{ capacityText }}</div>
@@ -37,7 +37,7 @@
         </article>
       </section>
 
-      <h2>Capacity parts</h2>
+      <h2 data-panel="Capacity parts">Capacity parts</h2>
       <div class="lw-table-wrap" tabindex="0" role="region" aria-label="Capacity parts">
         <table class="lw-table" data-test="parts">
           <thead><tr><th scope="col">Part</th><th scope="col">Amount</th><th scope="col">State</th></tr></thead>
@@ -51,7 +51,7 @@
         </table>
       </div>
 
-      <details class="lw-calc" data-test="facility-terms">
+      <details class="lw-calc" data-test="facility-terms" data-panel="Facilities">
         <summary>Open facility terms</summary>
         <div class="lw-table-wrap" tabindex="0" role="region" aria-label="Facilities">
           <table class="lw-table" data-test="facilities">
@@ -78,7 +78,7 @@
         <p class="lw-time">Repayment is computed from observed revenue only, never from a forecast.</p>
       </details>
 
-      <div class="lw-actions">
+      <div class="lw-actions" data-panel="Plan handoff">
         <RouterLink v-if="fundingTarget" class="lw-button" :to="fundingTarget" data-test="fund">
           Fund from the pool
         </RouterLink>

@@ -6,6 +6,7 @@ export default mergeConfig(viteConfig, defineConfig({
   test: {
     environment: 'happy-dom',
     include: ['tests/unit/**/*.spec.js'],
+    setupFiles: ['tests/offline.js'],
     env: { TZ: 'UTC' }
   }
 }))

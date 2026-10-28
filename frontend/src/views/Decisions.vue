@@ -1,6 +1,6 @@
 <template>
   <ScreenShell v-slot="{ body }" title="Decisions" :reading="state" :refresh="refresh">
-    <p class="lw-source" data-test="cohort">
+    <p class="lw-source" data-test="cohort" data-panel="Cohort">
       Run {{ body.run_id }} · checkpoint round {{ body.checkpoint_round }} · cohort {{ body.cohort }} ·
       {{ body.weight_kind }} · a scenario comparison, not a probability.
     </p>
@@ -9,7 +9,7 @@
       The comparison is still running; nothing is selected yet.
     </p>
 
-    <section v-if="body.status === 'all_infeasible'" class="lw-alert" role="alert" data-test="escalation">
+    <section v-if="body.status === 'all_infeasible'" class="lw-alert" role="alert" data-test="escalation" data-panel="No feasible plan">
       <h2>No feasible plan: escalate, nothing can be approved</h2>
       <p>Earliest unmet: {{ body.escalation.earliest_unmet }}</p>
       <p>Binding constraint: {{ body.escalation.binding }}</p>
@@ -17,7 +17,7 @@
     </section>
 
     <section :aria-labelledby="search ? 'search-heading' : 'policies-heading'"
-             :data-test="search ? 'search' : 'policies'">
+             :data-test="search ? 'search' : 'policies'" :data-panel="search ? 'Search results' : 'Policies'">
       <h2 v-if="search" id="search-heading">{{ LABELS.search }}</h2>
       <h2 v-else id="policies-heading">
         Policies side by side<template v-if="body.status === 'all_infeasible'"> · ranking shown, not executable</template>
@@ -60,7 +60,7 @@
       A branch result is never an approval: the selected policy is re-decided on the current
       observed snapshot, and its terms are reviewed before anything is approved.
     </p>
-    <div class="lw-actions">
+    <div class="lw-actions" data-panel="Review handoff">
       <RouterLink v-if="reviewable" class="lw-button" data-test="review-plan"
                   :to="{ path: '/execution', query: { run_id: body.run_id, review: '1' } }">Review plan</RouterLink>
       <RouterLink v-if="routeExists(router, '/execution')" class="lw-button lw-button--quiet"

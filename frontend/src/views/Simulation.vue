@@ -1,7 +1,7 @@
 <template>
   <ScreenShell title="Live simulation" :reading="shellReading" :refresh="reload">
     <div class="lw-live" :class="{ 'is-graph-expanded': graphExpanded }">
-      <section class="lw-live-panel lw-live__controls" aria-label="Round and controls" data-test="controls">
+      <section class="lw-live-panel lw-live__controls" aria-label="Round and controls" data-test="controls" data-panel="Round and controls">
         <p class="lw-live__phase" :class="`is-${phase.tone}`" role="status" data-test="phase">
           {{ phase.icon }} {{ phase.text }}
         </p>
@@ -52,14 +52,14 @@
         <p v-if="forkError" class="lw-alert" role="alert" data-test="fork-error">{{ forkError }}</p>
       </section>
 
-      <CashPaths class="lw-live__cash" :round="display" :at="roundAt" :paths="body?.cash_paths ?? []"
+      <CashPaths class="lw-live__cash" data-panel="Cash paths" :round="display" :at="roundAt" :paths="body?.cash_paths ?? []"
                  :branches="body?.branches ?? []" />
 
-      <ActionFeed class="lw-live__feed" :round="display" :loaded="Boolean(current)" :posts="roundPosts"
+      <ActionFeed class="lw-live__feed" data-panel="Event feed" :round="display" :loaded="Boolean(current)" :posts="roundPosts"
                   :intents="current?.intents ?? []" :cleared="current?.cleared ?? []"
                   :replay="base.replay" :highlight="actor" />
 
-      <section class="lw-live-panel lw-live__graph" aria-label="Graph and actor inspector" data-test="graph">
+      <section class="lw-live-panel lw-live__graph" aria-label="Graph and actor inspector" data-test="graph" data-panel="World map and actors">
         <div class="lw-live__graph-view">
           <LiveGraph ref="graphPanel" :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
                      @refresh="reload" @toggle-maximize="graphExpanded = !graphExpanded" />
