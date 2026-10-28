@@ -212,8 +212,9 @@ class GraphBuilderService:
             
         except Exception as e:
             import traceback
-            error_msg = f"{str(e)}\n{traceback.format_exc()}"
-            self.task_manager.fail_task(task_id, error_msg)
+            from ..utils.logger import get_logger
+            get_logger('mirofish.graph_builder').error(traceback.format_exc())
+            self.task_manager.fail_task(task_id, str(e))
     
     def create_graph(
         self,

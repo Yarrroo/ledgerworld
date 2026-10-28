@@ -62,3 +62,7 @@ an upstream path is modified or deleted and not listed in the second table.
 | `backend/scripts/run_reddit_simulation.py` | its live camel model is wrapped in the daily model budget (`app.utils.llm_budget.budgeted`) |
 | `backend/scripts/run_parallel_simulation.py` | its live camel model is wrapped in the daily model budget (`app.utils.llm_budget.budgeted`) |
 | `backend/app/services/simulation_manager.py` | `_get_simulation_dir` creates a simulation's directory only when its state is saved, never on a read |
+| `backend/app/api/graph.py` | a 500 answer carries the error message only and its traceback is logged on the server; a failed graph-build task records the message, not the traceback |
+| `backend/app/api/simulation.py` | a 500 answer carries the error message only; its traceback is logged on the server, never returned |
+| `backend/app/api/report.py` | a 500 answer carries the error message only; its traceback is logged on the server, never returned |
+| `backend/app/services/graph_builder.py` | a failed graph-build task records the error message and logs the traceback instead of storing it where the task route returns it |
