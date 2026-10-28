@@ -14,7 +14,6 @@ bootstrap()
 warnings.filterwarnings("ignore", message=".*resource_tracker.*")
 
 from flask import Flask, request
-from flask_cors import CORS
 
 from .config import Config
 bootstrap()
@@ -51,8 +50,9 @@ def create_app(config_class=Config):
     from .api.v1 import legacy_ids
     legacy_ids.install(app)
 
-    # 启用CORS
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    # Security 5: CORS only from the demo origin, and the security headers on every response
+    from .api.v1 import hardening
+    hardening.install(app)
     
     # 注册模拟进程清理函数（确保服务器关闭时终止所有模拟进程）
     from .services.simulation_runner import SimulationRunner

@@ -371,9 +371,9 @@ def test_an_unknown_role_is_refused(role):
 
 @pytest.fixture
 def served(tmp_path, monkeypatch):
-    """The api role's server program, run as the entrypoint runs it, on a stub app and a built
-    frontend of two files; the WSGI app it would serve is captured instead of listening."""
-    import werkzeug.serving
+    """The api role's WSGI application (deploy/serve.py), built as gunicorn loads it, on a stub
+    app and a built frontend of two files."""
+    import app.api.v1.hardening  # noqa: F401  the real headers, beneath the stub app
     from flask import Flask
     from werkzeug.test import Client
 
@@ -384,15 +384,33 @@ def served(tmp_path, monkeypatch):
     stub = Flask("stub")
     stub.add_url_rule("/api/v1/health", "health", lambda: {"ok": True})
     monkeypatch.setitem(sys.modules, "app", types.SimpleNamespace(create_app=lambda: stub))
-    captured = {}
-    monkeypatch.setattr(werkzeug.serving, "run_simple",
-                        lambda host, port, wsgi, **kw: captured.update(wsgi=wsgi, port=port))
-    monkeypatch.setattr(sys, "argv", ["-", str(dist)])
-    program = tmp_path / "serve.py"
-    program.write_text(ENTRYPOINT.read_text().split("<<'PY'\n", 1)[1].rsplit("\nPY\n", 1)[0])
-    runpy.run_path(str(program), run_name="__main__")
-    assert captured["port"] == host()["host"]["internal_port"]
-    return Client(captured["wsgi"])
+    serve = runpy.run_path(str(DEPLOY / "serve.py"))
+    return Client(serve["build"](dist))
+
+
+def gunicorn_args() -> list[str]:
+    """The api role's server command line, as the entrypoint execs it."""
+    text = ENTRYPOINT.read_text().replace("\\\n", " ")
+    line = next(ln for ln in text.splitlines() if ln.strip().startswith("exec gunicorn"))
+    return shlex.split(line.strip())[1:]
+
+
+def test_the_api_role_runs_gunicorn_not_the_development_server():
+    args = gunicorn_args()
+    assert args[0] == "gunicorn" and args[-1] == "serve:application"
+    assert args[args.index("--bind") + 1] == f"0.0.0.0:{host()['host']['internal_port']}"
+    # one process: the upstream engine keeps its task and simulation registries in memory
+    assert args[args.index("--workers") + 1] == "1"
+    assert "run_simple" not in ENTRYPOINT.read_text()
+    assert "deploy/serve.py" in copy_sources()
+
+
+def test_every_response_of_the_api_role_carries_the_security_headers(served):
+    for path in ("/api/v1/health", "/assets/app.js", "/", "/favicon.ico"):
+        headers = served.get(path).headers
+        assert headers["X-Content-Type-Options"] == "nosniff"
+        assert headers["Content-Security-Policy"] == "frame-ancestors 'none'"
+        assert headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
 
 
 def test_the_api_serves_the_api_the_build_and_the_frontend_routes(served):

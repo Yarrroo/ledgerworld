@@ -52,7 +52,7 @@ COPY scenarios ./scenarios
 COPY locales ./locales
 COPY prp/2026-10-20-ledgerworld/design/modules/execution ./prp/2026-10-20-ledgerworld/design/modules/execution
 COPY --from=frontend /src/frontend/dist ./frontend/dist
-COPY deploy/entrypoint.sh ./deploy/entrypoint.sh
+COPY deploy/entrypoint.sh deploy/serve.py ./deploy/
 
 # backend/log: the upstream social platform makes ./log in the working directory at import time
 RUN useradd --system --uid 10001 --home-dir /app ledgerworld \
