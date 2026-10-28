@@ -46,6 +46,8 @@ def create_app(config_class=Config):
     # Security 6: the 5 MB body cap and the per-client write limit, ahead of every other hook
     from .api.v1 import rate_limit
     rate_limit.install(app)
+    from .api.legacy_security import register as register_legacy_security
+    register_legacy_security(app)
     # Security 2: a malformed id never reaches an upstream route
     from .api.v1 import legacy_ids
     legacy_ids.install(app)

@@ -20,9 +20,14 @@ def sims(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def client(sims, monkeypatch):
-    monkeypatch.delenv("REDIS_URL", raising=False)
-    return create_app().test_client()
+def client(sims, monkeypatch, offline_legacy_services):
+    import uuid
+
+    token = uuid.uuid4().hex
+    monkeypatch.setenv("LEDGERWORLD_DEMO_TOKEN", token)
+    client = create_app().test_client()
+    client.environ_base["HTTP_AUTHORIZATION"] = "Bearer " + token
+    return client
 
 
 @pytest.mark.parametrize(
