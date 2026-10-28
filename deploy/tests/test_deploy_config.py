@@ -401,6 +401,8 @@ def test_the_api_role_runs_gunicorn_not_the_development_server():
     assert args[args.index("--bind") + 1] == f"0.0.0.0:{host()['host']['internal_port']}"
     # one process: the upstream engine keeps its task and simulation registries in memory
     assert args[args.index("--workers") + 1] == "1"
+    # routes that block for minutes (interviews, report chat) must not take the whole pool
+    assert int(args[args.index("--threads") + 1]) >= 32
     assert "run_simple" not in ENTRYPOINT.read_text()
     assert "deploy/serve.py" in copy_sources()
 

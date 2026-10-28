@@ -58,6 +58,10 @@ def test_without_a_demo_origin_only_the_local_dev_server_is_allowed(monkeypatch)
     [
         ("https://LedgerWorld.example.net/path", ["https://ledgerworld.example.net"]),
         ("http://127.0.0.1:5001", ["http://127.0.0.1:5001"]),
+        ("https://demo.example.net:443/", ["https://demo.example.net"]),
+        ("http://demo.example.net:80", ["http://demo.example.net"]),
+        ("https://user:pw@demo.example.net:8443", ["https://demo.example.net:8443"]),
+        ("https://demo.example.net:notaport", ["https://demo.example.net"]),
         ("", list(DEV_ORIGINS)),
         ("  ", list(DEV_ORIGINS)),
         ("ledgerworld.example.net", list(DEV_ORIGINS)),

@@ -26,10 +26,16 @@ def client(sims, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "value", ["sim_0123abcd", "proj-1", "a", "A" * 64, "3f2b-11ee_X", 7]
+    "value", ["sim_0123abcd", "proj-1", "a", "A" * 64, "3f2b-11ee_X"]
 )
 def test_well_formed_ids_pass(value):
     assert valid_id(value)
+
+
+def test_an_int_is_an_id_only_where_it_is_an_agent_index():
+    assert valid_id(7, "agent_id")
+    assert not valid_id(7, "simulation_id")
+    assert not valid_id(True, "agent_id")
 
 
 @pytest.mark.parametrize(
@@ -65,6 +71,7 @@ def test_a_malformed_url_id_answers_404(client, path):
         ("/api/report/generate", {"simulation_id": "../../etc"}),
         ("/api/report/chat", {"simulation_id": "..", "message": "hi"}),
         ("/api/graph/build", {"project_id": {"nested": 1}}),
+        ("/api/simulation/start", {"simulation_id": 5}),
     ],
 )
 def test_a_malformed_body_id_answers_400(client, sims, path, body):

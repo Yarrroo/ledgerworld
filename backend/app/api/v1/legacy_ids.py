@@ -16,14 +16,13 @@ from flask import Flask, jsonify, request
 
 ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 UPSTREAM_BLUEPRINTS = frozenset({"graph", "simulation", "report"})
+INT_IDS = frozenset({"agent_id"})  # an agent's index, never joined into a path
 
 
-def valid_id(value: Any) -> bool:
-    """A string id of 1-64 letters, digits, `_` or `-`; an int (an agent's index) is not a path."""
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int):
-        return True
+def valid_id(value: Any, name: str = "") -> bool:
+    """A string id of 1-64 letters, digits, `_` or `-`; an int only where `name` is an index."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return name in INT_IDS
     return isinstance(value, str) and ID_PATTERN.fullmatch(value) is not None
 
 
@@ -45,7 +44,7 @@ def check_request():
     body = request.get_json(silent=True) if request.is_json else None
     if isinstance(body, dict):
         for name, value in body.items():
-            if name.endswith("_id") and value is not None and not valid_id(value):
+            if name.endswith("_id") and value is not None and not valid_id(value, name):
                 return _refuse(400, name)
     return None
 

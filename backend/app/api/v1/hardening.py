@@ -5,8 +5,8 @@ address); with it unset, only from the local frontend dev server, whose bundle c
 http://localhost:5001 from port 3000. The app and the built frontend share one origin, so the demo
 itself needs no CORS at all.
 
-Every response carries `SECURITY_HEADERS` unless it already sets one of them. `wrap` applies them
-to a whole WSGI app, so the api role's server adds them to the frontend files it serves as well.
+Every response of the app carries `SECURITY_HEADERS` unless it already sets one of them; `wrap`
+applies them to a whole WSGI app, which the api role's server uses for the frontend files it serves.
 """
 
 from __future__ import annotations
@@ -32,9 +32,16 @@ def allowed_origins(url: str | None = None) -> list[str]:
     """LEDGERWORLD_URL's scheme://host[:port], else the local dev server's origins."""
     url = (os.environ.get("LEDGERWORLD_URL", "") if url is None else url).strip()
     parts = urlsplit(url)
-    if parts.scheme in ("http", "https") and parts.netloc:
-        return [f"{parts.scheme}://{parts.netloc}".lower()]
-    return list(DEV_ORIGINS)
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if scheme not in ("http", "https") or not parts.hostname:
+        return list(DEV_ORIGINS)
+    default = 443 if scheme == "https" else 80
+    suffix = f":{port}" if port and port != default else ""
+    return [f"{scheme}://{parts.hostname}{suffix}"]
 
 
 def wrap(wsgi: Callable[..., Iterable[bytes]]) -> Callable[..., Iterable[bytes]]:
@@ -55,4 +62,9 @@ def wrap(wsgi: Callable[..., Iterable[bytes]]) -> Callable[..., Iterable[bytes]]
 
 def install(app: Flask) -> None:
     CORS(app, resources={r"/api/*": {"origins": allowed_origins()}})
-    app.wsgi_app = wrap(app.wsgi_app)  # type: ignore[method-assign]
+
+    @app.after_request
+    def security_headers(response):
+        for name, value in SECURITY_HEADERS:
+            response.headers.setdefault(name, value)
+        return response

@@ -1845,6 +1845,7 @@ def stop_simulation():
         
     except Exception as e:
         logger.error(f"停止模拟失败: {str(e)}")
+        logger.error(traceback.format_exc())
         simulation_id = (request.get_json(silent=True) or {}).get('simulation_id')
         if simulation_id:
             manager = SimulationManager()
@@ -1853,7 +1854,6 @@ def stop_simulation():
                 state.status = SimulationStatus.FAILED
                 state.error = str(e)
                 manager._save_simulation_state(state)
-        logger.error(traceback.format_exc())
         return jsonify({
             "success": False,
             "error": str(e)

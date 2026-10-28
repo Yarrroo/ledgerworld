@@ -44,6 +44,8 @@ fi
 
 # api: the app and the built frontend from one origin (deploy/serve.py), under gunicorn: one
 # worker, because the upstream engine keeps its task and simulation registries in the process,
-# with threads for concurrency, as the development server ran it.
-exec gunicorn --pythonpath "$root/deploy" --bind 0.0.0.0:5001 --workers 1 --threads 8 \
+# with threads for concurrency, as the development server ran it. Some upstream routes hold a
+# thread for minutes (an interview waits up to its timeout, a report chat on the model), so the
+# pool is wide enough that a few of them never starve the health check and the judge path.
+exec gunicorn --pythonpath "$root/deploy" --bind 0.0.0.0:5001 --workers 1 --threads 32 \
   --timeout 120 --no-control-socket --access-logfile - serve:application
