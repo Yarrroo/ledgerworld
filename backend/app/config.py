@@ -33,7 +33,7 @@ class Config:
     ZEP_API_KEY = os.environ.get('ZEP_API_KEY')
     
     # 文件上传配置
-    MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
+    MAX_CONTENT_LENGTH = 5 * 1024 * 1024  # 5MB; over it answers 413 (app.api.v1.rate_limit)
     UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), '../uploads')
     ALLOWED_EXTENSIONS = {'pdf', 'md', 'txt', 'markdown'}
     

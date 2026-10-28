@@ -44,6 +44,10 @@ def create_app(config_class=Config):
         logger.info("MiroFish Backend 启动中...")
         logger.info("=" * 50)
     
+    # Security 6: the 5 MB body cap and the per-client write limit, ahead of every other hook
+    from .api.v1 import rate_limit
+    rate_limit.install(app)
+
     # 启用CORS
     CORS(app, resources={r"/api/*": {"origins": "*"}})
     

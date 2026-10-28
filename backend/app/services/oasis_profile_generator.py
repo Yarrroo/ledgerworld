@@ -19,6 +19,7 @@ from openai import OpenAI
 from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.locale import get_language_instruction, get_locale, set_locale, t
+from ..utils.llm_budget import LLMBudgetExceeded
 from ..utils.openai_chat_compat import create_chat_completion, extract_chat_completion_text
 from ..utils.zep import (
     call_zep_read_with_retry,
@@ -613,6 +614,10 @@ class OasisProfileGenerator:
                     
                     last_error = je
                     
+            except LLMBudgetExceeded as e:
+                # a refusal is not retried: the rule-based profile below stands in for it
+                last_error = e
+                break
             except Exception as e:
                 logger.warning(f"LLM调用失败 (attempt {attempt+1}): {str(e)[:80]}")
                 last_error = e

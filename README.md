@@ -79,7 +79,7 @@ bash checks/merge.sh         # lint, secrets, attribution, offline tests, fronte
 | Model (OpenAI-compatible) | `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL_NAME`, optional `LLM_BOOST_*` |
 | Graph memory | `ZEP_API_KEY` |
 | Storage and queue | `LEDGER_DATABASE_URL` (SQLite in memory when unset), `REDIS_URL` |
-| App | `LEDGERWORLD_ROLE` (api · worker · sim), `LEDGERWORLD_DEMO_TOKEN` (needed by every write route), `LEDGERWORLD_URL`, `LEDGERWORLD_LLM_DAILY_USD` |
+| App | `LEDGERWORLD_ROLE` (api · worker · sim), `LEDGERWORLD_DEMO_TOKEN` (needed by every write route), `LEDGERWORLD_URL`, `LEDGERWORLD_LLM_DAILY_USD` (live model spend per UTC day, default 5; once reached, live calls are refused until midnight UTC) |
 
 The production Airwallex host is refused by code. A sandbox demo run:
 `bash scripts/demo.sh --mode sandbox --out var/demo/live.json --beneficiary <id>`, plus

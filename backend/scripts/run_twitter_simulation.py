@@ -131,6 +131,8 @@ except ImportError as e:
     sys.exit(1)
 
 
+from app.utils.llm_budget import budgeted
+
 # IPC相关常量
 IPC_COMMANDS_DIR = "ipc_commands"
 IPC_RESPONSES_DIR = "ipc_responses"
@@ -454,10 +456,10 @@ class TwitterSimulationRunner:
         
         print(f"LLM配置: model={llm_model}, base_url={llm_base_url[:40] if llm_base_url else '默认'}...")
         
-        return ModelFactory.create(
+        return budgeted(ModelFactory.create(
             model_platform=ModelPlatformType.OPENAI,
             model_type=llm_model,
-        )
+        ))
     
     def _get_active_agents_for_round(
         self, 

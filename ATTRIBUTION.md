@@ -25,6 +25,7 @@ an upstream path is modified or deleted and not listed in the second table.
 | `backend/app/reports/` | grounded reports |
 | `backend/app/demo/` | the seven-beat demo |
 | `backend/app/testing/` | `ScriptedModel`, `FakeGraphMemory` and their scripted plans |
+| `backend/app/utils/llm_budget.py` | the `LEDGERWORLD_LLM_DAILY_USD` cap: meters every live model call per UTC day in the shared store and refuses calls once it is reached |
 | `backend/tests/finance/` | ledger tests placed beside the upstream backend tests |
 | `contracts/` | JSON Schemas C1–C6 and their valid and invalid examples |
 | `fixtures/`, `scenarios/` | the synthetic money fixtures LF-1 and LF-2, the demo world and the six scenario families |
@@ -47,7 +48,8 @@ an upstream path is modified or deleted and not listed in the second table.
 | `README.md` | replaced by this project's README, linking the stable demo origin; the upstream text stays in the import commit and `README-ZH.md` |
 | `.env.example` | lists every variable this project reads, names only, no values |
 | `.gitignore` | adds `var/` and `frontend/dist/` to the upstream rules |
-| `backend/app/__init__.py` | registers `/api/v1` and the legacy API security boundary in `create_app`; wires the simulation boundary around config loading |
+| `backend/app/__init__.py` | registers `/api/v1` and the legacy API security boundary in `create_app`; wires the simulation boundary around config loading; installs the write limit and body cap (`app.api.v1.rate_limit.install`) |
+| `backend/app/config.py` | `MAX_CONTENT_LENGTH` is 5 MB, not 50 MB: a larger body answers 413 |
 | `backend/app/services/simulation_runner.py` | wires the shared scrubbed environment into all upstream simulation subprocess launches |
 | `backend/app/models/project.py` | wires validated resource paths; listing an absent store no longer creates it |
 | `backend/app/services/simulation_manager.py` | wires validated resource paths; creates directories only when saving simulation state |
@@ -58,3 +60,9 @@ an upstream path is modified or deleted and not listed in the second table.
 | `frontend/src/components/GraphPanel.vue` | exposes its own `closeDetailPanel` so the `/simulation` screen closes a selection when the round or run changes |
 | `frontend/package.json` | adds the `test:unit` script and its dev dependencies (vitest, happy-dom, @vue/test-utils) |
 | `frontend/package-lock.json` | the lock for those dev dependencies |
+| `backend/app/utils/openai_chat_compat.py` | `create_chat_completion` sends its request through the daily model budget (`app.utils.llm_budget.metered`) |
+| `backend/app/services/oasis_profile_generator.py` | its persona retry loop takes a daily model budget refusal (`LLMBudgetExceeded`) straight to the rule-based profile instead of retrying it |
+| `backend/app/services/simulation_config_generator.py` | its config retry loop re-raises a daily model budget refusal (`LLMBudgetExceeded`) instead of retrying it |
+| `backend/scripts/run_twitter_simulation.py` | its live camel model is wrapped in the daily model budget (`app.utils.llm_budget.budgeted`) |
+| `backend/scripts/run_reddit_simulation.py` | its live camel model is wrapped in the daily model budget (`app.utils.llm_budget.budgeted`) |
+| `backend/scripts/run_parallel_simulation.py` | its live camel model is wrapped in the daily model budget (`app.utils.llm_budget.budgeted`) |

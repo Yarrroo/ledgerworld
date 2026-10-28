@@ -1,5 +1,6 @@
 """The original blueprints must not bypass the demo's write authorization."""
 
+import ipaddress
 import uuid
 
 import pytest
@@ -36,6 +37,8 @@ def test_every_legacy_non_get_requires_token(legacy_app):
     app, token = legacy_app
     client = app.test_client()
     calls = []
+    # Each auth case is independent; the write-limit suite covers repeated clients.
+    clients = ipaddress.ip_network("198.18.0.0/15").hosts()
 
     def reached(**kwargs):
         calls.append(kwargs)
@@ -46,11 +49,13 @@ def test_every_legacy_non_get_requires_token(legacy_app):
         for method in rule.methods - {"GET"}:
             for header in (None, "Bearer wrong", "Basic " + token, "Bearer " + token + "x"):
                 headers = {} if header is None else {"Authorization": header}
-                response = client.open(rule_path(rule), method=method, headers=headers)
+                response = client.open(rule_path(rule), method=method, headers=headers,
+                                       environ_overrides={"REMOTE_ADDR": str(next(clients))})
                 assert response.status_code == 401, (rule.rule, method, header)
                 assert not calls
             response = client.open(rule_path(rule), method=method,
-                                   headers={"Authorization": "Bearer " + token})
+                                   headers={"Authorization": "Bearer " + token},
+                                   environ_overrides={"REMOTE_ADDR": str(next(clients))})
             assert response.status_code == 200, (rule.rule, method)
             calls.clear()
 

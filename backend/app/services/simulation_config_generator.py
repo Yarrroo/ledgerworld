@@ -21,6 +21,7 @@ from openai import OpenAI
 from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.locale import get_language_instruction, t
+from ..utils.llm_budget import LLMBudgetExceeded
 from ..utils.openai_chat_compat import create_chat_completion, extract_chat_completion_text
 from .zep_entity_reader import EntityNode, ZepEntityReader
 
@@ -474,6 +475,8 @@ class SimulationConfigGenerator:
                     
                     last_error = e
                     
+            except LLMBudgetExceeded:
+                raise
             except Exception as e:
                 logger.warning(f"LLM调用失败 (attempt {attempt+1}): {str(e)[:80]}")
                 last_error = e
