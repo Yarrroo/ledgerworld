@@ -6,7 +6,7 @@
     </p>
 
     <section v-for="a in accounts" :key="a.id" :aria-label="`Account ${a.id}`"
-             :data-test="`account-${a.id}`">
+             :data-test="`account-${a.id}`" :data-panel="`Account ${a.id}`">
       <h2>{{ a.id }} · {{ a.currency }}</h2>
       <p v-if="a.observability !== 'known'" class="lw-note">
         Balance not observable: settled reads Unknown and adds nothing; authority is reduced.
@@ -87,7 +87,7 @@
       </div>
     </section>
 
-    <h2>Obligations and reservations</h2>
+    <h2 data-panel="Obligations">Obligations and reservations</h2>
     <div class="lw-table-wrap" tabindex="0" role="region" aria-label="Obligations">
       <table class="lw-table" data-test="obligations">
         <thead>

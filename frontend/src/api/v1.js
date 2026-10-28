@@ -13,8 +13,12 @@
  * - Text is English only, as the product is (system brief §15).
  */
 
-import { computed, defineComponent, h, onMounted, shallowReactive } from 'vue'
+import {
+  computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, shallowReactive, shallowRef, watch
+} from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import '@fontsource-variable/inter'
+import '@fontsource-variable/source-serif-4'
 import '../styles/tokens.css'
 
 const BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001'
@@ -282,12 +286,12 @@ export function sourceLabel (body) {
 
 /** The six screens, in reading order; the shell links each one whose route is registered. */
 export const SCREENS = [
-  { path: '/overview', label: 'Overview' },
-  { path: '/treasury', label: 'Treasury' },
-  { path: '/lending', label: 'Lending' },
-  { path: '/simulation', label: 'Live simulation' },
-  { path: '/decisions', label: 'Decisions' },
-  { path: '/execution', label: 'Execution' }
+  { path: '/overview', label: 'Overview', icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z' },
+  { path: '/treasury', label: 'Treasury', icon: 'M3 10l9-6 9 6M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18' },
+  { path: '/lending', label: 'Lending', icon: 'M4 8h15l-4-4M20 16H5l4 4' },
+  { path: '/simulation', label: 'Live simulation', icon: 'M3 12h4l3-7 4 14 3-7h4' },
+  { path: '/decisions', label: 'Decisions', icon: 'M6 4v6a4 4 0 0 0 4 4h9M15 10l4 4-4 4M6 20v-4' },
+  { path: '/execution', label: 'Execution', icon: 'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zM8 12.5l2.7 2.7L16 9.5' }
 ]
 
 /** Whether the app has a route for ``path`` (a screen another build step adds may be absent). */
@@ -327,13 +331,54 @@ export function useReading (load) {
   return { state, refresh }
 }
 
+
 // ------------------------------------------------------------------------------ the shell
 
+/** The faceted LedgerWorld mark in the logo blue: a drawn stand-in until the vector asset lands. */
+function logo () {
+  return h('svg', { viewBox: '0 0 32 32', 'aria-hidden': 'true', focusable: 'false' }, [
+    h('path', { fill: 'currentColor', d: 'M16 2l12 7v14l-12 7-12-7V9z' }),
+    h('path', { fill: '#FFFFFF', 'fill-opacity': '0.38', d: 'M16 2l12 7-12 7-12-7z' }),
+    h('path', { fill: '#000000', 'fill-opacity': '0.24', d: 'M16 16l12-7v14l-12 7z' }),
+    h('path', { fill: '#FFFFFF', 'fill-opacity': '0.12', d: 'M16 16v14l-12-7V9z' })
+  ])
+}
+
+function icon (d) {
+  return h('svg', {
+    viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8',
+    'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', focusable: 'false'
+  }, [h('path', { d })])
+}
+
+let health = null
+/** The model the deployment runs its agents on, from /health once per page load; null if unread. */
+function modelSource () {
+  health ??= request('/health').then((b) => b?.model ?? null).catch(() => null)
+  return health
+}
+
+/** A panel's element id from its label: stable, unique on the page. */
+function panelId (label, taken) {
+  const base = `panel-${String(label).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
+  let id = base
+  for (let n = 2; taken.has(id); n++) id = `${base}-${n}`
+  taken.add(id)
+  return id
+}
+
 /**
- * One screen: a banner (mode and source, kept in view while scrolling), screen navigation, and
- * the main region — title, as of, Refresh, the reading's error and context notices, then the
- * screen itself, rendered only once there is a body. The mode label is shown only from a loaded
- * answer: nothing inherits an authoritative badge from an earlier render.
+ * One screen, in the handoff's shell (prp/2026-10-29-ux-shell/design.md): the logo and six
+ * labelled links with the current one marked (a 208 px sidebar, a 72 px icon rail below 1200 px,
+ * a 48 px header with a menu drawer below 768 px); then the main region — breadcrumb and context
+ * bar (mode, model, as of, snapshot, Refresh; kept in view while scrolling), the title, the panel
+ * index, the reading's error and context notices, and the screen itself, rendered only once there
+ * is a body. The mode label is shown only from a loaded answer: nothing inherits an authoritative
+ * badge from an earlier render.
+ *
+ * The panel index lists every element the screen marks `data-panel="<name>"`; the one at the top
+ * of the view carries aria-current while the page scrolls. Choosing one scrolls to it and leaves
+ * focus where it was.
  */
 export const ScreenShell = defineComponent({
   name: 'ScreenShell',
@@ -346,30 +391,198 @@ export const ScreenShell = defineComponent({
     const route = useRoute()
     const router = useRouter()
     const screens = computed(() => SCREENS.filter((s) => routeExists(router, s.path)))
+    const model = ref(null)
+    const menu = ref(false)
+    const panels = shallowRef([])
+    const active = ref(null)
+    const pageEl = ref(null)
+    const mainEl = ref(null)
+    const contextEl = ref(null)
+    const indexEl = ref(null)
+    const topbarEl = ref(null)
+    const menuButton = ref(null)
+    let stickyH = 0
+    let frame = 0
+    let observer = null
+
+    function measure () {
+      const page = pageEl.value
+      if (!page) return
+      const ctx = contextEl.value
+      const contextH = ctx && getComputedStyle(ctx).position === 'sticky' ? ctx.offsetHeight : 0
+      page.style.setProperty('--lw-context-h', `${contextH}px`)
+      const index = indexEl.value
+      const bar = topbarEl.value
+      const barH = bar && getComputedStyle(bar).display !== 'none' ? bar.offsetHeight : 0
+      stickyH = index ? (parseFloat(getComputedStyle(index).top) || 0) + index.offsetHeight
+        : Math.max(contextH, barH)
+      page.style.setProperty('--lw-sticky-h', `${stickyH}px`)
+    }
+
+    /** The panel at the top of the view: the last one whose top has reached the sticky header. */
+    function track () {
+      const list = panels.value
+      if (!list.length) return
+      const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2
+      let current = list[0].id
+      for (const p of list) {
+        const el = document.getElementById(p.id)
+        if (el && el.getBoundingClientRect().top <= stickyH + 16) current = p.id
+      }
+      if (atEnd && window.scrollY > 0) current = list[list.length - 1].id
+      active.value = current
+    }
+
+    function collect () {
+      const taken = new Set()
+      const found = mainEl.value
+        ? [...mainEl.value.querySelectorAll('[data-panel]')].map((el) => {
+            if (!el.id || taken.has(el.id)) el.id = panelId(el.dataset.panel, taken)
+            else taken.add(el.id)
+            return { id: el.id, label: el.dataset.panel }
+          })
+        : []
+      const key = (list) => list.map((p) => `${p.id}=${p.label}`).join('|')
+      if (key(found) !== key(panels.value)) panels.value = found
+    }
+
+    function schedule () {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        measure()
+        track()
+      })
+    }
+
+    function closeMenu (refocus) {
+      if (!menu.value) return
+      menu.value = false
+      if (refocus) menuButton.value?.focus()
+    }
+
+    function onKey (event) {
+      if (event.key === 'Escape') closeMenu(true)
+    }
+
+    watch(() => route.fullPath, () => closeMenu(false))
+    watch(menu, async (open) => {
+      if (!open) return
+      await nextTick()
+      const nav = document.getElementById('lw-nav')
+      ;(nav?.querySelector('a[aria-current="page"]') ?? nav?.querySelector('ul a'))?.focus()
+    })
+    watch(panels, () => nextTick(schedule))
+
+    onMounted(() => {
+      modelSource().then((m) => { model.value = m })
+      collect()
+      observer = new MutationObserver(() => { collect(); schedule() })
+      if (mainEl.value) {
+        observer.observe(mainEl.value, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-panel'] })
+      }
+      window.addEventListener('scroll', schedule, { passive: true })
+      window.addEventListener('resize', schedule)
+      window.addEventListener('keydown', onKey)
+      schedule()
+    })
+    onBeforeUnmount(() => {
+      observer?.disconnect()
+      if (frame) cancelAnimationFrame(frame)
+      window.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', schedule)
+      window.removeEventListener('keydown', onKey)
+    })
+
+    /** A link to Overview that is never marked current: the nav link and the crumb say where you are. */
+    function home (attrs, children) {
+      return h('a', {
+        ...attrs,
+        href: router.resolve('/overview').href,
+        onClick: (event) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button) return
+          event.preventDefault()
+          router.push('/overview')
+        }
+      }, children)
+    }
+
+    function jump (event, id) {
+      event.preventDefault()
+      const el = document.getElementById(id)
+      if (!el) return
+      const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      el.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' })
+      active.value = id
+    }
+
     return () => {
       const { body, status, error, contextChanged } = props.reading
       const busy = status === 'loading'
       const time = formatTime(body?.as_of)
-      const banner = h('header', { class: 'lw-banner', 'data-test': 'banner' }, [
-        h('span', { class: 'lw-banner__mode', 'data-test': 'mode' },
-          body ? (LABELS[body.mode] || body.mode) : 'Provider mode not loaded'),
-        body && h('span', { 'data-test': 'source' }, sourceLabel(body))
+      const mode = body ? (LABELS[body.mode] || body.mode) : 'Provider mode not loaded'
+      const brand = (where) => home({ class: 'lw-brand', 'aria-label': 'LedgerWorld, Overview', 'data-test': `brand-${where}` },
+        [logo(), h('span', 'LedgerWorld')])
+
+      const topbar = h('header', { class: 'lw-topbar', ref: topbarEl }, [
+        brand('header'),
+        h('span', { class: 'lw-topbar__mode' }, body ? mode : ''),
+        h('button', {
+          type: 'button', class: 'lw-menu', ref: menuButton, 'data-test': 'menu',
+          'aria-expanded': menu.value ? 'true' : 'false', 'aria-controls': 'lw-nav',
+          onClick: () => { menu.value = !menu.value }
+        }, [icon(menu.value ? 'M6 6l12 12M18 6L6 18' : 'M4 7h16M4 12h16M4 17h16'), h('span', 'Menu')])
       ])
-      const nav = h('nav', { class: 'lw-nav', 'aria-label': 'Screens' }, [
+
+      const nav = h('nav', {
+        id: 'lw-nav', class: ['lw-nav', { 'is-open': menu.value }], 'aria-label': 'Screens', 'data-test': 'nav'
+      }, [
+        brand('nav'),
         h('ul', screens.value.map((s) => h('li', { key: s.path }, [
           h(RouterLink, {
             to: s.path,
-            'aria-current': route.path === s.path ? 'page' : undefined
-          }, () => s.label)
+            'aria-current': route.path === s.path ? 'page' : undefined,
+            'data-test': `nav-${s.path.slice(1)}`
+          }, () => [icon(s.icon), h('span', s.label)])
         ])))
       ])
-      const asOf = h('div', { class: 'lw-asof' }, [
-        body && h('span', { class: 'lw-time' }, `as of ${time.utc} · ${time.local}`),
-        h('button', {
-          type: 'button', class: 'lw-button lw-button--quiet', 'data-test': 'refresh',
-          disabled: busy, onClick: () => props.refresh()
-        }, error ? 'Retry' : 'Refresh')
+      const scrim = menu.value && h('div', { class: 'lw-scrim', 'aria-hidden': 'true', onClick: () => closeMenu(true) })
+
+      const run = typeof route.query.run_id === 'string' ? route.query.run_id : null
+      const crumbs = h('nav', { class: 'lw-crumbs', 'aria-label': 'Breadcrumb', 'data-test': 'breadcrumb' }, [
+        h('ol', [
+          h('li', [home({}, 'LedgerWorld')]),
+          h('li', { 'aria-current': run ? undefined : 'page' }, props.title),
+          run && h('li', { 'aria-current': 'page' }, `Run ${run}`)
+        ])
       ])
+      const context = h('div', { class: 'lw-context', ref: contextEl, 'data-test': 'banner' }, [
+        crumbs,
+        h('div', { class: 'lw-context__bar' }, [
+          h('span', { class: 'lw-banner__mode', 'data-test': 'mode' }, mode),
+          model.value && h('span', { class: 'lw-context__item', 'data-test': 'model' }, ['Model ', h('b', model.value)]),
+          body && h('span', { class: 'lw-context__item', 'data-test': 'context-as-of' },
+            ['As of ', h('b', time.utc), ` · ${time.local}`]),
+          body && h('span', { class: 'lw-context__item', 'data-test': 'source' }, sourceLabel(body)),
+          h('button', {
+            type: 'button', class: 'lw-button lw-button--quiet', 'data-test': 'refresh',
+            disabled: busy, onClick: () => props.refresh()
+          }, error ? 'Retry' : 'Refresh')
+        ])
+      ])
+
+      const index = panels.value.length > 0 && h('nav', {
+        class: 'lw-panels', ref: indexEl, 'aria-label': 'Panels on this page', 'data-test': 'panel-index'
+      }, [
+        h('ol', panels.value.map((p) => h('li', { key: p.id }, [
+          h('a', {
+            href: `#${p.id}`, 'data-test': 'panel-link',
+            'aria-current': active.value === p.id ? 'true' : undefined,
+            onClick: (event) => jump(event, p.id)
+          }, p.label)
+        ])))
+      ])
+
       const notices = [
         error && h('div', { class: 'lw-alert', role: 'alert', 'data-test': 'error' }, [
           h('strong', `${STATES.error.icon} ${body ? STATES.error.word : 'Could not load'}. `),
@@ -389,10 +602,10 @@ export const ScreenShell = defineComponent({
       const footer = SOURCE_URL && h('p', { class: 'lw-source' }, [
         h('a', { href: SOURCE_URL }, 'Source code (AGPL-3.0)')
       ])
-      const main = h('main', { class: 'lw-main', 'aria-busy': busy ? 'true' : 'false' }, [
-        h('h1', props.title), asOf, ...notices, content, footer
+      const main = h('main', { class: 'lw-main', ref: mainEl, 'aria-busy': busy ? 'true' : 'false' }, [
+        context, h('h1', props.title), index, ...notices, content, footer
       ])
-      return h('div', { class: 'lw-page' }, [banner, nav, main])
+      return h('div', { class: 'lw-page', ref: pageEl }, [topbar, nav, scrim, main])
     }
   }
 })
