@@ -49,6 +49,11 @@ an upstream path is modified or deleted and not listed in the second table.
 | `.gitignore` | adds `var/` and `frontend/dist/` to the upstream rules |
 | `backend/app/__init__.py` | registers `/api/v1` and the legacy API security boundary in `create_app`; wires the simulation boundary around config loading |
 | `backend/app/services/simulation_runner.py` | wires the shared scrubbed environment into all upstream simulation subprocess launches |
+| `backend/app/models/project.py` | wires validated resource paths; listing an absent store no longer creates it |
+| `backend/app/services/simulation_manager.py` | wires validated resource paths; creates directories only when saving simulation state |
+| `backend/app/services/report_agent.py` | wires validated report paths; read-only lookups and listings no longer create a store |
+| `backend/tests/test_ontology_api_errors.py` | authenticates legacy write requests in offline API tests |
+| `backend/tests/test_simulation_prepare_failure.py` | aligns the isolated simulation store with the resource existence guard |
 | `frontend/src/router/index.js` | adds the `/overview`, `/treasury`, `/lending`, `/simulation`, `/decisions` and `/execution` routes; `/` redirects to `/overview` and the upstream home page moves to `/home`; other upstream routes unchanged |
 | `frontend/src/components/GraphPanel.vue` | exposes its own `closeDetailPanel` so the `/simulation` screen closes a selection when the round or run changes |
 | `frontend/package.json` | adds the `test:unit` script and its dev dependencies (vitest, happy-dom, @vue/test-utils) |

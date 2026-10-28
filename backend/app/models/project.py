@@ -118,7 +118,8 @@ class ProjectManager:
     @classmethod
     def _get_project_dir(cls, project_id: str) -> str:
         """获取项目目录路径"""
-        return os.path.join(cls.PROJECTS_DIR, project_id)
+        from ..legacy_paths import resource_path
+        return resource_path(cls.PROJECTS_DIR, project_id)
     
     @classmethod
     def _get_project_meta_path(cls, project_id: str) -> str:
@@ -211,7 +212,8 @@ class ProjectManager:
         Returns:
             项目列表，按创建时间倒序
         """
-        cls._ensure_projects_dir()
+        if not os.path.isdir(cls.PROJECTS_DIR):
+            return []
         
         projects = []
         for project_id in os.listdir(cls.PROJECTS_DIR):

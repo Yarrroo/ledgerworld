@@ -9,7 +9,12 @@ PREFIXES = ("/api/graph", "/api/simulation", "/api/report")
 
 
 @pytest.fixture
-def legacy_app(monkeypatch):
+def legacy_app(monkeypatch, legacy_storage):
+    for field, root in legacy_storage.items():
+        folder = root / "existing_id"
+        folder.mkdir(parents=True)
+        if field != "report_id":
+            (folder / ("project.json" if field == "project_id" else "state.json")).write_text("{}")
     token = uuid.uuid4().hex
     monkeypatch.setenv("LEDGERWORLD_DEMO_TOKEN", token)
     app = create_app()

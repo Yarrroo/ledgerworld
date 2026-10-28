@@ -1957,7 +1957,8 @@ class ReportManager:
     @classmethod
     def _get_report_folder(cls, report_id: str) -> str:
         """获取报告文件夹路径"""
-        return os.path.join(cls.REPORTS_DIR, report_id)
+        from ..legacy_paths import resource_path
+        return resource_path(cls.REPORTS_DIR, report_id)
     
     @classmethod
     def _ensure_report_folder(cls, report_id: str) -> str:
@@ -2546,7 +2547,8 @@ class ReportManager:
     @classmethod
     def get_report_by_simulation(cls, simulation_id: str) -> Optional[Report]:
         """根据模拟ID获取报告"""
-        cls._ensure_reports_dir()
+        if not os.path.isdir(cls.REPORTS_DIR):
+            return None
         
         for item in os.listdir(cls.REPORTS_DIR):
             item_path = os.path.join(cls.REPORTS_DIR, item)
@@ -2567,7 +2569,8 @@ class ReportManager:
     @classmethod
     def list_reports(cls, simulation_id: Optional[str] = None, limit: int = 50) -> List[Report]:
         """列出报告"""
-        cls._ensure_reports_dir()
+        if not os.path.isdir(cls.REPORTS_DIR):
+            return []
         
         reports = []
         for item in os.listdir(cls.REPORTS_DIR):
