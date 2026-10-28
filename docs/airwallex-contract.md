@@ -14,7 +14,13 @@ accounts not enabled) · sandbox 14/14, fake 14/14. The fake's key sets are pinn
 (`scripts/demo.sh --mode sandbox`, `LLM_BASE_URL=scripted://family`) · fresh branch
 `…-shock-integrated` (16 rounds) · advance `e7c4579c-9388-4191-93ac-67d80bc435ae` `SETTLED` ·
 payout `3e8e7a6d-620c-466b-98f9-e76c101ce8a5` `PAID` · reconciled, no incidents ·
-`checks/demo_receipt.py --require-live`: live checkpoints 3/3. The receipt stays in `var/demo/`.
+`checks/demo_receipt.py --require-live`: live checkpoints 3/3. That run's receipt is committed
+verbatim as [`docs/evidence/sandbox-receipt.json`](evidence/sandbox-receipt.json).
+
+**Re-run:** 2026-10-28, run `demo-20261028T035814Z-1c8b` · same command, Mode B · fresh branch
+`…-shock-integrated` (16 rounds) · advance `609be66f-89e8-4a6f-a47a-7e0df30cbc3d` `SETTLED` ·
+payout `02302dfa-44f5-4590-ab92-94572fb01f53` `PAID` · no incidents · live checkpoints 3/3. Its
+receipt stays in `var/demo/live.json`, uncommitted.
 
 ## Verified behaviour
 
