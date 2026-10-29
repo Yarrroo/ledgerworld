@@ -1,21 +1,24 @@
 <template>
   <ScreenShell v-slot="{ body }" title="Execution" :reading="state" :refresh="refresh">
-    <p class="lw-source" data-test="context">
-      Run {{ body.run_id ?? 'unavailable' }} ·
-      <template v-if="activeId">execution {{ activeId }}</template>
-      <template v-else>no execution is linked to this run</template>
-      · the plan executed is the one the server bound on the observed snapshot, never a branch.
-    </p>
+    <section class="lw-exec__context" aria-labelledby="context-heading" data-panel="Execution context">
+      <h2 id="context-heading" class="lw-visually-hidden">Execution context</h2>
+      <p class="lw-source" data-test="context">
+        Run {{ body.run_id ?? 'unavailable' }} ·
+        <template v-if="activeId">execution {{ activeId }}</template>
+        <template v-else>no execution is linked to this run</template>
+        · the plan executed is the one the server bound on the observed snapshot, never a branch.
+      </p>
+    </section>
 
-    <section class="lw-tile" aria-labelledby="authority-heading" data-test="authority" data-panel="Approval">
-      <h2 id="authority-heading">Approval</h2>
-      <p class="lw-time">Reading needs no token. Approving and executing take the operator token,
-        entered in the review; it stays in this tab's memory and is forgotten on reload.</p>
+    <section class="lw-tile" aria-labelledby="authority-heading" data-test="authority" data-panel="Approval review">
+      <h2 id="authority-heading">Approval review</h2>
+      <p class="lw-time">Reading needs no operator access. Approving and executing take it, entered
+        in the review; it stays in this tab's memory and is forgotten on reload.</p>
       <div class="lw-actions">
         <button ref="opener" type="button" class="lw-button" data-test="review-plan"
                 :disabled="!!reviewWhy" aria-describedby="review-why" @click="openReview">Review plan</button>
         <button v-if="token" type="button" class="lw-button lw-button--quiet"
-                data-test="forget-token" @click="token = ''">Forget token</button>
+                data-test="forget-token" @click="token = ''">Forget access</button>
         <span id="review-why" class="lw-time" data-test="review-why">{{ reviewWhy || authority }}</span>
       </div>
     </section>
@@ -30,134 +33,204 @@
       </RouterLink>
     </p>
 
-    <section v-if="incidents.length" class="lw-alert" role="alert" aria-labelledby="incident-heading"
-             data-test="incident" data-panel="Incident">
-      <h2 id="incident-heading">Incident</h2>
-      <ul>
-        <li v-for="line in incidents" :key="line">{{ line }}</li>
-      </ul>
-      <p>No reversal or resend is offered here; the operator resolves it with the provider.</p>
-    </section>
+    <div class="lw-exec">
+      <section class="lw-exec__terms" aria-labelledby="summary-heading" data-test="summary"
+               data-panel="Approval summary">
+        <h2 id="summary-heading">Approval summary</h2>
+        <dl v-if="execution" class="lw-terms">
+          <dt>Approval</dt>
+          <dd class="lw-copyable">
+            <span class="lw-hash" data-test="summary-approval">{{ execution.approval_id }}</span>
+            <button type="button" class="lw-copy" data-test="copy-summary-approval"
+                    @click="copy('Approval id', execution.approval_id)">Copy<span class="lw-visually-hidden"> approval id</span></button>
+          </dd>
+          <dt>Observed snapshot</dt><dd>{{ execution.snapshot_id }}</dd>
+          <dt>Provider</dt><dd>{{ LABELS[execution.mode] || execution.mode }}</dd>
+          <dt>Status read</dt><dd data-test="summary-read">{{ formatTime(execution.as_of).utc }}</dd>
+        </dl>
+        <p v-else class="lw-time">No approval to summarise: the linked execution has not been read.</p>
+      </section>
 
-    <section aria-labelledby="receipts-heading" data-test="receipts" data-panel="Legs and receipts">
-      <h2 id="receipts-heading">Provider state and receipts</h2>
-      <p v-if="notFound" class="lw-note" role="status" data-test="not-found">
-        <template v-if="followedId === activeId">
-          No execution is recorded yet for {{ activeId }}; this does not mean it failed. Reading again.
+      <section class="lw-exec__legs" aria-labelledby="receipts-heading" data-test="receipts" data-panel="Leg tracker">
+        <h2 id="receipts-heading">Legs and receipts</h2>
+        <p v-if="notFound" class="lw-note" role="status" data-test="not-found">
+          <template v-if="followedId === activeId">
+            No execution is recorded yet for {{ activeId }}; this does not mean it failed. Reading again.
+          </template>
+          <template v-else>Execution {{ activeId }} is unavailable: the server has no record of it.</template>
+        </p>
+        <p v-if="pollError" class="lw-note" data-test="poll-error">
+          {{ STATES.error.icon }} {{ execution ? STATES.error.word : 'Could not read' }}: {{ pollError.replace(/\.$/, '') }}.<template v-if="rereading"> Reading again.</template>
+        </p>
+        <p v-if="!execution && !notFound && !pollError" class="lw-time" data-test="no-execution">
+          Unavailable: no execution to show for this run.
+        </p>
+        <template v-if="execution">
+          <p v-if="!legs.length" class="lw-note" role="status" data-test="no-legs">
+            No legs are recorded yet for this execution; reading again.
+          </p>
+          <ol class="lw-legs">
+            <li v-for="leg in legs" :key="leg.leg_id" class="lw-tile" :data-test="`leg-${leg.kind}`">
+              <div class="lw-tile__label">{{ leg.label || leg.kind }}</div>
+              <div :class="['lw-status', `lw-status--${leg.tone}`]" data-test="leg-status">
+                <span aria-hidden="true">{{ leg.icon }}</span><span>{{ leg.text }}</span>
+              </div>
+              <ol class="lw-steps" :aria-label="`Progress of ${leg.label || leg.kind}`" data-test="steps">
+                <li v-for="(step, n) in STEPS" :key="step"
+                    :class="{ 'lw-steps__done': n <= leg.step, 'lw-steps__now': n === leg.step }"
+                    :aria-current="n === leg.step ? 'step' : undefined">
+                  <span aria-hidden="true">{{ n <= leg.step ? '●' : '○' }}</span> {{ step }}<template
+                    v-if="n === leg.step && leg.stepNote"> · {{ leg.stepNote }}</template><span
+                    v-if="n <= leg.step" class="lw-visually-hidden">, reached</span>
+                </li>
+              </ol>
+              <div class="lw-time">
+                <span data-test="receipt-mode">{{ leg.mode }}</span><template v-if="leg.receipt">
+                  · {{ leg.receipt.currency }} {{ leg.receipt.amount }}</template>
+              </div>
+              <details v-if="leg.receipt" class="lw-calc" data-test="receipt">
+                <summary>Open receipt</summary>
+                <dl class="lw-calc__body lw-terms">
+                  <dt>Provider id</dt><dd>{{ leg.receipt.provider_id }}</dd>
+                  <dt>Request id</dt><dd>{{ leg.receipt.request_id }}</dd>
+                  <dt>Status</dt><dd>{{ leg.receipt.status }}</dd>
+                  <dt>Amount</dt><dd>{{ leg.receipt.currency }} {{ leg.receipt.amount }}</dd>
+                  <dt>Journal</dt><dd>{{ leg.journal_id ?? 'not posted' }}</dd>
+                  <dt>Observed</dt><dd>{{ formatTime(leg.receipt.observed_at).utc }}</dd>
+                  <dt>Provider</dt><dd>{{ LABELS[leg.receipt.mode] || leg.receipt.mode }}</dd>
+                  <dt>Fields kept</dt><dd>{{ leg.receipt.raw_keys.join(', ') }}</dd>
+                </dl>
+              </details>
+            </li>
+          </ol>
+          <p class="lw-time">PAID means reconciled as of the time shown, not final: a later provider
+            event can still open an incident.</p>
         </template>
-        <template v-else>Execution {{ activeId }} is unavailable: the server has no record of it.</template>
-      </p>
-      <p v-if="pollError" class="lw-note" data-test="poll-error">
-        {{ STATES.error.icon }} {{ execution ? STATES.error.word : 'Could not read' }}: {{ pollError.replace(/\.$/, '') }}.<template v-if="rereading"> Reading again.</template>
-      </p>
-      <p v-if="!execution && !notFound && !pollError" class="lw-time" data-test="no-execution">
-        Unavailable: no execution to show for this run.
-      </p>
-      <template v-if="execution">
-        <p class="lw-time">
-          {{ LABELS[execution.mode] || execution.mode }} · approval {{ execution.approval_id }} ·
-          observed snapshot {{ execution.snapshot_id }} · read {{ formatTime(execution.as_of).utc }}
-        </p>
-        <p v-if="!legs.length" class="lw-note" role="status" data-test="no-legs">
-          No legs are recorded yet for this execution; reading again.
-        </p>
-        <ol class="lw-legs">
-          <li v-for="leg in legs" :key="leg.leg_id" class="lw-tile" :data-test="`leg-${leg.kind}`">
-            <div class="lw-tile__label">{{ leg.label || leg.kind }}</div>
-            <div :class="['lw-status', `lw-status--${leg.tone}`]" data-test="leg-status">
-              <span aria-hidden="true">{{ leg.icon }}</span><span>{{ leg.text }}</span>
-            </div>
-            <div class="lw-time" data-test="receipt-mode">{{ leg.mode }}</div>
-            <details v-if="leg.receipt" class="lw-calc" data-test="receipt">
-              <summary>Open receipt</summary>
-              <dl class="lw-calc__body lw-terms">
-                <dt>Provider id</dt><dd>{{ leg.receipt.provider_id }}</dd>
-                <dt>Request id</dt><dd>{{ leg.receipt.request_id }}</dd>
-                <dt>Status</dt><dd>{{ leg.receipt.status }}</dd>
-                <dt>Amount</dt><dd>{{ leg.receipt.currency }} {{ leg.receipt.amount }}</dd>
-                <dt>Journal</dt><dd>{{ leg.journal_id ?? 'not posted' }}</dd>
-                <dt>Observed</dt><dd>{{ formatTime(leg.receipt.observed_at).utc }}</dd>
-                <dt>Provider</dt><dd>{{ LABELS[leg.receipt.mode] || leg.receipt.mode }}</dd>
-                <dt>Fields kept</dt><dd>{{ leg.receipt.raw_keys.join(', ') }}</dd>
+      </section>
+
+      <section class="lw-exec__incidents" aria-labelledby="incidents-heading" data-panel="Incidents">
+        <h2 id="incidents-heading">Incidents</h2>
+        <div v-if="incidents.length" class="lw-alert" role="alert" data-test="incident">
+          <ul class="lw-evidence">
+            <li v-for="item in incidents" :key="item.key">
+              <strong>{{ item.line }}</strong>
+              <dl class="lw-terms">
+                <template v-for="[term, value] in item.evidence" :key="term"><dt>{{ term }}</dt><dd>{{ value }}</dd></template>
               </dl>
-            </details>
-          </li>
-        </ol>
-        <p class="lw-time">PAID means reconciled as of the time shown, not final: a later provider
-          event can still open an incident.</p>
-      </template>
-    </section>
+            </li>
+          </ul>
+          <p>No reversal or resend is offered here; the operator resolves it with the provider.</p>
+        </div>
+        <p v-else-if="execution" class="lw-time" data-test="no-incidents">
+          None open as of {{ formatTime(execution.as_of).utc }}.
+        </p>
+        <p v-else class="lw-time">Unavailable until an execution is read.</p>
+      </section>
+    </div>
+
+    <p class="lw-visually-hidden" role="status" aria-live="polite" data-test="copied">{{ copied }}</p>
 
     <div v-if="flow.open" class="lw-overlay">
       <div ref="dialog" class="lw-dialog" role="dialog" aria-modal="true" aria-labelledby="review-heading"
-           data-test="review" @keydown.esc.prevent="closeReview">
-        <template v-if="!flow.approval">
-          <h2 id="review-heading" ref="heading" tabindex="-1">Review plan · {{ NAMES[policy] }}</h2>
-          <dl class="lw-terms">
-            <dt>Run</dt><dd>{{ body.run_id }}</dd>
-            <dt>Compared on</dt>
-            <dd>{{ decisions.snapshot_id }} · cohort {{ decisions.cohort }} · {{ decisions.weight_kind }}</dd>
-            <dt>Provider</dt><dd>{{ LABELS[body.mode] || body.mode }}</dd>
-            <dt>Bound on</dt><dd>the current observed snapshot, by the server when you confirm</dd>
-            <dt>Approval lifetime</dt>
-            <dd>15 minutes by default, set by the server; the absolute expiry is shown after confirmation</dd>
-            <dt>Funding cost per branch</dt><dd data-test="branch-fees">{{ branchFees }}</dd>
-            <dt>Scenario-set cost</dt><dd data-test="scenario-cost">{{ scenarioCost }}</dd>
-          </dl>
-          <p class="lw-note">
-            The legs and amounts are bound by the server at confirmation; this API offers no
-            preview. Confirming creates an approval only: you check its terms before a separate
-            Execute.
+           data-test="review" :data-stage="stage">
+        <div class="lw-dialog__body">
+          <p :class="['lw-status', `lw-status--${STAGES[stage].tone}`]" data-test="stage">
+            <span aria-hidden="true">{{ STAGES[stage].icon }}</span><span>{{ STAGES[stage].word }}</span>
           </p>
-          <form class="lw-field" @submit.prevent>
-            <label for="operator-token">Operator token</label>
-            <input id="operator-token" v-model="token" type="password" autocomplete="off"
-                   spellcheck="false" data-test="token">
-          </form>
-          <div class="lw-actions">
-            <button type="button" class="lw-button" data-test="confirm" :disabled="!!confirmWhy"
-                    aria-describedby="confirm-why" @click="confirmApproval">Confirm approval</button>
-            <button type="button" class="lw-button lw-button--quiet" :disabled="flow.submitting" @click="closeReview">Cancel</button>
-            <span id="confirm-why" class="lw-time" data-test="confirm-why">{{ confirmWhy }}</span>
-          </div>
-        </template>
-        <template v-else>
-          <h2 id="review-heading" ref="heading" tabindex="-1">Approved terms · not yet executed</h2>
-          <dl class="lw-terms" data-test="bound">
-            <dt>Approval</dt><dd>{{ flow.approval.approval_id }}</dd>
-            <dt>Entity</dt><dd>{{ flow.approval.entity }}</dd>
-            <dt>Account</dt><dd>{{ flow.approval.account }}</dd>
-            <dt>Observed snapshot</dt><dd>{{ flow.approval.snapshot_id }}</dd>
-            <dt>Provider</dt><dd>{{ LABELS[flow.approval.mode] || flow.approval.mode }}</dd>
-            <dt>Plan hash</dt><dd class="lw-hash" data-test="plan-hash">{{ flow.approval.plan_hash }}</dd>
-            <dt>Expires</dt>
-            <dd data-test="expires">{{ expires.utc }} · {{ expires.local }}</dd>
-          </dl>
-          <div class="lw-table-wrap" tabindex="0" role="region" aria-label="Bound legs">
-            <table class="lw-table" data-test="legs">
-              <thead>
-                <tr><th scope="col">#</th><th scope="col">Kind</th><th scope="col">Amount</th>
-                  <th scope="col">Source</th><th scope="col">Counterparty</th><th scope="col">Funded by</th>
-                  <th scope="col">After</th><th scope="col">Facility</th></tr>
-              </thead>
-              <tbody>
-                <tr v-for="leg in flow.approval.legs" :key="leg.index">
-                  <td>{{ leg.index }}</td><td>{{ leg.kind }}</td>
-                  <td class="lw-num">{{ money(leg.amount) }}</td>
-                  <td>{{ leg.source }}</td><td>{{ leg.counterparty }}</td>
-                  <td>{{ leg.funded_by ?? '—' }}</td><td>{{ (leg.after ?? []).join(', ') || '—' }}</td>
-                  <td>{{ leg.facility_id ?? '—' }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="lw-actions">
-            <button type="button" class="lw-button" data-test="execute" :disabled="!!executeWhy"
-                    aria-describedby="execute-why" @click="executePlan">Execute approved plan</button>
-            <button type="button" class="lw-button lw-button--quiet" :disabled="flow.submitting" @click="closeReview">Close</button>
-            <span id="execute-why" class="lw-time" role="status" data-test="execute-why">{{ executeWhy }}</span>
-          </div>
-        </template>
+          <h2 id="review-heading" ref="heading" tabindex="-1">{{ stageHeading }}</h2>
+
+          <template v-if="!flow.approval">
+            <dl class="lw-terms">
+              <dt>Run</dt><dd>{{ body.run_id }}</dd>
+              <dt>Compared on</dt>
+              <dd>{{ decisions.snapshot_id }} · cohort {{ decisions.cohort }} · {{ decisions.weight_kind }}</dd>
+              <dt>Provider</dt><dd>{{ LABELS[body.mode] || body.mode }}</dd>
+              <dt>Bound on</dt><dd>the current observed snapshot, by the server when you confirm</dd>
+              <dt>Approval lifetime</dt>
+              <dd>15 minutes by default, set by the server; the absolute expiry is shown after confirmation</dd>
+              <dt>Funding cost per branch</dt><dd data-test="branch-fees">{{ branchFees }}</dd>
+              <dt>Scenario-set cost</dt><dd data-test="scenario-cost">{{ scenarioCost }}</dd>
+            </dl>
+            <p v-if="stage === 'unknown'" class="lw-alert" data-test="stage-blocked">{{ flow.blocked }}</p>
+            <p v-else class="lw-note">
+              The legs and amounts are bound by the server at confirmation; this API offers no
+              preview. Confirming creates an approval only: you check its terms before a separate
+              Execute.
+            </p>
+            <form class="lw-field" @submit.prevent>
+              <label for="operator-token">Operator access</label>
+              <input id="operator-token" v-model="token" type="password" autocomplete="off"
+                     spellcheck="false" data-test="token">
+            </form>
+          </template>
+
+          <template v-else>
+            <p v-if="stage === 'executing' || stage === 'reconciled' || stage === 'incident'"
+               class="lw-note" role="status" data-test="stage-status">{{ stageStatus }}</p>
+            <dl class="lw-terms" data-test="bound">
+              <dt>Approval</dt>
+              <dd class="lw-copyable">
+                <span class="lw-hash">{{ flow.approval.approval_id }}</span>
+                <button type="button" class="lw-copy" data-test="copy-approval"
+                        @click="copy('Approval id', flow.approval.approval_id)">Copy<span class="lw-visually-hidden"> approval id</span></button>
+              </dd>
+              <dt>Entity</dt><dd>{{ flow.approval.entity }}</dd>
+              <dt>Account</dt><dd>{{ flow.approval.account }}</dd>
+              <dt>Observed snapshot</dt><dd>{{ flow.approval.snapshot_id }}</dd>
+              <dt>Provider</dt><dd>{{ LABELS[flow.approval.mode] || flow.approval.mode }}</dd>
+              <dt>Plan hash</dt>
+              <dd class="lw-copyable">
+                <span class="lw-hash" data-test="plan-hash">{{ flow.approval.plan_hash }}</span>
+                <button type="button" class="lw-copy" data-test="copy-hash"
+                        @click="copy('Plan hash', flow.approval.plan_hash)">Copy<span class="lw-visually-hidden"> plan hash</span></button>
+              </dd>
+              <dt>Expires</dt>
+              <dd data-test="expires">{{ expires.utc }} · {{ expires.local }}</dd>
+            </dl>
+            <div v-if="!flow.executed || flow.invalid" class="lw-table-wrap" tabindex="0"
+                 role="region" aria-label="Bound legs">
+              <table class="lw-table" data-test="legs">
+                <thead>
+                  <tr><th scope="col">#</th><th scope="col">Kind</th><th scope="col">Amount</th>
+                    <th scope="col">Source</th><th scope="col">Counterparty</th><th scope="col">Funded by</th>
+                    <th scope="col">After</th><th scope="col">Facility</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="leg in flow.approval.legs" :key="leg.index">
+                    <td>{{ leg.index }}</td><td>{{ leg.kind }}</td>
+                    <td class="lw-num">{{ money(leg.amount) }}</td>
+                    <td>{{ leg.source }}</td><td>{{ leg.counterparty }}</td>
+                    <td>{{ leg.funded_by ?? '—' }}</td><td>{{ (leg.after ?? []).join(', ') || '—' }}</td>
+                    <td>{{ leg.facility_id ?? '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <ul v-else-if="sent" class="lw-stage-legs" data-test="stage-legs">
+              <li v-for="leg in legs" :key="leg.leg_id" :class="['lw-status', `lw-status--${leg.tone}`]">
+                <span aria-hidden="true">{{ leg.icon }}</span><span>{{ leg.label || leg.kind }}: {{ leg.text }}</span>
+              </li>
+            </ul>
+            <ul v-if="stage === 'incident'" class="lw-alert lw-evidence" data-test="stage-incident">
+              <li v-for="item in incidents" :key="item.key">{{ item.line }}</li>
+            </ul>
+          </template>
+        </div>
+
+        <div class="lw-dialog__footer lw-actions">
+          <button v-if="!flow.approval" type="button" class="lw-button" data-test="confirm" :disabled="!!confirmWhy"
+                  aria-describedby="confirm-why" @click="confirmApproval">Confirm approval</button>
+          <button v-else-if="!flow.executed || flow.invalid" type="button" class="lw-button"
+                  data-test="execute" :disabled="!!executeWhy" aria-describedby="execute-why"
+                  @click="executePlan">Execute approved plan</button>
+          <button v-else type="button" class="lw-button" data-test="read-status"
+                  :disabled="flow.submitting" :aria-disabled="readingNow || undefined"
+                  @click="readNow">Read status</button>
+          <button type="button" class="lw-button lw-button--quiet" :disabled="flow.submitting"
+                  @click="closeReview">{{ flow.approval ? 'Close' : 'Cancel' }}</button>
+          <span v-if="!flow.approval" id="confirm-why" class="lw-time" data-test="confirm-why">{{ confirmWhy }}</span>
+          <span v-else id="execute-why" class="lw-time" role="status" data-test="execute-why">{{ executeWhy }}</span>
+        </div>
       </div>
     </div>
   </ScreenShell>
@@ -207,6 +280,20 @@ const REFUSALS = {
   snapshot_moved: 'Observed state changed; reload and review a new plan',
   approval_expired: 'Approval expired',
   approval_used: 'This approval was already executed'
+}
+/** E4: how far a leg has come; a leg is reconciled only once confirmed and journalled. */
+const STEPS = ['Ready', 'Submitted', 'Provider-confirmed', 'Reconciled']
+const STEP = { pending: 0, submitted: 1, unknown: 1, settled: 2, failed: 1 }
+/** The dialog's stages (HANDOFF "Approval & execution state machine"), each with a word and icon. */
+const STAGES = {
+  review: { word: 'Review', icon: '○', tone: 'muted' },
+  submitting: { word: 'Creating approval', icon: '◷', tone: 'warn' },
+  unknown: { word: 'Outcome unknown', icon: '!', tone: 'bad' },
+  approved: { word: 'Approved, not executed', icon: '✓', tone: 'ok' },
+  expired: { word: 'Not executable', icon: '✕', tone: 'bad' },
+  executing: { word: 'Executing', icon: '◷', tone: 'warn' },
+  reconciled: { word: 'Reconciled', icon: '✓', tone: 'ok' },
+  incident: { word: 'Incident', icon: '!', tone: 'bad' }
 }
 
 const route = useRoute()
@@ -356,18 +443,25 @@ const confirmWhy = computed(() => {
 const serverNow = computed(() => flow.serverAt + (now.value - flow.receivedAt))
 const expires = computed(() => formatTime(flow.approval?.expires_at))
 
-const executeWhy = computed(() => {
+/** Why the bound approval itself can no longer be executed from here, or ''. */
+const staleWhy = computed(() => {
   const a = flow.approval
-  if (!a) return 'Confirm approval first'
-  if (flow.blocked) return flow.blocked
-  if (flow.invalid) return flow.invalid
-  if (flow.executed) return 'Sent once; its status is read below, never sent again'
-  if (authority.value) return authority.value
+  if (!a) return ''
   if (a.mode !== state.body?.mode) return 'The bound provider mode differs from this screen; review again'
   if ((decisions.value?.results ?? []).some((r) => r.branch_id === a.snapshot_id)) {
     return 'Bound to a hypothetical branch, not the observed state; review again'
   }
   if (serverNow.value >= Date.parse(a.expires_at)) return 'Approval expired'
+  return ''
+})
+
+const executeWhy = computed(() => {
+  if (!flow.approval) return 'Confirm approval first'
+  if (flow.blocked) return flow.blocked
+  if (flow.invalid) return flow.invalid
+  if (flow.executed) return 'Sent once; its status is read below, never sent again'
+  if (authority.value) return authority.value
+  if (staleWhy.value) return staleWhy.value
   if (flow.submitting) return 'Sending'
   return ''
 })
@@ -522,7 +616,7 @@ async function executePlan () {
     flow.submitting = false
     inflight.delete(runId) // released even once left: a returned screen may send again
   }
-  if (!moved(from)) await closeReview()
+  // the dialog stays on the execution it sent, reading its status; Close drops the used approval
 }
 
 // ----------------------------------------------------------------- provider state, polled
@@ -724,19 +818,168 @@ const legs = computed(() => {
       [text, tone, icon] = [`${WORD[leg.state] ?? leg.state} · ${status} · not reconciled`, 'warn', '◷']
     }
     const mode = leg.receipt?.mode ?? body.mode
-    return { ...leg, text, tone, icon, mode: LABELS[mode] || mode }
+    // an open incident takes the leg back from Reconciled: the tracker never outruns the evidence
+    const step = leg.reconciled && leg.state === 'settled' && !open.length ? 3 : STEP[leg.state] ?? 0
+    const stepNote = { failed: 'failed', unknown: 'outcome unknown' }[leg.state] ?? ''
+    return { ...leg, text, tone, icon, step, stepNote, mode: LABELS[mode] || mode }
   })
 })
 
+/** E6: each open incident with the evidence it was raised on, never a guessed outcome. */
 const incidents = computed(() => {
   const body = execution.value
   if (!body) return []
-  return [
-    ...body.legs.filter((l) => l.state === 'unknown').map((l) =>
-      `${l.leg_id}: Outcome unknown; checking provider status. Do not send again.`),
-    ...body.incidents.filter((i) => i.state === 'open').map((i) =>
-      `${kindText(i.kind)} on ${i.leg_id}, opened ${formatTime(i.opened_at).utc}`)
+  const read = formatTime(body.as_of).utc
+  const evidence = (leg, extra = []) => [
+    ['Affected leg', leg?.label || leg?.leg_id],
+    ['Provider id', leg?.receipt?.provider_id ?? leg?.provider_id ?? 'none returned'],
+    ['Request id', leg?.receipt?.request_id ?? leg?.request_id ?? 'none returned'],
+    ['Observed status', leg?.receipt?.status ?? 'no provider status'],
+    ...extra,
+    ['Last read', read]
   ]
+  const legOf = (id) => body.legs.find((l) => l.leg_id === id)
+  return [
+    ...body.legs.filter((l) => l.state === 'unknown').map((l) => ({
+      key: `unknown:${l.leg_id}`,
+      line: `${l.leg_id}: Outcome unknown; checking provider status. Do not send again.`,
+      evidence: evidence(l)
+    })),
+    ...body.incidents.filter((i) => i.state === 'open').map((i, n) => ({
+      key: `incident:${i.incident_id ?? `${i.leg_id}:${i.kind}:${n}`}`, // no id: the order tells them apart
+      line: `${kindText(i.kind)} on ${i.leg_id}, opened ${formatTime(i.opened_at).utc}`,
+      evidence: evidence(legOf(i.leg_id), [['Opened', formatTime(i.opened_at).utc]])
+    }))
+  ]
+})
+
+// ------------------------------------------------------------------ the dialog's stage
+
+/** The execution this dialog sent, as last read; null until a read of it answered. */
+const sent = computed(() => {
+  const body = execution.value
+  return flow.executed && body && body.execution_id === flow.approval?.approval_id ? body : null
+})
+
+/** One stage at a time, derived from the flow the guards keep (never stored beside it). */
+const stage = computed(() => {
+  if (!flow.approval) {
+    if (flow.submitting) return 'submitting'
+    return flow.blocked ? 'unknown' : 'review'
+  }
+  if (flow.invalid) return 'expired'
+  if (flow.executed) {
+    const body = sent.value
+    if (!flow.submitting && body) {
+      // an unknown leg is still being read (executing); an open incident or a failure is not
+      const opened = body.incidents.some((i) => i.state === 'open')
+      if (opened || body.legs.some((l) => l.state === 'failed')) return 'incident'
+      if (body.legs.length && body.legs.every((l) => l.reconciled)) return 'reconciled'
+    }
+    return 'executing'
+  }
+  if (flow.blocked) return 'unknown' // an outcome held for this run blocks the bound approval too
+  return staleWhy.value ? 'expired' : 'approved'
+})
+
+const stageHeading = computed(() => ({
+  review: `Review plan · ${NAMES[policy.value]}`,
+  submitting: 'Creating approval',
+  unknown: flow.blocked === APPROVAL_UNKNOWN ? 'Approval outcome unknown' : 'Outcome unknown for this run',
+  approved: 'Approved terms · not yet executed',
+  expired: flow.invalid ? 'Execution refused · not executed' : 'Approval no longer executable',
+  executing: 'Executing approved plan',
+  reconciled: 'Reconciled',
+  incident: 'Incident · evidence kept'
+})[stage.value])
+
+const stageStatus = computed(() => {
+  const id = flow.approval?.approval_id
+  if (flow.submitting) return `Sending execution of approval ${id} once.`
+  const body = sent.value
+  if (stage.value === 'reconciled') {
+    return `Every leg reconciled as of ${formatTime(body.as_of).utc}; not final, a later read can open an incident.`
+  }
+  if (stage.value === 'incident') return `Read status stays available; nothing is resent or reversed.`
+  if (flow.blocked) return flow.blocked
+  // said once per change of state, never per poll: no read time in this live text
+  if (pollError.value) {
+    return rereading.value
+      ? `Could not read the status of execution ${id}; reading again.`
+      : `Could not read the status of execution ${id}: ${pollError.value.replace(/\.$/, '')}. Read status to try again.`
+  }
+  return `Execution ${id}: reading status.`
+})
+
+// ------------------------------------------------------------------ dialog mechanics
+
+const dialog = shallowRef(null)
+const copied = shallowRef('')
+const readingNow = shallowRef(false)
+
+/** Copy an id or hash and say so, or say why not; the announcement is polite, never focus. */
+async function copy (what, value) {
+  copied.value = ''
+  try {
+    await navigator.clipboard.writeText(value)
+    copied.value = `${what} copied`
+  } catch {
+    copied.value = `${what} not copied: select it and copy it by hand`
+  }
+}
+
+/** Read the execution's status now: a GET, never a resend, one at a time. */
+async function readNow () {
+  if (readingNow.value) return
+  readingNow.value = true
+  try {
+    await poll()
+  } finally {
+    readingNow.value = false
+  }
+}
+
+const FOCUSABLE = 'button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])'
+/** Tab and Shift+Tab stay inside the dialog while it is open. */
+function trap (event) {
+  const box = dialog.value
+  if (!box) return
+  const items = [...box.querySelectorAll(FOCUSABLE)].filter((el) => !el.disabled)
+  const at = document.activeElement
+  const inside = box.contains(at)
+  if (!items.length) {
+    event.preventDefault()
+    heading.value?.focus()
+    return
+  }
+  const [first, last] = [items[0], items[items.length - 1]]
+  if (event.shiftKey && (!inside || at === first || at === heading.value)) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && (!inside || at === last)) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+/** Escape (when safe) and Tab while the dialog is open, wherever focus has gone. */
+function onKey (event) {
+  if (!flow.open) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeReview()
+  } else if (event.key === 'Tab') trap(event)
+}
+document.addEventListener('keydown', onKey)
+onUnmounted(() => document.removeEventListener('keydown', onKey))
+
+// A new stage keeps focus in the dialog: a control that went away or was disabled hands focus to
+// the heading; focus already on a live control inside stays where it is.
+watch(stage, async () => {
+  if (!flow.open) return
+  await nextTick()
+  const at = document.activeElement
+  if (!dialog.value?.contains(at) || at?.disabled) heading.value?.focus()
 })
 </script>
 
@@ -779,25 +1022,117 @@ const incidents = computed(() => {
   display: grid;
   gap: var(--lw-space-3);
 }
+.lw-exec {
+  display: grid;
+  gap: var(--lw-space-6);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "terms" "legs" "incidents";
+  margin-top: var(--lw-space-6);
+}
+.lw-exec__terms { grid-area: terms; }
+.lw-exec__legs { grid-area: legs; }
+.lw-exec__incidents { grid-area: incidents; }
+.lw-exec h2 { margin-top: 0; }
+/* desktop: legs left, bound terms and incidents right */
+@media (min-width: 1200px) {
+  .lw-exec {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    grid-template-areas: "legs terms" "legs incidents";
+    align-items: start;
+  }
+  .lw-exec__incidents { align-self: start; }
+}
+.lw-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lw-space-1) var(--lw-space-3);
+  margin: var(--lw-space-2) 0;
+  padding: 0;
+  list-style: none;
+  color: var(--lw-ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+.lw-steps__done { color: var(--lw-ink); }
+.lw-steps__now { font-weight: 600; }
+.lw-copyable {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lw-space-2);
+}
+.lw-copyable .lw-hash { min-width: 0; overflow-wrap: anywhere; }
+.lw-copy {
+  min-height: var(--lw-target);
+  min-width: var(--lw-target);
+  padding: 0 var(--lw-space-3);
+  border: 1px solid var(--lw-rule);
+  border-radius: var(--lw-radius);
+  background: transparent;
+  color: var(--lw-link);
+  font: inherit;
+  cursor: pointer;
+}
+.lw-copy:focus-visible { outline: 2px solid var(--lw-focus); outline-offset: 2px; }
+.lw-evidence { margin: 0; padding-left: var(--lw-space-4); }
+.lw-evidence > li + li { margin-top: var(--lw-space-3); }
+.lw-stage-legs {
+  display: grid;
+  gap: var(--lw-space-2);
+  margin: var(--lw-space-2) 0;
+  padding: 0;
+  list-style: none;
+}
 .lw-overlay {
   position: fixed;
   inset: 0;
   z-index: 20;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
   padding: var(--lw-space-4);
   overflow-y: auto;
   background: rgb(14 20 17 / 0.45);
 }
+/* one focused dialog: the body scrolls, the action footer stays in view */
 .lw-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(48rem, 100%);
-  padding: var(--lw-space-4);
+  max-height: calc(100vh - 2 * var(--lw-space-4));
+  max-height: calc(100dvh - 2 * var(--lw-space-4));
   border: 1px solid var(--lw-rule);
   border-radius: var(--lw-radius);
   background: var(--lw-surface-raised);
   color: var(--lw-ink);
 }
+.lw-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--lw-space-4);
+}
+.lw-dialog__body > .lw-status { margin: 0 0 var(--lw-space-2); }
+.lw-dialog__footer {
+  flex: none;
+  margin: 0;
+  padding: var(--lw-space-3) var(--lw-space-4);
+  border-top: 1px solid var(--lw-rule);
+  background: var(--lw-surface-raised);
+}
+.lw-dialog h2 { margin-top: 0; }
 .lw-dialog h2:focus { outline: none; }
 .lw-dialog h2:focus-visible { outline: 2px solid var(--lw-focus); }
+/* phone: full-height dialog with a fixed action footer */
+@media (max-width: 767px) {
+  .lw-overlay { padding: 0; align-items: stretch; }
+  .lw-dialog {
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+}
 </style>
