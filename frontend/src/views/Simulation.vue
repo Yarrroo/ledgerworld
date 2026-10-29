@@ -147,7 +147,7 @@
           <WorldMap :nodes="worldMap.nodes" :edges="worldMap.edges" :selected="mapSelected" :focus="actor"
                     label="Actors and their typed relationships at the selected round"
                     :empty="current ? 'No actor to draw' : 'Round not loaded'" @select="pickMap" />
-          <details class="lw-sim__evidence" :open="graphExpanded" @toggle="graphExpanded = $event.target.open">
+          <details class="lw-sim__evidence" :open="graphExpanded" @toggle="evidenceToggled">
             <summary>Evidence graph: posts and the citations behind each intent</summary>
             <div class="lw-live__graph-view">
               <LiveGraph ref="graphPanel" :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
@@ -346,6 +346,21 @@ function selectActor (id) {
 const nameOf = (id) => world.value?.actors.find((a) => a.id === id)?.label ?? id
 
 const VERDICT_WORD = { accepted: ['Accepted', 'ok'], rejected: ['Rejected', 'bad'], pending: ['Pending', 'warn'] }
+
+/** A cleared action as the screen says it: its word with the coordinator's reason, its tone, its journal. */
+function verdictOf (c) {
+  const [word, tone] = c ? VERDICT_WORD[c.status] ?? [c.status, 'muted'] : ['No verdict recorded', 'muted']
+  return { text: `${word}${c?.reason ? ` · ${c.reason}` : ''}`, tone, accepted: c?.status === 'accepted', journal: c?.journal_id ?? null }
+}
+
+/** Why an intent moved no cash, or nothing when its journal says it did. */
+function ledgerNote (v) {
+  if (v.journal) return ''
+  return v.accepted
+    ? 'Accepted with no journal: it changed no ledger.'
+    : 'A proposal is not a ledger change until it is accepted and journalled.'
+}
+
 const actorInfo = computed(() => {
   if (!actor.value || !current.value) return null
   const w = world.value?.actors.find((a) => a.id === actor.value)
@@ -354,11 +369,10 @@ const actorInfo = computed(() => {
     if (r > display.value) continue
     const verdicts = new Map(view.cleared.map((c) => [c.intent_id, c]))
     for (const i of view.intents.filter((x) => x.actor_id === actor.value)) {
-      const c = verdicts.get(i.intent_id)
-      const [word, tone] = c ? VERDICT_WORD[c.status] ?? [c.status, 'muted'] : ['No verdict recorded', 'muted']
+      const v = verdictOf(verdicts.get(i.intent_id))
       actions.push({
-        id: i.intent_id, round: r, type: kindText(i.type), tone,
-        verdict: `${word}${c?.reason ? ` · ${c.reason}` : ''}${c?.journal_id ? ` · journal ${c.journal_id}` : ''}`,
+        id: i.intent_id, round: r, type: kindText(i.type), tone: v.tone,
+        verdict: `${v.text}${v.journal ? ` · journal ${v.journal}` : ''}`,
         evidence: (i.evidence_ids ?? []).join(', ')
       })
     }
@@ -380,8 +394,10 @@ const shownOwners = computed(() => requestOwners(shownViews.value))
 /**
  * The map at the cursor: the world's actors and structural edges (contracts, obligations, shared
  * venues, prices), then what the rounds up to the cursor add — each request for funds, each post
- * an intent cites (information, never cash), each request a lender answers (a disbursement is
- * financial). Nothing after the cursor is drawn.
+ * an intent cites (information, never cash), each request a lender answers. An answer is financial
+ * only when it was accepted and journalled; a rejected, pending or unverdicted one is a proposal,
+ * and it and an accepted one with no journal are drawn as part of the request. Every intent edge
+ * carries its clearing verdict. Nothing after the cursor is drawn.
  */
 const worldMap = computed(() => {
   if (!current.value) return { nodes: [], edges: [] }
@@ -395,15 +411,18 @@ const worldMap = computed(() => {
     .filter((p) => p.round <= r && p.branch_id === base.value.branch_id).map((p) => [p.post_id, p.author]))
   const owners = shownOwners.value
   for (const v of views) {
+    const verdicts = new Map(v.cleared.map((c) => [c.intent_id, c]))
     for (const i of v.intents) {
       node(i.actor_id)
+      const verdict = verdictOf(verdicts.get(i.intent_id))
+      const moved = verdict.accepted && Boolean(verdict.journal)
       const to = i.params?.from
       if (i.type === 'request_advance' && typeof to === 'string') {
         node(to)
         const amount = i.params.amount
         edges.set(`intent:${i.intent_id}`, { id: `intent:${i.intent_id}`, from: i.actor_id, to, type: 'request',
           label: `request advance${amount ? ` ${formatMoney(amount.minor, amount.currency)}` : ''} · round ${i.round}`,
-          tag: 'request advance', source: `intent ${i.intent_id}` })
+          tag: 'request advance', source: `intent ${i.intent_id}`, verdict })
       }
       for (const e of i.evidence_ids ?? []) {
         const author = authors.get(e)
@@ -415,8 +434,9 @@ const worldMap = computed(() => {
         const owner = owners.get(e)
         if (owner && owner !== i.actor_id) {
           edges.set(`cite:${i.intent_id}:${e}`, { id: `cite:${i.intent_id}:${e}`, from: i.actor_id, to: owner,
-            type: i.type === 'disburse' ? 'financial' : 'request',
-            label: `${kindText(i.type)} on ${e} · round ${i.round}`, tag: kindText(i.type), source: `intent ${i.intent_id}` })
+            type: moved ? 'financial' : 'request',
+            label: `${verdict.accepted ? '' : 'proposed '}${kindText(i.type)} on ${e} · round ${i.round}`,
+            tag: `${verdict.accepted ? '' : 'proposed '}${kindText(i.type)}`, source: `intent ${i.intent_id}`, verdict })
         }
       }
     }
@@ -426,27 +446,31 @@ const worldMap = computed(() => {
 
 const mapSelected = computed(() => (actor.value ? { kind: 'node', id: actor.value } : null))
 const evidence = ref(null)
+const INFORMATION_NOTE = 'Information only: a post or a price never moves cash.'
 
 function pickMap ({ kind, id }) {
   if (kind === 'node') return selectActor(id)
   const e = worldMap.value.edges.find((x) => x.id === id)
   if (!e) return
+  const v = e.verdict
   evidence.value = {
     title: `${nameOf(e.from)} → ${nameOf(e.to)}`,
-    rows: [['Type', e.type], ['Relation', e.label], ['Source', e.source], ['Round', `up to round ${display.value}`]],
-    note: e.type === 'information' ? 'Information only: a post or a price never moves cash.' : ''
+    rows: [['Type', e.type], ['Relation', e.label], ['Source', e.source], ['Round', `up to round ${display.value}`],
+      ...(v ? [['Verdict', v.text], ['Journal', v.journal || 'no ledger change']] : [])],
+    note: e.type === 'information' ? INFORMATION_NOTE : (v ? ledgerNote(v) : '')
   }
 }
 
 /** A feed item: its actor is selected and its evidence opens. */
 function pickEvent (item) {
   actor.value = item.actor
+  const v = item.status ? verdictOf(current.value?.cleared.find((c) => c.intent_id === item.id)) : null
   evidence.value = {
     title: `${item.kind} ${item.id}`,
     rows: [['Actor', nameOf(item.actor)], ['Round', String(display.value)], ['What', item.text || '–'],
-      ['Verdict', item.status ? `${item.status.word}${item.reason ? ` · ${item.reason}` : ''}` : 'a public post'],
+      ['Verdict', v ? v.text : 'a public post'],
       ['Journal', item.journal || 'no ledger change'], ['Evidence', item.evidence.join(', ') || 'none cited']],
-    note: item.journal ? '' : 'An intention is not a ledger change until it is accepted and journalled.'
+    note: v ? ledgerNote(v) : INFORMATION_NOTE
   }
 }
 
@@ -543,6 +567,13 @@ const actor = ref(null)
 // moves neither keeps them.
 const graphPanel = ref(null)
 watch([runId, () => body.value?.run_id, display], () => graphPanel.value?.closeDetailPanel())
+
+// The graph is drawn while its disclosure is closed, at 0×0: opening it redraws the round on the
+// cursor at the size it now has.
+function evidenceToggled (event) {
+  graphExpanded.value = event.target.open
+  if (event.target.open) graphPanel.value?.redraw()
+}
 
 // ----------------------------------------------------------------------- local playback
 
