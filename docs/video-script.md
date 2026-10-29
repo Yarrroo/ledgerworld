@@ -63,7 +63,7 @@ use its test command from the submission instructions. Do not silently replace t
 with the fixture. If the current run lacks a trace, show the fixture separately as wiring evidence.
 
 **Voice:** “What if a payment is late and worrying news spreads? Follow the request for money
-through to the books. This scripted test checks the steps, not a model's own choices. It shows
+through to the books. The scripted test checks the steps, not a model's own choices. It shows
 what happened, not why an agent thought it should.”
 
 ## 00:40-01:35 Fork
@@ -77,9 +77,10 @@ Show the new branch metadata and committed rounds as it completes; label every p
 
 **Voice:** “Compare doing nothing, keeping a fixed buffer and borrowing just enough. Which plan
 covers payroll, stays above your safety minimum, and at what fee? Each plan guides your company's
-choices; the others respond again. We're running a new what-if now. Earlier results are labelled
-Replay. New does not mean the agents used a live model, and neither label tells you whether the
-bank connection is simulated or sandbox. Comparing plans does not approve a payment.”
+choices; your lender and the other borrowers respond again. We're running a new what-if now.
+Earlier results are labelled Replay. Fresh does not mean the agents used a live model, and neither
+Fresh nor Replay tells you whether the bank connection is simulated or sandbox. Comparing plans
+does not approve a payment.”
 
 ## 01:35-02:00 Break
 
@@ -119,7 +120,7 @@ its evidence IDs. Open the grounded report for the same run. Finish on the repos
 links and the visible provider/model/replay labels. Do not invent a probability or a receipt.
 
 **Voice:** “Ask why cash ran short, then check the figures against the saved results. The interview
-explains only what the actor could see; it cannot move money. The source code, setup steps and
+explains only what the agent could see; it cannot move money. The source code, setup steps and
 limitations are linked.”
 
 ## Evidence rules

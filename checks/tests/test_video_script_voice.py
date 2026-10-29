@@ -23,6 +23,8 @@ def test_voice_uses_plain_words_and_a_short_lead(beat):
     assert "proves wiring" not in voice
     assert "different buckets" not in voice
     assert "scoped observation" not in voice
+    for ambiguous in ("the others", "neither label", "This scripted test", "the actor"):
+        assert ambiguous not in voice, (beat, ambiguous)
 
 
 @pytest.mark.parametrize(("beat", "topics"), [
