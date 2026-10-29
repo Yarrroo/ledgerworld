@@ -117,7 +117,7 @@ def health():
 def overview():
     s = services()
     with s.lock:
-        body = views.overview(s.store, s.snapshot, s.now(), s.demo())
+        body = views.overview(*s.observed(), s.demo())
     return _reply(c6.OverviewResponse, body)
 
 
@@ -125,7 +125,7 @@ def overview():
 def treasury():
     s = services()
     with s.lock:
-        body = views.treasury(s.store, s.snapshot, s.now())
+        body = views.treasury(*s.observed())
     return _reply(c6.TreasuryResponse, body)
 
 
@@ -133,7 +133,7 @@ def treasury():
 def lending():
     s = services()
     with s.lock:
-        body = views.lending(s.store, s.snapshot, s.now())
+        body = views.lending(*s.observed())
     if body is None:
         raise Refused(404, "no_pool", "the observed snapshot has no lending pool")
     return _reply(c6.LendingResponse, body)

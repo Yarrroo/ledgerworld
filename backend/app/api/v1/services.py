@@ -2,7 +2,9 @@
 
 - the observed snapshot and its ledger store: the state Overview, Treasury and Lending show and
   every plan is decided on (the demo world's snapshot, LF-1's treasury beside LF-2's pool, unless
-  the caller passes another);
+  the caller passes another). Once the operator has prepared the demo, the screens show that
+  run's observed snapshot at its own as_of instead (`observed()`): the store holds the prepared
+  execution's postings, which show on Execution only;
 - the job queue and its records (runs, decisions, transcripts, the demo context) in the ledger
   store's database;
 - the execution gateway on the observed store, built on first use (it reads the provider);
@@ -72,6 +74,7 @@ class Services:
     report_key: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     lock: threading.RLock = field(default_factory=threading.RLock)
     _gateway: Gateway | None = None
+    _baselines: dict[str, tuple[LedgerStore, Snapshot]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.beneficiaries is None:
@@ -140,6 +143,25 @@ class Services:
                     raise LookupError("no execution gateway is configured")
                 self._gateway = self.make_gateway(self)
             return self._gateway
+
+    def observed(self) -> tuple[LedgerStore, Snapshot, datetime]:
+        """The store, snapshot and time Overview, Treasury and Lending read. With a prepared demo:
+        its run's observed snapshot, loaded into a store of its own and read at that snapshot's
+        as_of, so the screens show the baseline its plan was decided on, never the ledger the
+        execution moved since or a clock that ran on past it. Otherwise the observed store now."""
+        run_id = self.demo()["run_id"]
+        if run_id is None:
+            return self.store, self.snapshot, self.now()
+        with self.lock:
+            if run_id not in self._baselines:
+                from ...demo.run import observed_snapshot  # the snapshot prepare decided on
+
+                snapshot = observed_snapshot(load_world(), run_id)
+                store = LedgerStore("sqlite://")
+                from_snapshot(store, snapshot)
+                self._baselines = {run_id: (store, snapshot)}  # only the current run is kept
+            store, snapshot = self._baselines[run_id]
+        return store, snapshot, snapshot.as_of
 
     def authorised(self, header: str | None) -> bool:
         """`Authorization: Bearer <LEDGERWORLD_DEMO_TOKEN>`; no configured token admits nobody."""
