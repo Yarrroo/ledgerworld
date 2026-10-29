@@ -5,8 +5,13 @@
       cash (P) are separate measures; the reserve floor is checked on P.
     </p>
 
+    <p v-if="moved" class="lw-note" role="status" data-test="snapshot-moved">
+      The link was made on snapshot {{ moved }}; this is snapshot {{ body.snapshot_id }}.
+    </p>
     <section v-for="a in accounts" :key="a.id" :aria-label="`Account ${a.id}`"
-             :data-test="`account-${a.id}`" :data-panel="`Account ${a.id}`">
+             :data-test="`account-${a.id}`" :data-panel="`Account ${a.id}`"
+             :data-focus="`account:${a.id}`" tabindex="-1"
+             :class="{ 'lw-row--focus': focus === `account:${a.id}` }">
       <h2>{{ a.id }} · {{ a.currency }}</h2>
       <p v-if="a.observability !== 'known'" class="lw-note">
         Balance not observable: settled reads Unknown and adds nothing; authority is reduced.
@@ -95,7 +100,9 @@
             <th scope="col">Due (local)</th><th scope="col">Reservation</th><th scope="col">State</th></tr>
         </thead>
         <tbody>
-          <tr v-for="o in obligations" :key="o.obligation_id">
+          <tr v-for="o in obligations" :key="o.obligation_id" :data-test="`obligation-${o.obligation_id}`"
+              :data-focus="`obligation:${o.obligation_id}`" tabindex="-1"
+              :class="{ 'lw-row--focus': focus === `obligation:${o.obligation_id}` }">
             <td>{{ o.kind }} · {{ o.obligation_id }}{{ o.mandatory === false ? '' : ' · mandatory' }}</td>
             <td class="lw-num">{{ money(o.amount) }}</td>
             <td>{{ o.due.utc }} ({{ hoursFrom(body.as_of, o.due_at) }})</td>
@@ -115,10 +122,11 @@
 import { computed } from 'vue'
 import {
   STATES, ScreenShell, againstFloor, formatMoney, formatTime, getTreasury, hoursFrom,
-  metricText, money, pendingFlows, projectionTerms, useReading
+  metricText, money, pendingFlows, projectionTerms, useFocusTarget, useReading
 } from '../api/v1.js'
 
 const { state, refresh } = useReading(() => getTreasury())
+const { focus, moved } = useFocusTarget(state)
 
 /** The account's lowest API point P, first reached; null when any point has no value. */
 function lowest (projected) {

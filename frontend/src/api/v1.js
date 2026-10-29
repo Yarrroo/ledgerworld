@@ -331,6 +331,40 @@ export function useReading (load) {
   return { state, refresh }
 }
 
+// ----------------------------------------------------------------------- deep links
+
+/**
+ * A link to a row on another screen, in the snapshot the link was made in: `focus` names the
+ * row (`account:<id>`, `obligation:<id>`), `snapshot` the observed snapshot it was read from.
+ */
+export const rowLink = (path, focus, snapshot) => ({ path, query: { focus, snapshot } })
+
+/**
+ * The row a deep link names, focused once the screen has its answer: the element marked
+ * `data-focus="<focus>"` scrolls into view and takes focus (the screen marks it with `focus`).
+ * `moved` names the link's snapshot when it is no longer the one shown.
+ */
+export function useFocusTarget (reading) {
+  const route = useRoute()
+  const wanted = computed(() => (typeof route.query.focus === 'string' ? route.query.focus : null))
+  const moved = computed(() => {
+    const from = route.query.snapshot
+    return typeof from === 'string' && !!reading.body && reading.body.snapshot_id !== from ? from : null
+  })
+  let done = null
+  watch([() => reading.status, wanted], async ([status, focus]) => {
+    if (status !== 'loaded' || !focus || done === focus) return
+    await nextTick()
+    const el = [...document.querySelectorAll('[data-focus]')].find((e) => e.dataset.focus === focus)
+    if (!el) return
+    done = focus
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    el.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'center' })
+    el.focus({ preventScroll: true })
+  }, { immediate: true })
+  return { focus: wanted, moved }
+}
+
 // ------------------------------------------------------------------------------ the shell
 
 /** The faceted LedgerWorld mark in the logo blue: a drawn stand-in until the vector asset lands. */

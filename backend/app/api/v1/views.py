@@ -120,7 +120,70 @@ def _combined_low(views: list[AccountView], now: datetime,
 
 # ---------------------------------------------------------------------------- Overview
 
-def overview(store: LedgerStore, snapshot: Snapshot, now: datetime, demo: Body) -> Body:
+def _outlook(views: list[AccountView], now: datetime, status: str,
+             horizon: timedelta = HORIZON) -> list[Body]:
+    """P of the accounts together at now, at each flow or deadline inside the horizon, and at
+    the horizon's end, each with what moves it there; empty when a balance is unknown."""
+    if status == "unknown":
+        return []
+    currency = views[0].currency
+    end = now + horizon
+    moves: dict[datetime, list[Body]] = {}
+    for v in views:
+        for items, direction in ((v.pending_in, "in"), (v.pending_out, "out"),
+                                 (v.obligations, "out")):
+            for x in items:
+                if now < x.at <= end:
+                    ref = getattr(x, "flow_id", None) or x.obligation_id
+                    moves.setdefault(x.at, []).append(
+                        {"ref": ref, "kind": x.kind, "direction": direction,
+                         "amount": {"minor": x.amount_minor, "currency": currency}})
+    return [{"t": iso(t), "value": metric(sum(projected_cash(v, t) for v in views), currency,
+                                          status),
+             "events": sorted(moves.get(t, []), key=lambda e: e["ref"])}
+            for t in sorted({now, end, *moves})]
+
+
+def _party(names: dict[str, str], entity: str) -> Body:
+    return {"entity_id": entity, "name": names.get(entity, entity)}
+
+
+def _relations(store: LedgerStore, snapshot: Snapshot, entity: str) -> list[Body]:
+    """The world around ``entity`` as the snapshot states it: its open obligations (payee: the
+    world's entity of the obligation's kind, as its payroll bureau is ``payroll``; none recorded
+    otherwise), the pool's committed lines, and the venues ``entity`` or the pool depend on. A
+    relation is a dependency, never a transfer."""
+    names = {e.entity_id: e.name for e in snapshot.entities}
+    flows = {f.flow_id: f.amount for a in snapshot.accounts
+             for f in a.buckets.pending_in + a.buckets.pending_out}
+    settled = {a.id: a.buckets.settled for a in snapshot.accounts}
+    pool = _pool(store)
+    out: list[Body] = []
+    for o in sorted(store.rows("obligations"), key=lambda o: (o["due_at"], o["obligation_id"])):
+        if o["entity_id"] == entity and o["state"] == "open":
+            out.append({"ref": o["obligation_id"], "kind": "obligation",
+                        "source": _party(names, entity),
+                        "target": _party(names, o["kind"]) if o["kind"] in names else None,
+                        "amount": {"minor": o["amount_minor"], "currency": o["currency"]}})
+    for c in snapshot.contracts:
+        if c.kind == "committed_line" and c.lender in (entity, pool):
+            out.append({"ref": c.contract_id, "kind": "credit_line",
+                        "source": _party(names, c.lender), "target": _party(names, c.borrower),
+                        "amount": c.limit.model_dump()})
+    for x in snapshot.exposures:
+        for party in x.shared_with:
+            if party not in (entity, pool):
+                continue
+            mine = x.account is not None and x.account.startswith(f"{party}/")
+            amount = settled.get(x.account) if mine else flows.get(x.flow_id)
+            out.append({"ref": x.exposure_id, "kind": "venue_exposure",
+                        "source": _party(names, party), "target": _party(names, x.venue),
+                        "amount": amount.model_dump() if amount and amount.minor > 0 else None})
+    return out
+
+
+def overview(store: LedgerStore, snapshot: Snapshot, now: datetime, demo: Body,
+             scenario: Body | None = None) -> Body:
     entity, views = _primary(store, snapshot)
     currency = views[0].currency
     cash = _sum_metric(views, now, lambda v: v.settled_minor)
@@ -135,7 +198,8 @@ def overview(store: LedgerStore, snapshot: Snapshot, now: datetime, demo: Body) 
     outflows = [
         {"obligation_id": o["obligation_id"], "kind": o["kind"],
          "amount": {"minor": o["amount_minor"], "currency": o["currency"]},
-         "due_at": iso(_aware(o["due_at"])), "reserved": o["reservation_id"] is not None}
+         "due_at": iso(_aware(o["due_at"])), "reserved": o["reservation_id"] is not None,
+         "account": o["account_id"], "reservation_id": o["reservation_id"]}
         for o in sorted(store.rows("obligations"), key=lambda o: (o["due_at"], o["obligation_id"]))
         if o["entity_id"] == entity and o["state"] == "open" and _aware(o["due_at"]) >= now
     ]
@@ -146,6 +210,11 @@ def overview(store: LedgerStore, snapshot: Snapshot, now: datetime, demo: Body) 
                      "floor": floor, "headroom": headroom},
         "lender_capacity": _capacity_metric(store, _pool(store), now, currency),
         "completeness": _completeness(store, now), "demo": demo,
+        "company": _party({e.entity_id: e.name for e in snapshot.entities}, entity),
+        "accounts": [treasury_account(v, now) for v in views],
+        "outlook": _outlook(views, now, status),
+        "relations": _relations(store, snapshot, entity),
+        "scenario": scenario,
     }
 
 

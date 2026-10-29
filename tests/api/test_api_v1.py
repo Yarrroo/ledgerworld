@@ -172,10 +172,57 @@ def test_overview_on_lf1_lf2_after_the_delay():
     assert body["upcoming_outflows"] == [{
         "obligation_id": "payroll-1", "kind": "payroll", "reserved": True,
         "amount": {"minor": 5_000_000, "currency": "USD"},
-        "due_at": iso(T0 + timedelta(hours=40))}]
+        "due_at": iso(T0 + timedelta(hours=40)),
+        "account": "borrower-a/operating", "reservation_id": "res-payroll-1"}]
     assert body["lender_capacity"]["minor"] == 4_200_000  # LF-2: K_p = 42,000.00
     assert body["completeness"] == {"status": "complete", "missing": [], "accounts": []}
     assert body["demo"] == {"run_id": None, "execution_id": None}  # nothing prepared: null
+
+
+def test_overview_carries_the_baseline_outlook_and_the_world_around_the_treasury():
+    """The demo world at its epoch is the handoff's baseline: P at h0, h12, h40, h48 and the
+    horizon's end h72 (70k, 90k, 40k, 55k, 55k), each with what moves it; the strip's inputs are
+    Treasury's own account; relations are the snapshot's obligation, line and shared venue."""
+    epoch = WORLD.epoch
+    http = client(build(WORLD.snapshot.model_dump(mode="json"), clock=lambda: epoch))
+    body = baseline_overview()
+    at = lambda h: iso(epoch + timedelta(hours=h))
+    assert [(p["t"], p["value"]["minor"]) for p in body["outlook"]] == [
+        (at(0), 7_000_000), (at(12), 9_000_000), (at(40), 4_000_000), (at(48), 5_500_000),
+        (at(72), 5_500_000)]
+    assert [[(e["ref"], e["direction"], e["amount"]["minor"]) for e in p["events"]]
+            for p in body["outlook"]] == [
+        [], [("receivable-1", "in", 2_000_000)], [("payroll-1", "out", 5_000_000)],
+        [("withdrawal-1", "in", 1_500_000)], []]
+    assert body["company"]["entity_id"] == "treasury"
+    treasury = check(http.get("/api/v1/treasury"), "TreasuryResponse")
+    assert body["accounts"] == treasury["accounts"] and len(body["accounts"]) == 1
+    assert body["upcoming_outflows"][0] | {"due_at": None} == {
+        "obligation_id": "payroll-1", "kind": "payroll", "reserved": True, "due_at": None,
+        "amount": {"minor": 5_000_000, "currency": "USD"}, "account": "treasury/operating",
+        "reservation_id": "payroll-hold"}
+    relations = {(r["kind"], r["ref"], r["source"]["entity_id"],
+                  r["target"]["entity_id"] if r["target"] else None,
+                  r["amount"]["minor"] if r["amount"] else None) for r in body["relations"]}
+    assert relations == {
+        ("obligation", "payroll-1", "treasury", "payroll", 5_000_000),
+        ("credit_line", "line-b", "lender", "borrower-b", 1_000_000),
+        ("venue_exposure", "venue-1", "treasury", "venue", 1_500_000),
+        ("venue_exposure", "venue-1", "lender", "venue", 1_500_000)}
+    assert body["scenario"] is None  # no prepared run, no scenario to preview
+
+
+def baseline_overview() -> dict:
+    epoch = WORLD.epoch
+    http = client(build(WORLD.snapshot.model_dump(mode="json"), clock=lambda: epoch))
+    return check(http.get("/api/v1/overview"), "OverviewResponse")
+
+
+def test_the_baseline_example_is_what_the_api_answers():
+    """e2e/ux/overview.spec.ts serves this recording to check the handoff's baseline numbers on
+    screen; it must stay the API's own answer on the demo world at its epoch."""
+    path = ROOT / "contracts/examples/c6_api/valid-overview-demo-baseline.json"
+    assert baseline_overview() == json.loads(path.read_text(encoding="utf-8"))["instance"]
 
 
 def test_venue_freeze_is_partial_and_unknown_is_never_zero():
