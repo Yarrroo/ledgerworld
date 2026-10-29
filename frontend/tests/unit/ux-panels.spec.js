@@ -8,6 +8,7 @@ import { h } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
+import { onPage as seen } from './visible.js' // what a reader sees, closed tooltips and dialogs left out
 import Decisions from '../../src/views/Decisions.vue'
 import Simulation from '../../src/views/Simulation.vue'
 import CashChart from '../../src/components/CashChart.vue'
@@ -69,12 +70,6 @@ function treasury (floor = usd(3000000)) {
 }
 
 const text = (w, test) => w.get(`[data-test="${test}"]`).text().replace(/\s+/g, ' ')
-/** What a reader sees without opening a tooltip: the text less every tooltip bubble. */
-function seen (w, test) {
-  const el = w.get(`[data-test="${test}"]`).element.cloneNode(true)
-  el.querySelectorAll('[role="tooltip"]').forEach((t) => t.remove())
-  return el.textContent.replace(/\s+/g, ' ').trim()
-}
 
 describe('Decisions reads minima and shortfalls only as the API supports them', () => {
   it('a policy whose scenarios are partly unknown has an Unknown minimum, never one scenario\'s', async () => {

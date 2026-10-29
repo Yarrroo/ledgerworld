@@ -7,6 +7,7 @@ import { defineComponent, h } from 'vue'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
+import { onPage as shown } from './visible.js' // what the page shows, closed tooltips and dialogs left out
 import Overview from '../../src/views/Overview.vue'
 import Treasury from '../../src/views/Treasury.vue'
 import Lending from '../../src/views/Lending.vue'
@@ -76,12 +77,6 @@ async function open (component, path, routes) {
 
 const text = (wrapper, test) => wrapper.get(`[data-test="${test}"]`).text().replace(/\s+/g, ' ')
 const disabled = (wrapper, test) => wrapper.get(`[data-test="${test}"]`).attributes('disabled') !== undefined
-/** What the page shows of an element, its tooltips' words left out (they are not on the page until asked for). */
-function shown (wrapper, test) {
-  const el = wrapper.get(`[data-test="${test}"]`).element.cloneNode(true)
-  for (const bubble of el.querySelectorAll('[role="tooltip"]')) bubble.remove()
-  return el.textContent.replace(/\s+/g, ' ').trim()
-}
 /** The words of the tooltip inside (or on) ``test``. */
 const tip = (wrapper, test) => wrapper.get(`[data-test="${test}"] [role="tooltip"]`).text().replace(/\s+/g, ' ')
 /** The fixtures' "USD 70,000.00" as the mockups' figure: "$70,000" (MATCH.md item 5, formatMoney). */
@@ -147,6 +142,8 @@ describe('money-views fixture', () => {
     // source and mode stay on the banner
     expect(text(w, 'context-provider')).toBe(dataStates.labels.fake)
     expect(text(w, 'source')).toBe(`${moneyViews.context.source_label} lf1`)
+    expect(shown(w, 'mode').startsWith(dataStates.labels.fake)).toBe(true)
+    expect(shown(w, 'context-line')).toMatch(/ · Synthetic data$/)
   })
 
   it('Overview names why the simulation cannot open when its screen or its run is absent', async () => {
@@ -527,9 +524,11 @@ describe('data-states fixture', () => {
     serveLending(() => ({ ...clone(lendingLf2.instance), mode }))
     const w = await open(Lending, '/lending')
     expect(text(w, 'context-provider')).toBe(dataStates.labels[c.from])
+    expect(shown(w, 'mode').startsWith(dataStates.labels[c.from])).toBe(true)
     mode = c.to
     await revisit()
     expect(text(w, 'context-provider')).toBe(c.expect.banner)
+    expect(shown(w, 'mode').startsWith(c.expect.banner)).toBe(true)
     expect(Boolean(text(w, 'context-changed'))).toBe(c.expect.reload_context)
     expect(text(w, 'context-changed')).toContain(c.expect.banner) // the header names the provider (MATCH.md item 3)
   })
@@ -558,14 +557,19 @@ describe('formatting and labels', () => {
     serve({ '/overview': { ...clone(overviewLf1.instance), run_id: 'run-7', replay: true } })
     const w = await open(Overview, '/overview')
     expect(text(w, 'source')).toBe(`${dataStates.labels.replay} · run-7`)
+    expect(shown(w, 'context-line')).toMatch(/ · Replay$/)
+    expect(shown(w, 'mode')).not.toContain('What-if')
   })
 
   it('a hypothetical branch or a replay is never labelled the observed snapshot', async () => {
     serve({ '/overview': { ...clone(overviewLf1.instance), branch_id: 'br-integrated' } })
     let w = await open(Overview, '/overview')
     expect(text(w, 'source')).toBe(`${dataStates.labels.branch} br-integrated`)
+    expect(shown(w, 'context-line')).toMatch(/ · What-if branch$/)
+    expect(shown(w, 'mode')).toMatch(/ · What-if$/)
     serve({ '/overview': { ...clone(overviewLf1.instance), branch_id: 'br-1', replay: true } })
     w = await open(Overview, '/overview')
     expect(text(w, 'source')).toContain(dataStates.labels.replay)
+    expect(shown(w, 'mode')).toMatch(/ · Replay · What-if$/)
   })
 })

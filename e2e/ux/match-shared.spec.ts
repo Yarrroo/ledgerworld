@@ -9,8 +9,12 @@
  * - the header and sidebar as the mockups: "LedgerWorld / Page", "Simulated provider · Scripted
  *   agents", the date, "Snapshot … · USD · Synthetic data", "Simulation" in the sidebar and the
  *   company block (item 3);
+ * - the honesty labels on the page, never only in a tooltip or a closed dialog (COPY.md rule 4):
+ *   the provider and agents, the figures' kind, What-if where the figures are one, and Replay when
+ *   the API says the run was replayed (a handoff mismatch: simulation-handoff.spec.ts);
  * - tooltips on every screen, and the one tooltip's behaviour: hover, keyboard focus and tap open
- *   it, Escape and a second tap close it, and it never covers the value it explains (item 4);
+ *   it, Escape and a second tap close it, and it never covers the value it explains (item 4); every
+ *   tooltip whose trigger is on the page opens on focus and closes on Escape;
  * - the word budget: each screen's visible words at 1487 px are within checks/word_budget.py's
  *   budget, the mockup's plus 15 %, and are written to UX_OUT/word-counts.json (item 8).
  *
@@ -18,7 +22,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
 import { ROUTES, crumb, demoRunId, settled, sideways, urlOf } from './routes'
 import { visibleWords, wordBudget } from './words'
@@ -36,6 +40,20 @@ const SIDEBAR = ['Overview', 'Treasury', 'Lending', 'Simulation', 'Decisions', '
 const NOISE = /How we know|Check again|^Refresh$/
 
 const bubble = (tip: Locator): Locator => tip.locator('[role="tooltip"]')
+
+/** Whether the API says the screen's figures were replayed: the decisions' results, the run's base branch. */
+async function replayed (request: APIRequestContext, path: string, runId: string): Promise<boolean> {
+  if (path === '/decisions') {
+    const reply = await request.get(`/api/v1/decisions/${encodeURIComponent(runId)}`)
+    return reply.ok() && ((await reply.json()).results ?? []).some((r: { replay?: boolean }) => r.replay)
+  }
+  if (path === '/simulation') {
+    const reply = await request.get(`/api/v1/runs/${encodeURIComponent(runId)}`)
+    const branches: { parent_branch_id: string | null, replay?: boolean }[] = reply.ok() ? (await reply.json()).branches ?? [] : []
+    return Boolean(branches.find((b) => b.parent_branch_id === null)?.replay)
+  }
+  return false
+}
 
 /** The visible texts of every element matching `selector`. */
 async function shown (page: Page, selector: string): Promise<string[]> {
@@ -91,6 +109,21 @@ test('the shared page: hero, header, sidebar, no noise, tooltips', async ({ page
     await expect(nav.filter({ hasText: route.title }), where).toHaveAttribute('aria-current', 'page')
     await expect(page.locator('[data-test="company"]'), where).toHaveText(/Northwind Parts\s*Synthetic company/)
 
+    // the honesty labels are on the page: toHaveText alone passes on a closed tooltip's words
+    await expect(page.locator('[data-test="mode"]'), `${where}: provider and agents`).toBeVisible()
+    await expect(page.locator('[data-test="context-line"]'), `${where}: the figures' kind`).toBeVisible()
+    // the screen's own What-if label, not any sentence that counts what-ifs
+    if (route.path === '/simulation') {
+      await expect(page.locator('[data-test="mode"]'), `${where}: What-if`).toContainText('What-if', { useInnerText: true })
+    }
+    if (route.path === '/decisions') {
+      await expect(page.locator('[data-test="hero-subtitle"]'), `${where}: What-if`).toContainText('Hypothetical comparison', { useInnerText: true })
+    }
+    if (await replayed(request, route.path, runId)) {
+      await expect(page.locator('[data-test="mode"]'), `${where}: Replay`).toContainText('Replay', { useInnerText: true })
+      await expect(page.locator('[data-test="context-line"]'), `${where}: Replay`).toHaveText(/ · Replay$/, { useInnerText: true })
+    }
+
     // item 4: tooltips on the screen's figures and actions
     expect(await page.locator('[role="tooltip"]').count(), `${where}: tooltips`).toBeGreaterThanOrEqual(3)
 
@@ -98,6 +131,34 @@ test('the shared page: hero, header, sidebar, no noise, tooltips', async ({ page
   }
   expect(writes, 'the walk sent a write').toEqual([])
 })
+
+for (const route of ROUTES) {
+  test(`every tooltip on ${route.path} opens on focus and closes on Escape`, async ({ page, request, baseURL }, info) => {
+    const writes = await readOnly(page, baseURL!)
+    const runId = await demoRunId(request)
+    await page.goto(urlOf(route, runId))
+    await settled(page)
+    const where = `${route.path} at ${info.project.use.viewport!.width}`
+    // each bubble's trigger is the control (or wrapper) it describes; a trigger off the page is skipped
+    const ids = await page.locator('[role="tooltip"][id]').evaluateAll((els) => els.map((el) => el.id)
+      .filter((id) => {
+        const trigger = document.querySelector(`[aria-describedby~="${CSS.escape(id)}"]`)
+        return trigger && trigger.checkVisibility() && trigger.getBoundingClientRect().width > 1
+      }))
+    expect(ids.length, `${where}: tooltips with a trigger on the page`).toBeGreaterThanOrEqual(3)
+    for (const id of ids) {
+      const trigger = page.locator(`[aria-describedby~="${id}"]`).first()
+      const body = page.locator(`[id="${id}"]`)
+      const name = `${where}: the tooltip of "${(await trigger.innerText()).trim().slice(0, 40)}"`
+      await trigger.focus()
+      await expect(body, name).toBeVisible()
+      expect((await body.innerText()).trim(), `${name} is empty`).not.toBe('')
+      await page.keyboard.press('Escape')
+      await expect(body, name).toBeHidden()
+    }
+    expect(writes).toEqual([])
+  })
+}
 
 test('one tooltip: hover, focus and tap open it; Escape, blur and a second tap close it', async ({ page, baseURL }, info) => {
   const writes = await readOnly(page, baseURL!)

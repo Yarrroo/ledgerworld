@@ -83,7 +83,11 @@ async function simulation (page: Page, demo: Demo): Promise<void> {
   await expect(page.locator('#feed-title')).toContainText(`Action feed · round ${round}`)
   await expect(test$(page, 'inspector').locator('h2')).toHaveText(`Actors up to round ${round}`)
   await expect(test$(page, 'feed-unloaded')).toHaveCount(0)
-  if (await test$(page, 'replay-note').count()) await expect(test$(page, 'source')).toContainText('Replay')
+  // a replayed run says so on the page, in the header, not only in its tooltip (COPY.md rule 4)
+  if (await test$(page, 'replay-note').count()) {
+    await expect(test$(page, 'mode')).toBeVisible()
+    await expect(test$(page, 'mode')).toContainText('Replay', { useInnerText: true })
+  }
 }
 
 /** Click 2, Compare policies: three policies, the surviving one beside no-action, no odds. */

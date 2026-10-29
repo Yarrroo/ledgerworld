@@ -9,6 +9,7 @@ import { defineComponent, h, watch } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
+import { onPage } from './visible.js'
 import Simulation from '../../src/views/Simulation.vue'
 import i18n from '../../src/i18n/index.js'
 
@@ -266,6 +267,9 @@ describe('scrubber fixture', () => {
     const { wrapper: w } = await open(run(want.change))
     const label = want.expect.label_in_header_and_export
     expect(text(w, 'source').startsWith(`${label} ·`)).toBe(true)
+    expect(onPage(w, 'context-line')).toMatch(new RegExp(` · ${label}$`))
+    expect(onPage(w, 'mode')).toContain(` · ${label} · What-if`)
+    expect(onPage(w, 'hero-subtitle').startsWith(`${label} · What-if branch`)).toBe(true)
     // the Replay label sits in each feed item's and each cash value's tooltip (MATCH.md item 4)
     const feedTips = w.findAll('[data-test="feed"] [role="tooltip"]').map((t) => t.text())
       .filter((t) => t.startsWith('i-') || t.startsWith('p-')) // each item's own tip, not its verdict's
@@ -286,6 +290,8 @@ describe('scrubber fixture', () => {
     expect(w.findAll('[data-test="feed"] [role="tooltip"]').some((t) => t.text().includes('Replay'))).toBe(false)
     expect(w.findAll('[data-test="cash"] [role="tooltip"]').some((t) => t.text().includes('Replay'))).toBe(false)
     expect(text(w, 'source')).toBe(`Hypothetical branch ${ctx.branch_id}`)
+    expect(onPage(w, 'mode')).toMatch(/ · What-if$/)
+    expect(onPage(w, 'hero-subtitle')).not.toContain('Replay')
   })
 
   it('fork: carries the selected round, needs the token, and creates no approval', async () => {
