@@ -241,6 +241,24 @@ def test_g1_measures_against_the_lockfile_as_the_merge_gate_does() -> None:
     assert g1.PYTEST[:3] == ["uv", "run", "--locked"]
 
 
+# Every money check g1 counts, and how many tests they list: a speed-up of the measurement may
+# change how the checks run, never which of them count.
+G1_CHECKS = [
+    "lf1_reproduction", "ledger_balance", "ledger_no_orphan_posting", "ledger_reserved_le_settled",
+    "ledger_no_double_pledge", "ledger_unknown_not_zero", "lf2_reproduction",
+    "draw_beyond_kp_rejected", "no_duplicate_movement", "no_movement_from_unowned_funds",
+    "altered_approval_refused", "timeout_resolved_by_query", "reconciliation_closes_advance",
+    "clairvoyant_policy_rejected", "credential_isolation", "money_safety_hunts",
+]
+
+
+def test_g1_counts_every_money_check_and_every_test_they_list() -> None:
+    checks = json.loads((CHECKS / "required.json").read_text(encoding="utf-8"))["g1"]
+    assert [c["id"] for c in checks] == G1_CHECKS
+    assert all(c.get("tests") for c in checks)
+    assert len({t for c in checks for t in c["tests"]}) == 119
+
+
 def test_g5_a_progress_line_is_not_a_count() -> None:
     from goals import g5
 
