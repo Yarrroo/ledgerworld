@@ -1,8 +1,9 @@
 /**
  * The cash outlook's labels at every width of e2e/ux.config.ts: the low-point label never crosses
- * the dashed reserve-floor line nor the floor label. Three answers: the app's own, the recorded
- * baseline (P lowest at 40,000 against a 30,000 floor), and the baseline with its lowest point
- * moved just above the floor and near the right edge, under the floor label. Read-only.
+ * the dashed reserve-floor line, the floor label, the step line P or any point marker. Three
+ * answers: the app's own, the recorded baseline (P lowest at 40,000 against a 30,000 floor, the
+ * h48 point just above and to the right), and the baseline with its lowest point moved just above
+ * the floor and near the right edge, under the floor label. Read-only.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -41,6 +42,23 @@ async function clear (page: Page): Promise<void> {
   expect(lineY > label.y && lineY < label.y + label.height,
     `the low-point label (y ${label.y}–${label.y + label.height}) crosses the floor line at y ${lineY}`).toBe(false)
   expect(overlaps(label, floorLabel), 'the low-point label overlaps the floor label').toBe(false)
+  const markers = $(page, 'outlook-point').locator('.lw-outlook__dot')
+  for (let n = 0; n < await markers.count(); n++) {
+    const marker = (await markers.nth(n).boundingBox())!
+    expect(overlaps(label, marker), `the low-point label overlaps point marker ${n} at x ${marker.x}`).toBe(false)
+  }
+  // the step line, sampled along its length in viewport coordinates (boundingBox's): no sample
+  // inside the label
+  const crossing = await $(page, 'outlook-line').evaluate((path: SVGPathElement, box: Box) => {
+    const m = path.getScreenCTM()!
+    const total = path.getTotalLength()
+    for (let at = 0; at <= total; at += 1) {
+      const { x, y } = path.getPointAtLength(at).matrixTransform(m)
+      if (x > box.x && x < box.x + box.width && y > box.y && y < box.y + box.height) return { x, y }
+    }
+    return null
+  }, label)
+  expect(crossing, `the low-point label sits on the step line at ${JSON.stringify(crossing)}`).toBeNull()
 }
 
 test('the app\'s own answer: the low-point label clears the floor line and its label', async ({ page, baseURL }) => {
