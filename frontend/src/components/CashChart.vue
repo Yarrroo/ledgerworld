@@ -32,7 +32,8 @@
  * focus or click selects its instant for the caller, who shows P's terms there and keeps the text
  * table of the same points. An unknown value is not drawn and never drawn as zero.
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useWidth } from './width.js'
 import { againstFloor, formatTime, hoursFrom, metricText } from '../api/v1.js'
 
 const props = defineProps({
@@ -51,17 +52,7 @@ const PAD_T = 28
 const PAD_B = 36
 
 const box = ref(null)
-const width = ref(640)
-let observer = null
-onMounted(() => {
-  const measure = () => { width.value = Math.max(280, Math.round(box.value?.clientWidth || 640)) }
-  measure()
-  if (window.ResizeObserver) {
-    observer = new ResizeObserver(measure)
-    observer.observe(box.value)
-  }
-})
-onBeforeUnmount(() => observer?.disconnect())
+const width = useWidth(box)
 
 const floorText = computed(() => metricText(props.floor))
 

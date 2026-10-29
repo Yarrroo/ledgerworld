@@ -93,7 +93,7 @@
           <h2>Actors up to round {{ display ?? '–' }}</h2>
           <p v-if="!current" class="lw-live-empty">Round not loaded</p>
           <ul v-else class="lw-live__actors" aria-label="Actors, the keyboard way to the map">
-            <li v-for="a in actorList" :key="a.id">
+            <li v-for="a in actors" :key="a.id">
               <button type="button" class="lw-button lw-button--quiet" :aria-pressed="a.id === actor ? 'true' : 'false'"
                       :data-actor="a.id" @click="selectActor(a.id)">
                 {{ a.id }}<template v-if="a.active"> · acted this round</template>
@@ -354,7 +354,10 @@ const actorInfo = computed(() => {
     actions: actions.sort((x, y) => x.round - y.round)
   }
 })
-const actorList = computed(() => actors.value)
+
+/** The rounds up to the cursor, and the request ids they minted: read by the map and the graph. */
+const shownViews = computed(() => [...byRound.value].filter(([n]) => n <= (display.value ?? -1)).map(([, v]) => v))
+const shownOwners = computed(() => requestOwners(shownViews.value))
 
 /**
  * The map at the cursor: the world's actors and structural edges (contracts, obligations, shared
@@ -369,10 +372,10 @@ const worldMap = computed(() => {
   const node = (id) => nodes.has(id) || nodes.set(id, { id, label: id, role: null })
   const edges = new Map((w?.edges ?? []).map((e) => [e.id, { ...e, source: `world file, snapshot ${w.snapshotId}` }]))
   const r = display.value
-  const views = [...byRound.value].filter(([n]) => n <= r).map(([, v]) => v)
+  const views = shownViews.value
   const authors = new Map((body.value.feed ?? [])
     .filter((p) => p.round <= r && p.branch_id === base.value.branch_id).map((p) => [p.post_id, p.author]))
-  const owners = requestOwners(views)
+  const owners = shownOwners.value
   for (const v of views) {
     for (const i of v.intents) {
       node(i.actor_id)
@@ -451,7 +454,7 @@ const graphData = computed(() => {
   if (!current.value) return { nodes: [], edges: [] }
   const r = display.value
   const posts = (body.value.feed ?? []).filter((p) => p.round <= r && p.branch_id === base.value.branch_id)
-  const views = [...byRound.value].filter(([n]) => n <= r).map(([, v]) => v)
+  const views = shownViews.value
   const intents = views.flatMap((v) => v.intents)
   const nodes = new Map()
   const node = (uuid, name, label) => nodes.has(uuid) || nodes.set(uuid, { uuid, name, labels: ['Entity', label] })
@@ -468,7 +471,7 @@ const graphData = computed(() => {
     node(`actor:${i.actor_id}`, i.actor_id, 'Actor')
     owner.set(i.intent_id, `actor:${i.actor_id}`)
   }
-  for (const [id, actorId] of requestOwners(views)) owner.set(id, `actor:${actorId}`)
+  for (const [id, actorId] of shownOwners.value) owner.set(id, `actor:${actorId}`)
   for (const i of intents) {
     for (const e of i.evidence_ids ?? []) {
       const target = owner.get(e)

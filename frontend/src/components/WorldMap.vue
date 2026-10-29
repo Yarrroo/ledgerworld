@@ -40,7 +40,8 @@
  * the caller owns the selection and the details. The caller also lists the same nodes and edges
  * as text, so nothing here is the only way to reach them.
  */
-import { computed, onBeforeUnmount, onMounted, ref, useId } from 'vue'
+import { computed, ref, useId } from 'vue'
+import { useWidth } from './width.js'
 
 const props = defineProps({
   nodes: { type: Array, required: true }, // [{ id, label }]
@@ -61,17 +62,7 @@ const TYPES = [
 
 const uid = `lw-map-${useId()}`
 const box = ref(null)
-const width = ref(640)
-let observer = null
-onMounted(() => {
-  const measure = () => { width.value = Math.max(280, Math.round(box.value?.clientWidth || 640)) }
-  measure()
-  if (window.ResizeObserver) {
-    observer = new ResizeObserver(measure)
-    observer.observe(box.value)
-  }
-})
-onBeforeUnmount(() => observer?.disconnect())
+const width = useWidth(box)
 
 const height = computed(() => (width.value < 600 ? 340 : 380))
 const showLabels = computed(() => width.value >= 600)
