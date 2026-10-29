@@ -221,7 +221,7 @@ test('O5 exposure and O6 scenario: text relationships, the prepared run, a read-
   await tall(page, '[data-test="explore-world"], [data-test="lender-capacity"] a')
 
   await expect($(page, 'hypothetical')).toHaveText(/hypothetical/i)
-  const before = await $(page, 'settled').innerText()
+  const before = await $(page, 'settled').textContent()
   const preview = $(page, 'preview-scenario')
   await preview.click()
   await expect(preview).toHaveAttribute('aria-expanded', 'true')
@@ -232,7 +232,7 @@ test('O5 exposure and O6 scenario: text relationships, the prepared run, a read-
   if (body.scenario.params.delay_h) {
     await expect($(page, 'scenario-timing')).toContainText(`delayed ${body.scenario.params.delay_h} h`)
   }
-  await expect($(page, 'settled')).toHaveText(before) // the preview changes no observed figure
+  expect(await $(page, 'settled').textContent()).toBe(before) // the preview changes no observed figure
   await tall(page, '[data-test="preview-scenario"], a[data-test="open-simulation"]')
   expect(await sideways(page)).toBeLessThanOrEqual(0)
 
