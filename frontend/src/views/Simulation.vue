@@ -261,7 +261,9 @@ const POLL_MS = 4000
 
 const route = useRoute()
 const router = useRouter()
-const runId = computed(() => (typeof route.query.run_id === 'string' && route.query.run_id) || null)
+/** A query value the link carried — the run, or what a handoff brought — when there is one. */
+const handedOff = (key) => (typeof route.query[key] === 'string' && route.query[key]) || null
+const runId = computed(() => handedOff('run_id'))
 
 // With no run named (the nav link), the prepared demonstration run, as Decisions and Execution
 // read it, named in the URL by this read (so the run watcher does not read it again), and only
@@ -395,9 +397,6 @@ const subtitle = computed(() => {
   const name = f ? f.id.replace(/[-_]/g, ' ').replace(/^./, (c) => c.toUpperCase()) : ''
   return [base.value.replay && PLAIN.replay, `${PLAIN.branch} branch`, name].filter(Boolean).join(' · ')
 })
-
-/** A handoff query value, when the link carried one. */
-const handedOff = (key) => (typeof route.query[key] === 'string' && route.query[key]) || null
 
 /** What a handoff from Treasury (account) or Lending (a scenario this run plays) carried, echoed behind the (i). */
 const handoff = computed(() => {
