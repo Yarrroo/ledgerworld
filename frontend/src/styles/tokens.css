@@ -289,6 +289,15 @@
   margin-bottom: var(--lw-space-4);
 }
 
+/* A screen's lead sentence: the cash owner's answer, before every other figure. */
+.lw-lead {
+  max-width: 46em;
+  margin: 0 0 var(--lw-space-4);
+  font-family: var(--lw-font-heading);
+  font-size: 20px;
+  line-height: 28px;
+}
+
 /* Plain links take the theme's link colour; the browser's default blue fails contrast in dark. */
 .lw-main a:not(.lw-button) {
   color: var(--lw-link);

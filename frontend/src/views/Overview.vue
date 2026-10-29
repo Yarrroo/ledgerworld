@@ -1,20 +1,29 @@
 <template>
   <ScreenShell v-slot="{ body, busy }" title="Overview" :reading="state" :refresh="refresh" :stale="stale">
     <!-- O1 context -->
-    <section class="lw-ov-context" aria-labelledby="ov-context" data-panel="Context" data-test="context-panel">
+    <section class="lw-ov-context" aria-labelledby="ov-context" data-panel="Your cash" data-test="context-panel">
       <h2 id="ov-context" class="lw-ov-lead">
-        {{ body.company ? body.company.name : 'Treasury' }} <span>/ observed snapshot</span>
+        {{ body.company ? body.company.name : 'Treasury' }} <span>/ your cash today</span>
       </h2>
-      <dl class="lw-ov-facts">
-        <div><dt>Snapshot</dt><dd data-test="context-snapshot">{{ body.snapshot_id }}</dd></div>
-        <div><dt>Currency</dt><dd data-test="context-currency">{{ body.cash.currency }}</dd></div>
-        <div><dt>Company</dt><dd>{{ body.company ? body.company.name : 'Not named by the API' }}</dd></div>
-        <div><dt>Provider</dt><dd>{{ LABELS[body.mode] || body.mode }}</dd></div>
-        <div><dt>Model</dt><dd>{{ model || 'Not reported' }}</dd></div>
-        <div><dt>As of</dt><dd data-test="context-time">{{ formatTime(body.as_of).utc }} · {{ formatTime(body.as_of).local }}</dd></div>
-      </dl>
+      <p class="lw-lead" data-test="lead">{{ lead }}</p>
+      <div class="lw-ov-labels" data-test="labels">
+        <span class="lw-ov-tag" data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span>
+        <span v-if="PLAIN[model]" class="lw-ov-tag">{{ PLAIN[model] }}</span>
+      </div>
+      <HowWeKnow test="how-context">
+        <dl class="lw-ov-facts">
+          <div><dt>Snapshot</dt><dd data-test="context-snapshot">{{ body.snapshot_id }}</dd></div>
+          <div><dt>Currency</dt><dd data-test="context-currency">{{ body.cash.currency }}</dd></div>
+          <div><dt>Company</dt><dd>{{ body.company ? body.company.name : 'Not named by the API' }}</dd></div>
+          <div><dt>Provider</dt><dd>{{ LABELS[body.mode] || body.mode }}</dd></div>
+          <div><dt>Model</dt><dd>{{ model || 'Not reported' }}</dd></div>
+          <div><dt>As of</dt><dd data-test="context-time">{{ formatTime(body.as_of).utc }} · {{ formatTime(body.as_of).local }}</dd></div>
+        </dl>
+      <p>The sentence above reads the API's figures: free to spend now is spendable S, the lowest
+        point ahead is minimum projected cash P over the horizon, and the safety minimum is the reserve floor.</p>
+      </HowWeKnow>
       <button type="button" class="lw-button lw-button--quiet" data-test="context-refresh" :disabled="busy"
-              @click="refresh()">Read context again</button>
+              @click="refresh()">Check again</button>
       <p v-if="body.completeness.status === 'partial'" class="lw-note" data-test="partial">
         Partial: not current — {{ notCurrent }}.
         A stale account was observed and keeps its last value, and the figures that include it
@@ -23,8 +32,8 @@
     </section>
 
     <!-- O2 cash strip -->
-    <section class="lw-ov-strip-panel" aria-labelledby="ov-strip" data-panel="Cash strip">
-      <h2 id="ov-strip" class="lw-visually-hidden">Cash strip</h2>
+    <section class="lw-ov-strip-panel" aria-labelledby="ov-strip" data-panel="Cash today">
+      <h2 id="ov-strip" class="lw-visually-hidden">Cash today</h2>
       <div class="lw-ov-strip">
         <article v-for="m in metrics" :key="m.key" :class="['lw-ov-metric', { 'is-selected': selected === m.key }]"
                  :data-test="m.key">
@@ -40,12 +49,12 @@
           </div>
           <template v-if="m.key === 'coverage'">
             <div class="lw-time">
-              {{ metricText(body.coverage.min_projected) }} minimum projected cash /
-              {{ metricText(body.coverage.floor) }} floor
+              lowest point ahead {{ metricText(body.coverage.min_projected) }} ·
+              safety minimum {{ metricText(body.coverage.floor) }}
             </div>
             <div :class="['lw-status', `lw-status--${STATES[floor].tone}`]" data-test="floor-status">
               <span aria-hidden="true">{{ STATES[floor].icon }}</span>
-              <span>{{ STATES[floor].word }}</span>
+              <span>{{ FLOOR_WORDS[floor] }}</span>
             </div>
           </template>
         </article>
@@ -67,40 +76,51 @@
 
     <div class="lw-ov-grid">
       <!-- O3 cash outlook -->
-      <section class="lw-ov-outlook" aria-labelledby="ov-outlook" data-panel="Cash outlook" data-test="outlook">
-        <h2 id="ov-outlook">{{ horizon }}-hour cash outlook</h2>
-        <p class="lw-time">Observed snapshot {{ body.snapshot_id }} · projected cash P from the API, no shock</p>
+      <section class="lw-ov-outlook" aria-labelledby="ov-outlook" data-panel="Cash ahead" data-test="outlook">
+        <h2 id="ov-outlook">Your cash over the next {{ horizon }} hours</h2>
+        <p class="lw-time">Where your cash is heading if nothing unexpected happens.</p>
         <CashOutlook :points="body.outlook || []" :floor="body.coverage.floor" :low-at="body.coverage.at" :as-of="body.as_of"
                      :currency="body.cash.currency" />
+        <HowWeKnow test="how-outlook">
+          <p>Observed snapshot {{ body.snapshot_id }} · projected cash P from the API, no shock; the
+            dashed line is the reserve floor.</p>
+        </HowWeKnow>
       </section>
 
       <!-- O4 next obligation -->
-      <section class="lw-ov-next" aria-labelledby="ov-next" data-panel="Next obligation" data-test="next-obligation">
-        <h2 id="ov-next">Next obligation</h2>
+      <section class="lw-ov-next" aria-labelledby="ov-next" data-panel="Next payment" data-test="next-obligation">
+        <h2 id="ov-next">Next payment due</h2>
         <template v-if="next">
-          <div class="lw-tile__label">{{ next.kind }} · {{ next.obligation_id }}</div>
+          <div class="lw-tile__label">{{ kindText(next.kind) }}</div>
           <div class="lw-figure">{{ money(next.amount) }}</div>
           <dl class="lw-ov-facts lw-ov-facts--stack">
             <div><dt>Due</dt><dd class="lw-time" data-test="due">due {{ due.utc }} · {{ due.local }} · {{ hoursFrom(body.as_of, next.due_at) }} from as of</dd></div>
-            <div><dt>Reservation</dt><dd>{{ next.reserved ? `reserved · ${next.reservation_id || 'hold'}` : 'not reserved' }}</dd></div>
-            <div><dt>State</dt><dd>Open</dd></div>
-            <div><dt>Funding account</dt><dd>{{ next.account || 'Not named by the API' }}</dd></div>
+            <div><dt>Set aside</dt><dd>{{ next.reserved ? 'Yes, the money is set aside' : 'Not set aside' }}</dd></div>
+            <div><dt>Paid from</dt><dd>{{ next.account || 'Not named by the API' }}</dd></div>
           </dl>
+          <HowWeKnow test="how-next">
+            <dl class="lw-ov-facts lw-ov-facts--stack">
+              <div><dt>Obligation</dt><dd>{{ next.kind }} · {{ next.obligation_id }}</dd></div>
+              <div><dt>Reservation</dt><dd>{{ next.reserved ? `reserved · ${next.reservation_id || 'hold'}` : 'not reserved' }}</dd></div>
+              <div><dt>State</dt><dd>Open</dd></div>
+              <div><dt>Funding account</dt><dd>{{ next.account || 'Not named by the API' }}</dd></div>
+            </dl>
+          </HowWeKnow>
           <RouterLink class="lw-ov-go" :to="rowLink('/treasury', `obligation:${next.obligation_id}`, body.snapshot_id)"
                       data-test="open-treasury">Open Treasury<span class="lw-visually-hidden">, {{ next.kind }} {{ next.obligation_id }}</span> →</RouterLink>
         </template>
         <template v-else>
           <div class="lw-figure lw-figure--small" data-test="no-obligation">No open obligation</div>
-          <p class="lw-time">Nothing the observed snapshot records falls due from now.</p>
+          <p class="lw-time">Nothing you owe falls due from now.</p>
           <RouterLink class="lw-ov-go" :to="{ path: '/treasury', query: { snapshot: body.snapshot_id } }"
                       data-test="open-treasury">Obligations on Treasury →</RouterLink>
         </template>
       </section>
 
       <!-- O5 exposure preview -->
-      <section class="lw-ov-exposure" aria-labelledby="ov-exposure" data-panel="Exposure preview" data-test="exposure">
-        <h2 id="ov-exposure">World exposure</h2>
-        <p class="lw-time">What the observed snapshot records around {{ body.company ? body.company.name : 'the treasury' }}.
+      <section class="lw-ov-exposure" aria-labelledby="ov-exposure" data-panel="Partners" data-test="exposure">
+        <h2 id="ov-exposure">Who your cash depends on</h2>
+        <p class="lw-time">The partners around {{ body.company ? body.company.name : 'the treasury' }}.
           A relationship is a dependency, not a payment; no public post moves money.</p>
         <ul v-if="relations.length" class="lw-ov-relations" data-test="relations">
           <li v-for="r in relations" :key="`${r.kind}:${r.ref}:${r.source.entity_id}`" data-test="relation">
@@ -115,30 +135,34 @@
         </ul>
         <p v-else class="lw-time" data-test="no-relations">The snapshot records no relationship around the treasury.</p>
         <div class="lw-ov-capacity" data-test="lender-capacity">
-          <span class="lw-tile__label">Lender capacity (K_p)</span>
+          <span class="lw-tile__label">What the lender can still lend</span>
           <span class="lw-figure lw-figure--small">{{ metricText(body.lender_capacity) }}</span>
-          <RouterLink to="/lending">Its parts on Lending</RouterLink>
+          <RouterLink to="/lending">How it is worked out, on Lending</RouterLink>
         </div>
-        <RouterLink v-if="simulationTarget" class="lw-ov-go" :to="simulationTarget" data-test="explore-world">Explore world →</RouterLink>
+        <RouterLink v-if="simulationTarget" class="lw-ov-go" :to="simulationTarget" data-test="explore-world">Explore the partners →</RouterLink>
         <p v-else class="lw-time" data-test="explore-why">{{ simulationWhy }}</p>
+        <HowWeKnow test="how-exposure">
+          <p>Relationships recorded on observed snapshot {{ body.snapshot_id }}, each with its obligation,
+            credit line or venue reference. The lender's figure is lender capacity K_p, as on Lending.</p>
+        </HowWeKnow>
       </section>
     </div>
 
     <!-- O6 scenario entry -->
-    <section class="lw-ov-scenario" aria-labelledby="ov-scenario" data-panel="Scenario entry" data-test="scenario">
-      <span class="lw-ov-tag" data-test="hypothetical">Hypothetical</span>
+    <section class="lw-ov-scenario" aria-labelledby="ov-scenario" data-panel="What-if" data-test="scenario">
+      <span class="lw-ov-tag" data-test="hypothetical">What-if</span>
       <div class="lw-ov-scenario__text">
         <h2 id="ov-scenario">{{ teaser }}</h2>
-        <p class="lw-time">Rehearse it before it becomes a reserve breach. A scenario changes no observed
+        <p class="lw-time">Try it before it takes you below your safety minimum. A what-if changes no
           figure on this page.</p>
       </div>
       <div class="lw-actions">
         <button type="button" class="lw-button lw-button--quiet" data-test="preview-scenario"
                 :disabled="!body.scenario" :aria-expanded="preview ? 'true' : 'false'" aria-controls="scenario-preview"
                 :aria-describedby="body.scenario ? undefined : 'preview-why'" @click="preview = !preview">
-          {{ preview ? 'Hide scenario' : 'Preview scenario' }}
+          {{ preview ? 'Hide the what-if' : 'Preview the what-if' }}
         </button>
-        <span v-if="!body.scenario" id="preview-why" class="lw-time" data-test="preview-why">No prepared run, so no scenario to preview</span>
+        <span v-if="!body.scenario" id="preview-why" class="lw-time" data-test="preview-why">No prepared run, so no what-if to preview</span>
         <RouterLink v-if="simulationTarget" class="lw-button" :to="simulationTarget"
                     data-test="open-simulation">Open simulation</RouterLink>
         <template v-else>
@@ -172,9 +196,10 @@
 import { computed, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import CashOutlook from '../components/CashOutlook.vue'
+import HowWeKnow from '../components/HowWeKnow.vue'
 import {
-  LABELS, STATES, ScreenShell, floorState, formatAmount, formatMoney, formatTime, freshness, getOverview,
-  hoursFrom, kindText, metricStatus, metricText, modelSource, money, pendingFlows, routeExists, rowLink, staleOf,
+  FLOOR_WORDS, LABELS, PLAIN, STATES, ScreenShell, amountWords, dayText, floorState, formatAmount, formatMoney,
+  formatTime, freshness, getOverview, hoursFrom, kindText, metricStatus, metricText, modelSource, money, pendingFlows, routeExists, rowLink, staleOf,
   useReading
 } from '../api/v1.js'
 
@@ -206,6 +231,29 @@ const simulationWhy = computed(() => {
   return 'The simulation screen is not part of this build'
 })
 
+/**
+ * The finance lead's answer, first (COPY.md): covered until the next obligation, or the day the
+ * floor breaks; every amount is an API metric, formatted, never computed here.
+ */
+const lead = computed(() => {
+  const b = state.body
+  if (!b) return ''
+  const cov = b.coverage
+  const minimum = metricText(cov.floor)
+  if (floor.value === 'breached') {
+    const short = formatMoney(-cov.headroom.minor, cov.headroom.currency)
+    return `Heads up: on ${dayText(cov.at)} you dip ${short} below your ${minimum} safety minimum.`
+  }
+  const free = `${amountWords(b.spendable)} free now`
+  if (floor.value !== 'kept') {
+    return `${free}; whether you stay above your safety minimum is ${floor.value === 'unassessed' ? 'not assessed' : 'unknown'}.`
+  }
+  const ahead = `${free}, and your lowest point ahead is ${metricText(cov.min_projected)} — ` +
+    `${metricText(cov.headroom)} above your ${minimum} safety minimum.`
+  const n = next.value
+  return n ? `You're covered until ${kindText(n.kind)} on ${dayText(n.due_at)}: ${ahead}` : `Nothing falls due: ${ahead}`
+})
+
 // --------------------------------------------------------------------------- O2 strip
 
 const metrics = computed(() => {
@@ -213,12 +261,12 @@ const metrics = computed(() => {
   if (!b) return []
   const n = next.value
   return [
-    { key: 'settled', label: 'Settled cash', figure: metricText(b.cash), fresh: metricStatus(b.cash) },
-    { key: 'spendable', label: 'Spendable now (S)', figure: metricText(b.spendable), fresh: metricStatus(b.spendable) },
+    { key: 'settled', label: 'Cash in the bank', figure: metricText(b.cash), fresh: metricStatus(b.cash) },
+    { key: 'spendable', label: 'Free to spend now', figure: metricText(b.spendable), fresh: metricStatus(b.spendable) },
     n
       ? { key: 'next-due', label: `Next ${n.kind} due`, figure: money(n.amount), sub: `due ${hoursFrom(b.as_of, n.due_at)}`, subTest: 'next-due-at', fresh: `● ${n.reserved ? 'Reserved' : 'Not reserved'}` }
       : { key: 'next-due', label: 'Next obligation', figure: 'None open', fresh: 'Nothing falls due' },
-    { key: 'coverage', label: 'Reserve headroom', figure: metricText(b.coverage.headroom), fresh: metricStatus(b.coverage.headroom) }
+    { key: 'coverage', label: 'Room above your minimum', figure: metricText(b.coverage.headroom), fresh: metricStatus(b.coverage.headroom) }
   ]
 })
 
@@ -240,7 +288,7 @@ const inputs = computed(() => {
   switch (selected.value) {
     case 'settled':
       return {
-        title: 'Settled cash',
+        title: 'Cash in the bank',
         rule: 'Sum of settled balances on the treasury\'s cash accounts in one currency.',
         lines: accounts.length
           ? accounts.map((a) => ({
@@ -252,7 +300,7 @@ const inputs = computed(() => {
       }
     case 'spendable':
       return {
-        title: 'Spendable now (S)',
+        title: 'Free to spend now',
         rule: 'S = settled − reserved − pledged − pending out + pending in arrived by now.',
         lines: accounts.length
           ? accounts.map((a) => {
@@ -289,14 +337,14 @@ const inputs = computed(() => {
     case 'coverage': {
       const cov = b.coverage
       return {
-        title: 'Reserve headroom',
+        title: 'Room above your minimum',
         rule: 'Headroom = lowest projected cash P over the horizon − reserve floor; the floor is kept at zero or more.',
         lines: [
           { key: 'min', text: `lowest P ${metricText(cov.min_projected)}${cov.at ? ` at ${formatTime(cov.at).utc} (${hoursFrom(b.as_of, cov.at)})` : ''}` },
           { key: 'floor', text: `reserve floor ${metricText(cov.floor)}` },
           ...accounts.map((a) => ({ key: a.id, text: `P by account: ${a.id}`, to: toAccount(a), link: 'Open on Treasury' }))
         ],
-        result: `${metricText(cov.headroom)} · ${STATES[floor.value].word}`
+        result: `${metricText(cov.headroom)} · ${FLOOR_WORDS[floor.value]}`
       }
     }
     default:
@@ -353,6 +401,12 @@ const preview = ref(false)
 
 .lw-ov-lead {
   margin: 0 !important;
+}
+
+.lw-ov-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lw-space-2);
 }
 
 .lw-ov-lead span {

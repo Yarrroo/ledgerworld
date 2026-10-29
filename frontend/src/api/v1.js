@@ -292,6 +292,34 @@ export const LABELS = {
   search: 'Search result, not a forecast'
 }
 
+/**
+ * The cash owner's words for the honesty labels and the floor (prp/2026-10-29-ux-pass/COPY.md);
+ * the technical term each replaces stays in the panel's How we know.
+ */
+export const PLAIN = {
+  fake: 'Simulated bank connection',
+  sandbox: 'Sandbox bank',
+  scripted: 'Scripted agents',
+  branch: 'What-if'
+}
+
+export const FLOOR_WORDS = {
+  kept: 'Above your safety minimum',
+  breached: 'Below your safety minimum',
+  unknown: 'Unknown',
+  unassessed: 'Not assessed'
+}
+
+/** "2 Jan", the UTC day of an instant, for a lead sentence. */
+export function dayText (iso) {
+  const d = iso ? new Date(iso) : null
+  if (!d || Number.isNaN(d.getTime())) return 'an unknown date'
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+}
+
+/** A metric as an amount in a sentence: its text when it has a value, else "an unknown amount". */
+export const amountWords = (metric) => (metric?.minor == null ? 'an unknown amount' : metricText(metric))
+
 /** What a response's figures are: a replay, a hypothetical branch, or the observed snapshot. */
 export function sourceLabel (body) {
   if (body.replay) {

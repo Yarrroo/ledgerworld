@@ -1,16 +1,19 @@
 <template>
   <ScreenShell v-slot="{ body }" title="Treasury" :reading="state" :refresh="refresh" :stale="stale">
-    <p class="lw-source">
-      Which funds can we use, and when. Spendable now (S) and projected cash (P) are separate
-      measures; the reserve floor is checked on P. Every figure is one account's, in its own currency.
-    </p>
+    <p class="lw-lead" data-test="lead">{{ lead }}</p>
+    <HowWeKnow test="how-treasury">
+      <p>Snapshot {{ body.snapshot_id }}, GET /api/v1/treasury. Cash in the bank is the settled balance;
+        set aside is reserved; free to spend now is spendable S; the lowest point ahead is projected
+        cash P, and the safety minimum is the reserve floor, checked on P. Every figure is one
+        account's, in its own currency.</p>
+    </HowWeKnow>
 
     <p v-if="moved" class="lw-note" role="status" data-test="snapshot-moved">
       The link was made on snapshot {{ moved }}; this is snapshot {{ body.snapshot_id }}.
     </p>
 
     <section class="lw-tre__accounts" aria-labelledby="accounts-heading" data-panel="Accounts" data-test="accounts">
-      <h2 id="accounts-heading">Account</h2>
+      <h2 id="accounts-heading">Which account</h2>
       <p v-if="!accounts.length" class="lw-note" data-test="no-accounts">
         The API returned no treasury cash account for {{ body.snapshot_id }}: nothing to show.
       </p>
@@ -32,18 +35,22 @@
 
     <div v-if="account" class="lw-tre" :data-account="account.id">
       <!-- T3: the answer first on every width -->
-      <section class="lw-tre__answer" aria-labelledby="spend-heading" data-panel="Spendable now">
-        <h2 id="spend-heading">Spendable now (S)</h2>
+      <section class="lw-tre__answer" aria-labelledby="spend-heading" data-panel="Free to spend">
+        <h2 id="spend-heading">Free to spend now</h2>
         <article class="lw-tile" data-test="spendable">
           <div class="lw-tile__label">{{ account.id }} · {{ account.currency }}</div>
           <div class="lw-figure">{{ metricText(account.spendable) }}</div>
           <div :class="['lw-status', `lw-status--${stateOf(account.spendable.status).tone}`]" data-test="spendable-status">
             {{ metricStatus(account.spendable) }}
           </div>
-          <div class="lw-time">authority {{ account.authority }} · as of {{ formatTime(account.spendable.as_of || account.as_of).utc }}</div>
           <p v-if="account.observability !== 'known'" class="lw-note">
-            Balance not observable: settled reads Unknown and adds nothing; authority is reduced.
+            We can't read this account's balance right now: cash in the bank reads Unknown and adds nothing.
           </p>
+          <HowWeKnow test="how-spendable">
+            <p>Spendable S of {{ account.id }} · authority {{ account.authority }} · as of
+              {{ formatTime(account.spendable.as_of || account.as_of).utc }}<template
+                v-if="account.observability !== 'known'"> · balance not observable, authority reduced</template>.</p>
+          </HowWeKnow>
           <details class="lw-calc" data-test="spend-calc">
             <summary>View calculation</summary>
             <div class="lw-calc__body" data-test="spend-calculation">
@@ -59,8 +66,8 @@
 
       <!-- T2 + T4: the account's data -->
       <div class="lw-tre__main">
-        <section aria-labelledby="buckets-heading" data-panel="Cash buckets" data-test="buckets">
-          <h2 id="buckets-heading">Cash buckets</h2>
+        <section aria-labelledby="buckets-heading" data-panel="Where the cash sits" data-test="buckets">
+          <h2 id="buckets-heading">Where the cash sits</h2>
           <ul class="lw-tre__buckets">
             <li v-for="b in buckets" :key="b.key" :data-test="`bucket-${b.key}`">
               <details class="lw-tre__bucket">
@@ -80,13 +87,13 @@
           </ul>
         </section>
 
-        <section aria-labelledby="rows-heading" data-panel="Obligations and arrivals">
-          <h2 id="rows-heading">Obligations and arrivals</h2>
-          <div class="lw-table-wrap" tabindex="0" role="region" aria-label="Obligations and arrivals">
+        <section aria-labelledby="rows-heading" data-panel="Bills and money in">
+          <h2 id="rows-heading">Bills and money coming in</h2>
+          <div class="lw-table-wrap" tabindex="0" role="region" aria-label="Bills and money coming in">
             <table class="lw-table lw-tre__rows" data-test="obligations">
               <thead>
                 <tr><th scope="col">Item</th><th scope="col">Direction</th><th scope="col">Amount</th>
-                  <th scope="col">When (UTC)</th><th scope="col">Reservation</th><th scope="col">Status</th></tr>
+                  <th scope="col">When (UTC)</th><th scope="col">Set aside</th><th scope="col">Status</th></tr>
               </thead>
               <tbody>
                 <tr v-for="r in rows" :key="r.key" :data-row="r.id" :data-test="r.obligation ? `obligation-${r.id}` : undefined"
@@ -100,39 +107,43 @@
                   <td data-label="Direction">{{ r.direction }}</td>
                   <td data-label="Amount" class="lw-num">{{ money(r.amount) }}</td>
                   <td data-label="When">{{ formatTime(r.at).utc }} ({{ hoursFrom(body.as_of, r.at) }})</td>
-                  <td data-label="Reservation">{{ r.reservation || 'not reserved' }}</td>
+                  <td data-label="Set aside">{{ r.reservation || 'not set aside' }}</td>
                   <td data-label="Status">{{ r.status }}</td>
                 </tr>
                 <tr v-if="!rows.length"><td colspan="6">No obligation or pending flow on {{ account.id }}</td></tr>
               </tbody>
             </table>
           </div>
-          <p class="lw-time">t is whole hours from the snapshot's as of; deadlines are simulated time. A row opens its details; it is not a payment action.</p>
+          <p class="lw-time">A row opens its details; it pays nothing.</p>
+          <HowWeKnow test="how-rows">
+            <p>Ledger obligations and pending flows of {{ account.id }}; set aside is the reservation id.
+              t is whole hours from the snapshot's as of; deadlines are simulated time.</p>
+          </HowWeKnow>
         </section>
       </div>
 
       <!-- T5 + T6: the coverage inspector -->
       <div class="lw-tre__inspector">
-        <section aria-labelledby="cover-heading" data-panel="Reserve coverage" data-test="coverage">
-          <h2 id="cover-heading">Reserve coverage on P</h2>
+        <section aria-labelledby="cover-heading" data-panel="Safety minimum" data-test="coverage">
+          <h2 id="cover-heading">Will you stay above your safety minimum?</h2>
           <article class="lw-tile" data-test="floor">
-            <div class="lw-tile__label">Projected cash P, not spendable now</div>
+            <div class="lw-tile__label">Lowest point ahead · not spendable now</div>
             <div :class="['lw-status', `lw-status--${STATES[account.floorCheck.state].tone}`]" data-test="floor-status">
               <span aria-hidden="true">{{ STATES[account.floorCheck.state].icon }}</span>
-              <span>{{ STATES[account.floorCheck.state].word }}</span>
+              <span>{{ FLOOR_WORDS[account.floorCheck.state] }}</span>
             </div>
             <div v-if="account.floorCheck.state === 'breached'" class="lw-figure" data-test="shortfall">
-              {{ formatMoney(-account.floorCheck.gap, account.currency) }} at {{ hoursFrom(body.as_of, account.low.t) }}
+              {{ formatMoney(-account.floorCheck.gap, account.currency) }} short on {{ dayText(account.low.t) }}
             </div>
             <div v-else-if="account.low" class="lw-figure lw-figure--small" data-test="minimum">
-              lowest {{ metricText(account.low.value) }} at {{ hoursFrom(body.as_of, account.low.t) }}
+              lowest {{ metricText(account.low.value) }} on {{ dayText(account.low.t) }}
             </div>
             <div class="lw-time" data-test="floor-line">
-              floor {{ account.floor ? metricText(account.floor) : 'Not assessed' }}<template
-                v-if="account.floorCheck.state === 'kept'"> · headroom {{ formatMoney(account.floorCheck.gap, account.currency) }}</template>
+              safety minimum {{ account.floor ? metricText(account.floor) : 'Not assessed' }}<template
+                v-if="account.floorCheck.state === 'kept'"> · room {{ formatMoney(account.floorCheck.gap, account.currency) }}</template>
             </div>
             <details v-if="account.low" class="lw-calc">
-              <summary>How the minimum is calculated</summary>
+              <summary>How the lowest point is worked out</summary>
               <div class="lw-calc__body" data-test="calculation">
                 <p>P({{ hoursFrom(body.as_of, account.low.t) }}) in {{ account.currency }}, terms from the API:</p>
                 <p>{{ account.calc.line }}</p>
@@ -155,7 +166,7 @@
           <div class="lw-table-wrap" tabindex="0" role="region" :aria-label="`Projected cash, ${account.id}`">
             <table class="lw-table" data-test="timeline">
               <caption class="lw-visually-hidden">Projected cash at each flow or deadline, against the reserve floor; the chart draws these points</caption>
-              <thead><tr><th scope="col">t</th><th scope="col">UTC</th><th scope="col">P</th><th scope="col">Against the floor</th></tr></thead>
+              <thead><tr><th scope="col">t</th><th scope="col">UTC</th><th scope="col">Cash</th><th scope="col">Against your safety minimum</th></tr></thead>
               <tbody>
                 <tr v-for="p in account.points" :key="p.t" :class="{ 'lw-row--floor': p.lowest, 'is-selected': p.t === pointT }">
                   <td>
@@ -171,10 +182,9 @@
           </div>
         </section>
 
-        <section aria-labelledby="handoff-heading" data-panel="Scenario handoff">
-          <h2 id="handoff-heading">Rehearse a cash shock</h2>
-          <p class="lw-time">Opens the prepared run in Live simulation with {{ account.id }} and snapshot
-            {{ body.snapshot_id }}. It changes no observed figure here.</p>
+        <section aria-labelledby="handoff-heading" data-panel="Try a shock">
+          <h2 id="handoff-heading">What if a payment arrives late?</h2>
+          <p class="lw-time">See how it ripples through your partners. It changes no figure here.</p>
           <div class="lw-actions">
             <RouterLink v-if="rehearse" class="lw-button" :to="rehearse" data-test="rehearse">Rehearse a cash shock</RouterLink>
             <template v-else>
@@ -184,6 +194,9 @@
               <span id="rehearse-why" class="lw-time" data-test="rehearse-why">{{ rehearseWhy }}</span>
             </template>
           </div>
+          <HowWeKnow test="how-handoff">
+            <p>Opens the prepared run in Live simulation with {{ account.id }} and snapshot {{ body.snapshot_id }}.</p>
+          </HowWeKnow>
         </section>
       </div>
     </div>
@@ -219,8 +232,9 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import CashChart from '../components/CashChart.vue'
 import DetailSheet from '../components/DetailSheet.vue'
+import HowWeKnow from '../components/HowWeKnow.vue'
 import {
-  STATES, ScreenShell, againstFloor, contextKey, formatAmount, formatMoney, formatTime, getOverview,
+  FLOOR_WORDS, STATES, ScreenShell, againstFloor, amountWords, contextKey, dayText, formatAmount, formatMoney, formatTime, getOverview,
   getTreasury, hoursFrom, kindText, metricStatus, metricText, money, pendingFlows, projectionTerms, routeExists, staleOf,
   stateOf, useFocusTarget, useReading
 } from '../api/v1.js'
@@ -258,8 +272,8 @@ function lowest (projected) {
 
 function againstText (value, floorMetric) {
   const { state: s, gap } = againstFloor(value, floorMetric)
-  if (s === 'kept') return `✓ floor kept, ${formatMoney(gap, floorMetric.currency)} above`
-  if (s === 'breached') return `✕ below floor, short ${formatMoney(-gap, floorMetric.currency)}`
+  if (s === 'kept') return `✓ ${formatMoney(gap, floorMetric.currency)} above`
+  if (s === 'breached') return `✕ ${formatMoney(-gap, floorMetric.currency)} below`
   return s === 'unassessed' ? 'No floor assessed' : 'Unknown'
 }
 
@@ -346,12 +360,12 @@ const buckets = computed(() => {
   const a = account.value
   const b = a.buckets
   return [
-    { key: 'settled', label: 'Settled', value: b.settled ? money(b.settled) : 'Unknown',
+    { key: 'settled', label: 'Cash in the bank', value: b.settled ? money(b.settled) : 'Unknown',
       input: 'settled balance', note: b.settled ? '' : 'Balance not observable: Unknown has no numeric value and adds nothing' },
-    { key: 'reserved', label: 'Reserved', value: money(b.reserved), input: 'reservations held against obligations' },
-    { key: 'pledged', label: 'Pledged', value: money(b.pledged), input: 'balances pledged as collateral' },
-    { key: 'pending-out', label: 'Pending out', value: flowList(b.pending_out), input: 'outflows not yet settled' },
-    { key: 'pending-in', label: 'Pending in, expected', value: flowList(b.pending_in),
+    { key: 'reserved', label: 'Set aside', value: money(b.reserved), input: 'reservations held against obligations' },
+    { key: 'pledged', label: 'Pledged as collateral', value: money(b.pledged), input: 'balances pledged as collateral' },
+    { key: 'pending-out', label: 'Paying out soon', value: flowList(b.pending_out), input: 'outflows not yet settled' },
+    { key: 'pending-in', label: 'Coming in, expected', value: flowList(b.pending_in),
       input: 'arrivals not yet settled', note: 'Expected, not settled: never counted in S before it arrives' }
   ]
 })
@@ -376,6 +390,27 @@ const rows = computed(() => {
 })
 const openRow = ref(null)
 const detail = computed(() => rows.value.find((r) => r.key === openRow.value) ?? null)
+
+/** Obligations still owed: open or missed. */
+const OWED = new Set(['open', 'missed'])
+
+/**
+ * The finance lead's answer for the selected account (COPY.md): cash in the bank, what is set
+ * aside and for which obligations, and what is free to spend; every amount is the API's.
+ */
+const lead = computed(() => {
+  const a = account.value
+  if (!a) return 'There is no cash account to show for this snapshot.'
+  const b = a.buckets
+  const cash = b.settled ? money(b.settled) : 'An unknown amount'
+  const free = amountWords(a.spendable)
+  if (!b.reserved.minor) return `${cash} in the bank; nothing is set aside, so ${free} is free to spend.`
+  const kinds = [...new Set(state.body.obligations
+    .filter((o) => o.account === a.id && o.reservation_id && OWED.has(o.state ?? 'open'))
+    .map((o) => kindText(o.kind)))]
+  const purpose = kinds.length ? kinds.join(' and ') : 'upcoming bills'
+  return `${cash} in the bank; ${money(b.reserved)} is set aside for ${purpose}, so ${free} is free to spend.`
+})
 
 // T6: the prepared run, carrying the account and snapshot.
 const rehearse = computed(() => {
