@@ -117,26 +117,30 @@ def health():
 def overview():
     s = services()
     with s.lock:
-        body = views.overview(s.store, s.snapshot, s.now(), s.demo())
-    return _reply(c6.OverviewResponse, body)
+        demo = s.demo()
+        store, snapshot, now = s.observed(demo)
+        body = views.overview(store, snapshot, now, demo)
+    return _reply(c6.OverviewResponse, body, as_of=now)
 
 
 @bp.get("/treasury")
 def treasury():
     s = services()
     with s.lock:
-        body = views.treasury(s.store, s.snapshot, s.now())
-    return _reply(c6.TreasuryResponse, body)
+        store, snapshot, now = s.observed()
+        body = views.treasury(store, snapshot, now)
+    return _reply(c6.TreasuryResponse, body, as_of=now)
 
 
 @bp.get("/lending")
 def lending():
     s = services()
     with s.lock:
-        body = views.lending(s.store, s.snapshot, s.now())
+        store, snapshot, now = s.observed()
+        body = views.lending(store, snapshot, now)
     if body is None:
         raise Refused(404, "no_pool", "the observed snapshot has no lending pool")
-    return _reply(c6.LendingResponse, body)
+    return _reply(c6.LendingResponse, body, as_of=now)
 
 
 # --------------------------------------------------------------------------------- runs

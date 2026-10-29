@@ -271,7 +271,7 @@ completeness · `GET /api/v1/treasury` · `GET /api/v1/lending` · `POST /api/v1
 `GET /api/v1/decisions/{run_id}` · `POST /api/v1/approvals` (token) · `POST /api/v1/executions`
 (token) · `GET /api/v1/executions/{id}` · `POST /api/v1/webhooks/airwallex` (signature-verified, no token; a hint that triggers a `GET`) · `POST /api/v1/interview` (read-only) ·
 `GET /api/v1/reports/{run_id}`. Write routes need `Authorization: Bearer $LEDGERWORLD_DEMO_TOKEN`;
-reads are public. Every response carries `as_of` and `mode`. C6 also preserves relevant snapshot/run/branch/committed-round identity and per-metric status/currency. Overview names the prepared demonstration run and its associated execution when available; an absent association is unavailable, never a guess from the latest execution. All user POSTs, including the read-only interview, require the demo token (the signed provider webhook is the sole exception).
+reads are public. Every response carries `as_of` and `mode`. C6 also preserves relevant snapshot/run/branch/committed-round identity and per-metric status/currency. Overview names the prepared demonstration run and its associated execution when available; an absent association is unavailable, never a guess from the latest execution. Once a demo is prepared, Overview, Treasury and Lending show that run's observed snapshot at its own `as_of` (the state its plan was decided on); the prepared execution's legs show on Execution only. All user POSTs, including the read-only interview, require the demo token (the signed provider webhook is the sole exception).
 
 ## 12. Look and feel
 
