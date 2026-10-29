@@ -398,7 +398,7 @@ function panelId (label, taken) {
 }
 
 const PHONE = '(max-width: 767px)'
-const SETTLE = 150 // ms: a choice's scroll not moving by then, or (no scrollend) no longer moving, is over
+const SETTLE = 150 // ms: with no scrollend, a choice's scroll not moving by then, or no longer moving, is over
 const LONGEST = 2000 // ms: where the browser sends scrollend, the longest a choice's scroll goes without one
 const INTENT = 250 // ms: a page scroll this soon after the reader's wheel, touch, pointer or scroll key is theirs
 const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '])
@@ -417,7 +417,7 @@ const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home
  * screen marks `data-panel="<name>"`; the one at the top of the view carries aria-current while
  * the page scrolls. Choosing one scrolls to it and leaves focus where it was; it stays marked through
  * that scroll, and after it while in view, until the reader moves the page themselves (a scroll
- * right after their wheel, touch, pointer or scroll key) or the route changes.
+ * right after their wheel, touch, scrollbar press or scroll key) or the route changes.
  */
 export const ScreenShell = defineComponent({
   name: 'ScreenShell',
@@ -441,8 +441,8 @@ export const ScreenShell = defineComponent({
     const menuButton = ref(null)
     let elements = [] // the panels' elements, in page order
     let pinned = null // the panel last chosen from the index
-    let flying = false // the scroll a choice started is under way
-    let settle = 0 // the timer that ends it when the browser does not
+    let flight = 0 // the timer that ends the scroll a choice started; 0 once that scroll is over
+    let ends = false // whether the browser says when that scroll stops (scrollend)
     let reached = -Infinity // when the reader last reached for the page: wheel, touch, pointer, scroll key
     let stickyH = 0
     let frame = 0
@@ -482,7 +482,7 @@ export const ScreenShell = defineComponent({
      */
     function track () {
       if (!elements.length) return
-      if (flying && elements.some((el) => el.id === pinned)) {
+      if (flight && elements.some((el) => el.id === pinned)) {
         active.value = pinned // its target may still be below the view
         return
       }
@@ -530,19 +530,18 @@ export const ScreenShell = defineComponent({
     }
     /** A choice's scroll is over. */
     function ground () {
-      flying = false
-      clearTimeout(settle)
-      settle = 0
+      clearTimeout(flight)
+      flight = 0
     }
     /** It stopped: from here the page decides, the chosen panel kept while in view. */
     function land () {
       ground()
       schedule()
     }
-    /** It is over once ms pass with no scroll event. */
-    function hold (ms) {
-      clearTimeout(settle)
-      settle = setTimeout(land, ms)
+    /** It is over once a while passes with no scroll event: SETTLE, or LONGEST where scrollend says so first. */
+    function hold () {
+      clearTimeout(flight)
+      flight = setTimeout(land, ends ? LONGEST : SETTLE)
     }
     /** The reader moved the page themselves: the choice is over, and the index follows the page again. */
     function release () {
@@ -550,13 +549,15 @@ export const ScreenShell = defineComponent({
       pinned = null
     }
     const reach = () => { reached = performance.now() }
+    /** A press on the page's own scrollbar; a click on anything in the page is not a scroll. */
+    const onPointer = (event) => { if (event.target === document.documentElement) reach() }
 
     const onScroll = () => {
       if (performance.now() - reached < INTENT) release()
-      else if (flying) hold('onscrollend' in window ? LONGEST : SETTLE)
+      else if (flight) hold()
       schedule()
     }
-    const onScrollEnd = () => { if (flying) land() }
+    const onScrollEnd = () => { if (flight) land() }
     const onResize = () => schedule('size')
 
     function closeMenu (refocus) {
@@ -568,7 +569,7 @@ export const ScreenShell = defineComponent({
 
     function onKey (event) {
       if (event.key === 'Escape') closeMenu(true)
-      else if (SCROLL_KEYS.has(event.key)) reach()
+      else if (SCROLL_KEYS.has(event.key) && !event.target?.closest?.('input, textarea, select, [contenteditable]')) reach()
     }
 
     function onPhone (event) {
@@ -578,6 +579,7 @@ export const ScreenShell = defineComponent({
     watch(() => route.fullPath, () => {
       closeMenu(false)
       release()
+      schedule()
     })
     watch(menu, async (open) => {
       if (!open) return
@@ -600,7 +602,7 @@ export const ScreenShell = defineComponent({
       window.addEventListener('scrollend', onScrollEnd)
       window.addEventListener('wheel', reach, { passive: true })
       window.addEventListener('touchmove', reach, { passive: true })
-      window.addEventListener('pointerdown', reach, { passive: true })
+      window.addEventListener('pointerdown', onPointer, { passive: true })
       window.addEventListener('resize', onResize)
       window.addEventListener('keydown', onKey)
       schedule('panels')
@@ -615,7 +617,7 @@ export const ScreenShell = defineComponent({
       window.removeEventListener('scrollend', onScrollEnd)
       window.removeEventListener('wheel', reach)
       window.removeEventListener('touchmove', reach)
-      window.removeEventListener('pointerdown', reach)
+      window.removeEventListener('pointerdown', onPointer)
       window.removeEventListener('resize', onResize)
       window.removeEventListener('keydown', onKey)
     })
@@ -639,8 +641,8 @@ export const ScreenShell = defineComponent({
       reached = -Infinity // the click that chose it is not the reader scrolling
       pinned = id
       active.value = id
-      flying = true
-      hold(SETTLE)
+      ends = 'onscrollend' in window
+      hold()
       el.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' })
     }
 

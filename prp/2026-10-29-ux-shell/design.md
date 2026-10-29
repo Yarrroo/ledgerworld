@@ -23,7 +23,8 @@ view marks `data-panel="<name>"`; the one nearest the top of the viewport, by wh
 `aria-current="true"` and updates while scrolling (one rAF per frame, no focus moves); a panel
 chosen from the index stays marked through the scroll to it (smooth or reduced-motion) and after,
 even where the page's end stops the scroll short of it, until the reader moves the page themselves
-(a scroll right after their wheel, touch, pointer or scroll key) or the route changes.
+(a scroll right after their wheel, touch, scrollbar press or scroll key outside a form field) or the
+route changes.
 
 Visual system: tokens in `frontend/src/styles/tokens.css` — ivory `#FAF8F3`, ink `#17251E`,
 forest `#174A38` (primary/buttons), logo blue `#2469E8` (logo only), sage `#E9EEE7` (selected),

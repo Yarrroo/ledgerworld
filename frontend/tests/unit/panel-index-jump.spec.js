@@ -28,6 +28,7 @@ function lay () {
   reduced = false
   jumps = []
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  delete window.onscrollend // no scrollend unless a test says the browser sends it
   vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => scrollY)
   vi.spyOn(window, 'innerHeight', 'get').mockImplementation(() => VIEW)
   vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockImplementation(() => PAGE)
@@ -133,6 +134,52 @@ describe('a panel chosen from the index stays marked', () => {
     expect(marked(w)).toEqual(['Ledger'])
     await scrollTo(END) // a late scroll event at the end changes nothing
     expect(marked(w)).toEqual(['Ledger'])
+    await idle(400)
+    await scrollTo(0) // landed: once Ledger leaves the view the page decides
+    expect(marked(w)).toEqual(['Summary'])
+  })
+
+  it('through a late first frame where the browser says when the scroll stops', async () => {
+    lay()
+    window.onscrollend = null
+    const w = await open()
+    await choose(w, 'Ledger')
+    await idle(400) // a long task before the smooth scroll's first frame
+    for (const y of [500, 1300, END]) {
+      await scrollTo(y)
+      expect(marked(w), `at ${y}`).toEqual(['Ledger'])
+    }
+    await scrollEnd()
+    expect(marked(w)).toEqual(['Ledger'])
+  })
+
+  it('through a click mid-scroll', async () => {
+    lay()
+    const w = await open()
+    await choose(w, 'Ledger')
+    await scrollTo(500)
+    await reach({ event: new Event('pointerdown', { bubbles: true }), target: w.find('[data-test="refresh"]').element })
+    for (const y of [900, END]) {
+      await scrollTo(y)
+      expect(marked(w), `at ${y}`).toEqual(['Ledger'])
+    }
+  })
+
+  it('through typing in a field mid-scroll', async () => {
+    lay()
+    const w = await open()
+    const field = document.body.appendChild(document.createElement('input'))
+    try {
+      await choose(w, 'Ledger')
+      await scrollTo(500)
+      await reach({ event: new KeyboardEvent('keydown', { key: ' ', bubbles: true }), target: field })
+      for (const y of [900, END]) {
+        await scrollTo(y)
+        expect(marked(w), `at ${y}`).toEqual(['Ledger'])
+      }
+    } finally {
+      field.remove()
+    }
   })
 
   it('through a stall mid-scroll where the browser says when the scroll stops', async () => {
@@ -179,7 +226,7 @@ describe('a panel chosen from the index stays marked', () => {
     const w = await open()
     await choose(w, 'Ledger')
     await scrollTo(500)
-    await reach({ event: new Event('pointerdown') })
+    await reach({ event: new Event('pointerdown', { bubbles: true }), target: document.documentElement })
     await scrollTo(300)
     expect(marked(w)).toEqual(['Summary'])
   })
@@ -193,6 +240,20 @@ describe('a panel chosen from the index stays marked', () => {
     await flushPromises()
     await scrollTo(0)
     expect(marked(w)).toEqual(['Summary'])
+  })
+
+  it('until the route changes after the jump: the page decides at once', async () => {
+    lay()
+    const w = await open()
+    await choose(w, 'Ledger')
+    await scrollTo(END)
+    await scrollEnd()
+    expect(marked(w)).toEqual(['Ledger'])
+    await router.push('/treasury?view=2') // nothing on the page changes with it
+    await flushPromises()
+    await frame()
+    await nextTick()
+    expect(marked(w), 'at the page end, the bottom panel').toEqual(['Sources'])
   })
 
   it('with reduced motion: one instant jump to the page end', async () => {
