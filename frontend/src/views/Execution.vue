@@ -18,7 +18,7 @@
         <button ref="opener" type="button" class="lw-button" data-test="review-plan"
                 :disabled="!!reviewWhy" aria-describedby="review-why" @click="openReview">Review plan</button>
         <button v-if="token" type="button" class="lw-button lw-button--quiet"
-                data-test="forget-token" @click="token = ''">Forget access</button>
+                data-test="forget-token" @click="forgetAccess">Forget access</button>
         <span id="review-why" class="lw-time" data-test="review-why">{{ reviewWhy || authority }}</span>
       </div>
     </section>
@@ -37,6 +37,28 @@
       <section class="lw-exec__terms" aria-labelledby="summary-heading" data-test="summary"
                data-panel="Approval summary">
         <h2 id="summary-heading">Approval summary</h2>
+        <template v-if="held">
+          <p class="lw-time">Confirmed in this tab and not executed; kept in this tab's memory only.</p>
+          <dl class="lw-terms" data-test="summary-held">
+            <dt>Approval</dt>
+            <dd class="lw-copyable" data-test="summary-held-approval">
+              <span class="lw-hash">{{ held.approval_id }}</span>
+              <button type="button" class="lw-copy" data-test="copy-held-approval"
+                      @click="copy('Approval id', held.approval_id)">Copy<span class="lw-visually-hidden"> approval id</span></button>
+            </dd>
+            <dt>State</dt>
+            <dd data-test="summary-held-state">
+              <span :class="['lw-status', `lw-status--${STAGES[stage].tone}`]">
+                <span aria-hidden="true">{{ STAGES[stage].icon }}</span><span>{{ heldState }}</span>
+              </span>
+            </dd>
+            <dt>Observed snapshot</dt><dd>{{ held.snapshot_id }}</dd>
+            <dt>Provider</dt><dd>{{ LABELS[held.mode] || held.mode }}</dd>
+            <dt>Plan hash</dt><dd class="lw-hash" data-test="summary-held-hash">{{ held.plan_hash }}</dd>
+            <dt>Expires</dt><dd data-test="summary-held-expires">{{ expires.utc }} · {{ expires.local }}</dd>
+          </dl>
+          <p v-if="execution" class="lw-time">The execution linked to this run:</p>
+        </template>
         <dl v-if="execution" class="lw-terms">
           <dt>Approval</dt>
           <dd class="lw-copyable">
@@ -48,7 +70,7 @@
           <dt>Provider</dt><dd>{{ LABELS[execution.mode] || execution.mode }}</dd>
           <dt>Status read</dt><dd data-test="summary-read">{{ formatTime(execution.as_of).utc }}</dd>
         </dl>
-        <p v-else class="lw-time">No approval to summarise: the linked execution has not been read.</p>
+        <p v-else-if="!held" class="lw-time">No approval to summarise: the linked execution has not been read.</p>
       </section>
 
       <section class="lw-exec__legs" aria-labelledby="receipts-heading" data-test="receipts" data-panel="Leg tracker">
@@ -471,6 +493,29 @@ const executeWhy = computed(() => {
 })
 
 /**
+ * The approval this tab confirmed and has not executed, or null. It belongs to the screen it was
+ * confirmed on: a new screen (newScreen) and Forget access both drop it.
+ */
+const held = computed(() => flow.executed ? null : flow.approval)
+/** What the held approval can do now, with the reason when it cannot be executed. */
+const heldState = computed(() => {
+  const why = flow.blocked || staleWhy.value
+  return why ? `${STAGES[stage.value].word}: ${why}` : 'Approved, not executed; executable until it expires'
+})
+
+/**
+ * Forget the operator token, and with it an approval confirmed and not executed: only a fresh
+ * review takes access again, so a kept approval could be neither executed nor replaced.
+ */
+function forgetAccess () {
+  token.value = ''
+  const id = held.value?.approval_id
+  if (!id || flow.submitting) return
+  dropReview()
+  flow.message = `Approval ${id} was not executed and expires unused.`
+}
+
+/**
  * No answer, a server/proxy failure, or a 2xx this screen cannot read: the POST may or may not
  * have taken effect. Only a 4xx is a definite refusal.
  */
@@ -501,7 +546,7 @@ function hold (runId, patch) {
   unresolved.set(runId, { ...unresolved.get(runId), ...patch })
 }
 
-let screen = 0 // bumped by every navigation to another run or execution, and on leaving the view
+let screen = 0 // bumped by every new screen (newScreen) and on leaving the view
 let sentFrom = -1 // the screen this view's own POST in flight was sent from
 
 /** Where a POST was sent from, fixed when it is sent: the run, and the screen it was asked on. */
@@ -511,7 +556,7 @@ const moved = (from) => from.screen !== screen
 
 const waiting = computed(() => [...unresolved].filter(([, held]) => held.unseen))
 const accepted = (id) => `Execution ${id} accepted; reading its provider state.`
-/** The review and its approval go: after a navigation, or when a waiting outcome is shown. */
+/** The review and its approval go: on a new screen, on Forget access, or when a waiting outcome is shown. */
 const dropReview = () => Object.assign(flow, { open: false, approval: null, invalid: '', executed: false })
 
 async function openReview () {
@@ -524,7 +569,8 @@ async function openReview () {
 async function closeReview () {
   if (flow.submitting) return // the answer to an in-flight POST is shown where it was asked
   flow.open = false
-  if (flow.invalid || flow.executed || (flow.approval && executeWhy.value && !authority.value)) dropReview()
+  // an approval that can no longer execute goes, with or without operator access held
+  if (flow.approval && (flow.invalid || flow.executed || flow.blocked || staleWhy.value)) dropReview()
   await nextTick()
   opener.value?.focus()
 }
@@ -737,8 +783,10 @@ function restore (body) {
   return Boolean(resume)
 }
 
-watch(() => state.body, (body) => {
+watch(() => state.body, (body, before) => {
   if (!body) return
+  // a refresh that names another prepared run under the same address is a new screen too
+  if (before && body.run_id !== before.run_id) newScreen()
   if (restore(body)) return
   if (followed) {
     poll() // Refresh re-reads the execution this tab sent
@@ -778,9 +826,11 @@ watch([() => state.body?.run_id, () => heldHere()?.blocked, () => heldHere()?.fo
   if (state.status === 'loaded' && run === before) restore(state.body)
 })
 
-// The view is reused across query-only navigation: a new run or execution is a new screen. A
-// POST still in flight answers to the screen it was sent from (origin), never to this one.
-watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
+/**
+ * Another run or execution on this view: nothing shown for the last one stands. A POST still in
+ * flight answers to the screen it was sent from (origin), never to this one.
+ */
+function newScreen () {
   screen += 1
   dropReview()
   flow.message = ''
@@ -791,6 +841,11 @@ watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
   notFound.value = false
   pollError.value = ''
   clearTimeout(timer)
+}
+
+// The view is reused across query-only navigation: a new run or execution is a new screen.
+watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
+  newScreen()
   refresh()
 })
 

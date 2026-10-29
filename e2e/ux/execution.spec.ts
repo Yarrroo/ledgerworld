@@ -214,6 +214,38 @@ test('an incident keeps its evidence; nothing is resent or reversed', async ({ p
   expect(posts).toEqual(['POST /approvals', 'POST /executions'])
 })
 
+test('an approval closed unexecuted is summarised with its terms, then as expired', async ({ page }, info) => {
+  await page.clock.install({ time: new Date('2026-11-05T10:00:00Z') })
+  const posts = await mock(page, {})
+  await review(page)
+  await $(page, 'confirm').click()
+  await expect(dialog(page)).toHaveAttribute('data-stage', 'approved')
+  await dialog(page).getByRole('button', { name: 'Close' }).click()
+  await expect(dialog(page)).toHaveCount(0)
+
+  const summary = $(page, 'summary')
+  await expect(summary).not.toContainText('No approval to summarise')
+  await expect($(page, 'summary-held-approval')).toContainText(APPROVAL.approval_id)
+  await expect($(page, 'summary-held-hash')).toHaveText(APPROVAL.plan_hash)
+  await expect($(page, 'summary-held-expires')).toContainText('2026-11-05 10:15 UTC · local')
+  await expect($(page, 'summary-held-state')).toContainText('Approved, not executed')
+  const copy = (await $(page, 'copy-held-approval').boundingBox())!
+  expect(copy.height).toBeGreaterThanOrEqual(44)
+  expect(await sideways(page)).toBeLessThanOrEqual(0)
+  if (process.env.UX_SHOTS) {
+    await summary.screenshot({ path: join(process.env.UX_SHOTS, `${info.project.name}-held-approval.png`) })
+  }
+
+  await page.clock.fastForward('15:00')
+  await expect($(page, 'summary-held-state')).toContainText('Not executable: Approval expired')
+  await $(page, 'review-plan').click()
+  await expect(dialog(page)).toHaveAttribute('data-stage', 'expired')
+  await dialog(page).getByRole('button', { name: 'Close' }).click()
+  await expect($(page, 'summary-held')).toHaveCount(0)
+  await expect(summary).toContainText('No approval to summarise')
+  expect(posts).toEqual(['POST /approvals'])
+})
+
 for (const step of ['reconciled', 'incident'] as const) {
   test(`a failed Read status after ${step} is said in the dialog, the stage kept`, async ({ page }) => {
     const posts = await mock(page, { executions: [executionAt(step)] })
