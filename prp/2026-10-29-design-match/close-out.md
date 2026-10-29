@@ -25,3 +25,21 @@ Lending bridge, the Simulation selector row, the Decisions stepper, the Executio
 **Seen, not fixed:** the offline app (`scripts/ux_app.py`, SQLite) answers concurrent reads with HTTP 500
 "cannot start a transaction within a transaction" now and then; the shell now asks `/overview` for the
 company only after the screen's own read, so it adds no concurrent request.
+
+## Verification (final tree)
+
+- `bash scripts/ux-check.sh e2e/ux/match-shared.spec.ts` and `… match-overview.spec.ts`: green at 1440 (1487
+  for the budget), 834 and 390 px, each followed by a green judge path (slowest 6.0 s of 60).
+- Every e2e/ux spec against one offline app: 229 passed, 8 skipped by design; `vitest run`: 299 passed.
+- `ruff check checks e2e`, `checks/attribution.py`, `checks/no_secrets.py`, `checks/tests/test_word_budget.py`,
+  `npm --prefix frontend run build`: green. The full pytest suite is the landing train's and was not run here.
+- Vet: T2, two rounds, converged; three findings fixed with tests that fail before (a disabled action's
+  reason reachable by keyboard and tap, a breached floor visible on Overview, a payee's obligations counted).
+
+## Follow-ups
+
+- The offline app's SQLite store shares one connection across threads; concurrent reads now and then answer
+  HTTP 500 ("cannot start a transaction within a transaction", `backend/app/finance/store.py`). A fix of its own.
+- `/simplify` did not run over this diff; a quality pass is owed.
+- Chart notes are not checked against each other or the lowest-point box; the floor label's width is an
+  estimate (130 px), short for a seven-figure floor.
