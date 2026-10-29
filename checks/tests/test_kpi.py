@@ -241,8 +241,8 @@ def test_g1_measures_against_the_lockfile_as_the_merge_gate_does() -> None:
     assert g1.PYTEST[:3] == ["uv", "run", "--locked"]
 
 
-# Every money check g1 counts, and how many tests they list: a speed-up of the measurement
-# (board item 146) may change how the checks run, never which of them count.
+# Every money check g1 counts, and how many tests they list: a speed-up of the measurement may
+# change how the checks run, never which of them count.
 G1_CHECKS = [
     "lf1_reproduction", "ledger_balance", "ledger_no_orphan_posting", "ledger_reserved_le_settled",
     "ledger_no_double_pledge", "ledger_unknown_not_zero", "lf2_reproduction",
