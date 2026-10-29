@@ -22,8 +22,8 @@ reaches markup, URL or storage; approval and execution are two acts.
 
 ```
 review ──Confirm──▶ submitting ──201──▶ approved ──Execute──▶ executing ──read──▶ reconciled
-   │                    │ no answer          │ expiry / 4xx / mode            │ unknown leg,
-   │                    ▼                    ▼                                ▼ open incident
+   │                    │ no answer          │ expiry / 4xx / mode            │ open incident,
+   │                    ▼                    ▼                                ▼ failed leg
    │                 unknown (blocked)    expired (Execute disabled)        incident
 ```
 
@@ -31,6 +31,10 @@ review ──Confirm──▶ submitting ──201──▶ approved ──Execu
   status*, no Execute. The dialog now stays open after Execute (it used to close) and follows the
   polled read; Close returns focus to the opener and drops the used approval.
 * `reconciled` / `incident` read the same polled execution the page shows; no resend, no reversal.
+  A leg whose outcome is unknown keeps the dialog in `executing` (it is still being read); the
+  page lists it under Incidents with its evidence, as E6 asks.
+* A block held for the run while an approval is open shows `unknown`; a 4xx on Execute shows
+  *Execution refused*. Escape and Tab are handled on the document while the dialog is open.
 * Copy buttons on approval id and plan hash announce *copied* (or why not) in a polite live region.
 * Phone (<768 px): the dialog is full height; its body scrolls and the action footer stays fixed.
   Every width: footer holds the stage's one primary action, then the way out.
