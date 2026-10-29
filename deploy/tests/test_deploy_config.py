@@ -424,6 +424,23 @@ def test_the_api_serves_the_api_the_build_and_the_frontend_routes(served):
     assert served.head("/decisions").status_code == 200
 
 
+def preview(origin: str) -> str:
+    return f'<meta property="og:image" content="{origin}/og-card.png" />'
+
+
+def preview_client(tmp_path, monkeypatch, url: str):
+    """deploy/serve.py on a stub app and a build whose index holds one preview tag."""
+    monkeypatch.setenv("LEDGERWORLD_URL", url)
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "index.html").write_text(preview("__LEDGERWORLD_URL__"))
+    import app.api.v1.hardening  # noqa: F401
+    from flask import Flask
+    from werkzeug.test import Client
+
+    monkeypatch.setitem(sys.modules, "app", types.SimpleNamespace(create_app=lambda: Flask("s")))
+    return Client(runpy.run_path(str(DEPLOY / "serve.py"))["build"](tmp_path / "dist"))
+
+
 @pytest.mark.parametrize(("url", "origin"), [
     ("https://ledgerworld.example.com/", "https://ledgerworld.example.com"),
     ("https://ledgerworld.example.com:443/overview", "https://ledgerworld.example.com"),
@@ -431,21 +448,19 @@ def test_the_api_serves_the_api_the_build_and_the_frontend_routes(served):
     ("not a url", "http://localhost"),
 ])
 def test_the_index_link_previews_name_the_public_origin(tmp_path, monkeypatch, url, origin):
-    monkeypatch.setenv("LEDGERWORLD_URL", url)
-    (tmp_path / "dist").mkdir()
-    (tmp_path / "dist" / "index.html").write_text(
-        '<meta property="og:image" content="__LEDGERWORLD_URL__/og-card.png" />'
-    )
-    import app.api.v1.hardening  # noqa: F401
-    from flask import Flask
-    from werkzeug.test import Client
-
-    monkeypatch.setitem(sys.modules, "app", types.SimpleNamespace(create_app=lambda: Flask("s")))
-    client = Client(runpy.run_path(str(DEPLOY / "serve.py"))["build"](tmp_path / "dist"))
-    for path in ("/", "/treasury"):
+    client = preview_client(tmp_path, monkeypatch, url)
+    for path in ("/", "/treasury", "/index.html"):
         page = client.get(path)
-        assert page.get_data(as_text=True) == f'<meta property="og:image" content="{origin}/og-card.png" />'
+        assert page.get_data(as_text=True) == preview(origin), path
         assert page.headers["Content-Length"] == str(len(page.get_data()))
+
+
+def test_a_hostile_or_missing_host_never_breaks_the_previews(tmp_path, monkeypatch):
+    client = preview_client(tmp_path, monkeypatch, "")
+    hostile = client.get("/", headers={"Host": 'a.example"><script>x()</script>'})
+    assert "<script>" not in hostile.get_data(as_text=True)
+    hostless = client.get("/", environ_overrides={"HTTP_HOST": "", "SERVER_NAME": "box"})
+    assert hostless.get_data(as_text=True) == preview("http://box")
 
 
 def test_the_built_index_carries_the_origin_placeholder_serve_fills():
