@@ -1,10 +1,11 @@
 /**
- * Treasury in motion (prp/2026-10-29-ux-pass/HANDOFF.md T1–T6), at every width of
- * e2e/ux.config.ts: the account selector drives the buckets, the spendable calculation and the
- * cash path together; a bucket discloses its inputs and source time; an obligation or arrival row
- * opens its details (a full-width sheet on a phone) and gives focus back; the chart and the table
- * draw the same API points and a chosen point shows P's terms at that instant; Rehearse a cash
- * shock carries the account and snapshot to the prepared run. Read-only.
+ * Treasury in motion (prp/2026-10-29-ux-pass/HANDOFF.md T1–T6, laid out as mockup 02), at every
+ * width of e2e/ux.config.ts: the account (a selector only when there are several) drives the
+ * figures, the buckets, the spendable calculation and the cash path together; a bucket names its
+ * inputs and source time in its tooltip; an obligation or arrival row opens its details (a
+ * full-width sheet on a phone) and gives focus back; the chart draws the API points and each
+ * point's tooltip names P at that instant; Rehearse a cash shock carries the account and snapshot
+ * to the prepared run. Read-only.
  */
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
@@ -27,39 +28,46 @@ async function atLeast44 (page: Page, selector: string): Promise<void> {
   }
 }
 
-test('T1–T3: the selected account drives buckets, S and its calculation together', async ({ page, baseURL, request }) => {
+test('T1–T3: the selected account drives figures, buckets, S and its calculation together', async ({ page, baseURL, request }) => {
   const writes = await readOnly(page, baseURL!)
   const api = await (await request.get('/api/v1/treasury')).json()
   await open(page)
 
-  const options = $(page, 'account-selector').getByRole('radio')
-  await expect(options).toHaveCount(api.accounts.length)
-  await expect($(page, 'account-selector').getByRole('radio', { checked: true })).toHaveCount(1)
-  await atLeast44(page, '.lw-tre__choice')
+  // one account needs no choice; several show a selector, one checked
+  const several = api.accounts.length > 1
+  await expect($(page, 'account-selector')).toHaveCount(several ? 1 : 0)
+  if (several) {
+    await expect($(page, 'account-selector').getByRole('radio')).toHaveCount(api.accounts.length)
+    await expect($(page, 'account-selector').getByRole('radio', { checked: true })).toHaveCount(1)
+    await atLeast44(page, '.lw-tre__choice')
+  }
 
   for (const account of api.accounts) {
-    await $(page, `account-${account.id}`).click()
-    await expect($(page, `account-${account.id}`).getByRole('radio')).toBeChecked()
+    if (several) {
+      await $(page, `account-${account.id}`).click()
+      await expect($(page, `account-${account.id}`).getByRole('radio')).toBeChecked()
+    }
     await expect(page.locator('.lw-tre')).toHaveAttribute('data-account', account.id)
-    // S is the API's, in the account's own currency ("$70,000"); the account id is in its (i)
+    // S is the API's, in the account's own currency ("$70,000"); the account id is in its tooltip
     await expect($(page, 'spendable')).toContainText(account.id)
     const sign = ({ USD: '\\$', EUR: '€', GBP: '£' } as Record<string, string>)[account.currency] ?? `${account.currency} `
     await expect($(page, 'spendable').locator('.lw-figure')).toHaveText(new RegExp(`^-?${sign}\\d|^Unknown$`))
     await $(page, 'spend-calc').locator('summary').click()
     await expect($(page, 'spend-calculation')).toContainText(`S(now) in ${account.currency}`)
     await expect($(page, 'spend-calculation')).toContainText('(API)')
-    // five buckets; settled discloses its inputs, account and source time
-    await expect($(page, 'buckets').locator('li')).toHaveCount(5)
-    const settledRow = $(page, 'bucket-settled')
-    await settledRow.locator('summary').click()
-    await expect(settledRow.locator('[data-test="bucket-inputs"]')).toContainText(account.id)
-    await expect(settledRow.locator('[data-test="bucket-inputs"]')).toContainText(/\d{4}-\d\d-\d\d \d\d:\d\d UTC/)
-    if (account.buckets.settled === null) await expect(settledRow.locator('summary')).toContainText('Unknown')
+    await $(page, 'spend-calc').locator('summary').click()
+    // four buckets; settled names its inputs, account and source time in its tooltip
+    await expect($(page, 'buckets').locator('tbody tr')).toHaveCount(4)
+    const inputs = $(page, 'bucket-settled').locator('[data-test="bucket-inputs"]')
+    await expect(inputs).toContainText(account.id)
+    await expect(inputs).toContainText(/\d{4}-\d\d-\d\d \d\d:\d\d UTC/)
+    if (account.buckets.settled === null) await expect($(page, 'bucket-settled')).toContainText('Unknown')
     // pending inflows are expected, not settled
-    await expect($(page, 'bucket-pending-in').locator('summary')).toContainText('expected')
+    for (const f of account.buckets.pending_in) {
+      await expect($(page, 'obligations').locator(`tr[data-row="${f.flow_id}"] .lw-dot`)).toHaveText('Expected')
+    }
     // the cash path follows: one chart point per API point of this account
-    await expect($(page, 'chart-point')).toHaveCount(api.accounts.find((a: { id: string }) => a.id === account.id)
-      .projected.filter((p: { value: { minor: number | null } }) => p.value.minor !== null).length)
+    await expect($(page, 'outlook-point')).toHaveCount(account.projected.length)
   }
   expect(await sideways(page), 'Treasury scrolls sideways').toBeLessThanOrEqual(0)
   expect(writes).toEqual([])
@@ -104,41 +112,33 @@ test('T4: a row opens its details, a sheet on the phone, and gives focus back', 
   expect(writes).toEqual([])
 })
 
-test('T5: the chart and the table share the API points; a point shows P at that instant', async ({ page, baseURL, request }) => {
+test('T5: the chart draws the API points; a point names P at that instant', async ({ page, baseURL, request }) => {
   const writes = await readOnly(page, baseURL!)
   const api = await (await request.get('/api/v1/treasury')).json()
   await open(page)
   const account = await page.locator('.lw-tre').getAttribute('data-account')
   const a = api.accounts.find((x: { id: string }) => x.id === account)
 
-  await expect($(page, 'timeline').locator('tbody tr')).toHaveCount(a.projected.length)
-  const points = $(page, 'chart-point')
-  const known = a.projected.filter((p: { value: { minor: number | null } }) => p.value.minor !== null)
-  await expect(points).toHaveCount(known.length)
+  const points = $(page, 'outlook-point')
+  await expect(points).toHaveCount(a.projected.length)
   // the first point is "now", read again by each request; the event times are the API's own
-  for (let i = 1; i < known.length; i++) {
-    await expect(points.nth(i)).toHaveAttribute('data-t', known[i].t)
+  for (let i = 1; i < a.projected.length; i++) {
+    await expect(points.nth(i)).toHaveAttribute('data-t', a.projected[i].t)
   }
   await expect($(page, 'floor-status')).toHaveText(/[A-Za-z]/)
-  // the lowest point is projected cash P, not spendable S (the label's old "not spendable now" is in its tooltip)
-  await expect($(page, 'coverage')).toContainText('Lowest point ahead')
-  await expect($(page, 'coverage').locator('[role="tooltip"]').first()).toContainText('Lowest projected cash P')
+  // the minimum is projected cash P, not spendable S
+  await expect($(page, 'coverage')).toContainText('Minimum projected')
+  await expect($(page, 'minimum').locator('xpath=..').locator('[role="tooltip"]')).toContainText('Lowest projected cash P')
 
-  // keyboard: focus a chart point, its instant's terms are announced
+  // keyboard: focus a chart point, its instant's P and what moves it are in its tooltip
   const last = points.last()
   await last.focus()
-  await expect(last).toHaveAttribute('aria-pressed', 'true')
-  const hours = (await last.getAttribute('aria-label'))!.split(',')[0]
-  await expect($(page, 'point-calculation')).toContainText(hours)
-  await expect($(page, 'point-calculation')).toContainText(/= /)
-  // the table's own control selects the same instant
-  const first = $(page, 'timeline-point').first()
-  await first.click()
-  await expect(first).toHaveAttribute('aria-pressed', 'true')
-  await expect($(page, 'point-calculation')).toContainText((await first.innerText()).trim())
-  await expect(points.first()).toHaveAttribute('aria-pressed', 'true')
-  // the minimum's calculation discloses inline
-  await $(page, 'coverage').locator('details.lw-calc summary').click()
+  const tip = last.locator('xpath=..').locator('[role="tooltip"]')
+  await expect(tip).toBeVisible()
+  await expect(tip).toContainText(`h${Math.round((Date.parse(a.projected.at(-1).t) - Date.parse(api.as_of)) / 3_600_000)}`)
+  await page.keyboard.press('Escape')
+  // the minimum's calculation discloses in the fold
+  await $(page, 'spend-calc').locator('summary').click()
   await expect($(page, 'calculation')).toContainText(`in ${a.currency}`)
   expect(await sideways(page), 'Treasury scrolls sideways').toBeLessThanOrEqual(0)
   expect(writes).toEqual([])

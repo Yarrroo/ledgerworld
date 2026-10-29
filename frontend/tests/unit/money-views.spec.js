@@ -187,7 +187,7 @@ describe('money-views fixture', () => {
     expect(calc).toMatch(/receivable rcv-1 in \(expected in 252 hours\)/)
     // S and P are separate measures
     expect(shown(w, 'spendable')).toContain('$20,000')
-    expect(text(w, 'timeline')).toContain('✕ $10,000 below')
+    expect(text(w, 'coverage')).toContain(FLOOR_WORDS.breached)
     // payroll stays visible with its reservation and both time labels (the id, reservation and UTC time in tooltips)
     const payroll = text(w, 'obligation-payroll-1')
     expect(payroll).toContain('payroll')
@@ -352,7 +352,7 @@ describe('Treasury shows the terms the ledger counts in P', () => {
     const w = await open(Treasury, '/treasury')
     expect(text(w, 'floor-status')).toBe('?Unknown')
     expect(w.find('.lw-status--ok').exists()).toBe(false)
-    expect(text(w, 'timeline')).not.toContain('floor kept')
+    expect(text(w, 'coverage')).not.toContain(FLOOR_WORDS.kept)
   })
 })
 
