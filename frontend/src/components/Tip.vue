@@ -20,7 +20,7 @@
  * by the bubble (aria-describedby) and a tap still acts; otherwise the wrapper itself takes focus.
  * The bubble stays in the DOM, hidden, so its words are not on the page until asked for.
  */
-import { onBeforeUnmount, onMounted, ref, useId } from 'vue'
+import { onBeforeUnmount, onMounted, onUpdated, ref, useId } from 'vue'
 
 const props = defineProps({
   text: { type: String, default: '' },
@@ -99,14 +99,35 @@ function outside (event) {
   if (!root.value?.contains(event.target)) close()
 }
 
-onMounted(() => {
+/**
+ * Name the trigger by the bubble. A disabled control cannot take focus or a tap, so while it is
+ * disabled the wrapper stands in for it (focusable, named by the bubble, and the target of a tap,
+ * the control letting pointer events through): the reason it is disabled stays reachable by
+ * keyboard and by touch. Re-run on every render, as the control's disabled state can change.
+ */
+function wire () {
   const el = root.value
+  if (!el) return
   control = [...el.children].find((c) => c !== bubble.value && c.matches('a, button, input, select, textarea, summary')) ??
     el.querySelector(':scope > :not(.lw-tip__bubble) :is(a, button, input, select, textarea, summary)')
-  const target = control ?? el
-  if (!control) target.setAttribute('tabindex', '0')
-  const named = target.getAttribute('aria-describedby')
-  target.setAttribute('aria-describedby', named ? `${named} ${id}` : id)
-})
+  const stand = !control || control.disabled === true
+  const target = stand ? el : control
+  const other = stand ? control : el
+  if (stand) el.setAttribute('tabindex', '0')
+  else el.removeAttribute('tabindex')
+  el.classList.toggle('lw-tip--stands-in', Boolean(control && stand))
+  const named = (target.getAttribute('aria-describedby') ?? '').split(' ').filter(Boolean)
+  if (!named.includes(id)) target.setAttribute('aria-describedby', [...named, id].join(' '))
+  const left = (other?.getAttribute('aria-describedby') ?? '').split(' ').filter((x) => x && x !== id)
+  if (other && other !== el && left.length) other.setAttribute('aria-describedby', left.join(' '))
+  else if (other && other !== el) other.removeAttribute('aria-describedby')
+  else if (other === el) {
+    if (left.length) el.setAttribute('aria-describedby', left.join(' '))
+    else el.removeAttribute('aria-describedby')
+  }
+  if (stand && control) control = null // a tap on it is a tap on the wrapper
+}
+onMounted(wire)
+onUpdated(wire)
 onBeforeUnmount(close)
 </script>

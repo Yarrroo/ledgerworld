@@ -1,4 +1,4 @@
-# Design match 0 and 1 — close-out (board items 157, 158)
+# Design match 0 and 1 — close-out
 
 **What changed.** The six finance screens now open the way the mockups do: the mockup header (LedgerWorld /
 Page · provider and agents · date · snapshot line), the sidebar with the mockup icons, "Simulation" and the
@@ -19,7 +19,7 @@ Treasury at most 220 (220; 232 before its point readout waited for a chosen poin
 **Left out, by MATCH.md's rule (the API has no field):** Overview's public-feed node; "Reserved $50,000" reads
 "Reserved: Yes", since the API serves a reservation flag, not its amount.
 
-**Not in this change (their own board items):** the per-screen layout rebuilds 02–07 (Treasury tables, the
+**Not in this change (each its own later change):** the per-screen layout rebuilds 02–07 (Treasury tables, the
 Lending bridge, the Simulation selector row, the Decisions stepper, the Execution tracker, the approval dialog).
 
 **Seen, not fixed:** the offline app (`scripts/ux_app.py`, SQLite) answers concurrent reads with HTTP 500

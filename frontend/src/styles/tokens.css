@@ -213,6 +213,10 @@
   font-size: 13px;
 }
 
+.lw-context__item {
+  color: var(--lw-ink-muted);
+}
+
 .lw-context__date {
   padding-left: var(--lw-space-6);
   border-left: 1px solid var(--lw-rule);
@@ -296,6 +300,10 @@
   cursor: help;
   text-decoration: underline dotted var(--lw-rule);
   text-underline-offset: 4px;
+}
+
+.lw-tip--stands-in :disabled {
+  pointer-events: none; /* its tap reaches the wrapper, which shows why it is disabled */
 }
 
 .lw-tip__bubble {

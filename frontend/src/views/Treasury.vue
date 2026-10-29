@@ -53,7 +53,7 @@
           <div class="lw-tile__label">{{ accountName(account.id, { currency: account.currency }) }}</div>
           <Tip>
             <div class="lw-figure">{{ metricText(account.spendable) }}</div>
-            <template #tip>Settled − reserved − pledged − pending out due by now + pending in arrived by now, as
+            <template #tip>Settled − reserved − pledged − every pending out + pending in arrived by now, as
               served by the API · as of {{ formatTime(account.spendable.as_of || account.as_of).utc }}<span
                 v-if="leadSeen" data-test="lead-stale"> · {{ leadSeen }}</span></template>
           </Tip>
@@ -76,7 +76,7 @@
               <p>S(now) in {{ account.currency }}, terms from the API's buckets:</p>
               <p>{{ spend.line }}</p>
               <p v-if="spend.excluded">{{ spend.excluded }}</p>
-              <p>S = settled − reserved − pledged − pending out due by now + pending in arrived by now.
+              <p>S = settled − reserved − pledged − every pending out + pending in arrived by now.
                 The result is the API's; this screen does not recompute it.</p>
             </div>
           </details>
@@ -194,7 +194,7 @@
           <CashChart :points="account.projected" :as-of="body.as_of" :floor="account.floor" :selected="pointT"
                      :label="`Projected cash of the ${accountName(account.id).toLowerCase()} against your safety minimum`" @select="pointT = $event" />
           <p class="lw-tre__point" role="status" aria-live="polite" data-test="point-calculation">
-            <template v-if="point && pointT">
+            <template v-if="point">
               <strong>{{ hoursFrom(body.as_of, point.t) }} · {{ formatTime(point.t).utc }}:</strong>
               {{ pointCalc.line }}<template v-if="pointCalc.excluded"> · {{ pointCalc.excluded }}</template>
             </template>
@@ -274,11 +274,11 @@ async function load () {
     getTreasury(),
     getOverview().catch((error) => ({ error }))
   ])
-  let demo = { run_id: null, why: 'Could not read the prepared run from the overview; Refresh' }
+  let demo = { run_id: null, why: 'Could not read the prepared run from the overview; reload the page' }
   if (!overview.error) {
     demo = contextKey(overview) === contextKey(treasury)
       ? { run_id: overview.demo?.run_id ?? null, why: 'No demonstration run is prepared: prepare one with the operator command first' }
-      : { run_id: null, why: 'The overview answered for another snapshot or mode; Refresh' }
+      : { run_id: null, why: 'The overview answered for another snapshot or mode; reload the page' }
   }
   return { ...treasury, demo }
 }
@@ -345,14 +345,10 @@ const account = computed(() => {
     list.find((a) => a.id.endsWith('/operating')) ?? list[0] ?? null
 })
 
-// T5: the instant whose terms are shown; the account's lowest point until one is chosen.
+// T5: the instant whose terms are shown, once the reader chooses one on the chart or the table.
 const pointT = ref(null)
 watch(() => account.value?.id, () => { pointT.value = null; openRow.value = null })
-const point = computed(() => {
-  const a = account.value
-  if (!a) return null
-  return a.projected.find((p) => p.t === pointT.value) ?? a.low ?? a.projected[0] ?? null
-})
+const point = computed(() => account.value?.projected.find((p) => p.t === pointT.value) ?? null)
 const pointCalc = computed(() => (point.value
   ? projectionTerms(account.value, point.value.t, state.body.obligations, state.body.as_of)
   : null))
@@ -455,7 +451,7 @@ const rehearse = computed(() => {
 })
 const rehearseWhy = computed(() => {
   if (state.status === 'loading') return 'Loading'
-  if (state.status === 'error') return 'Last loaded, not current; Refresh first'
+  if (state.status === 'error') return 'Last loaded, not current; reload the page first'
   if (!account.value) return 'There is no cash account to carry into the simulation'
   if (!state.body.demo.run_id) return state.body.demo.why
   return 'The simulation screen is not part of this build'

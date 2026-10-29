@@ -827,7 +827,7 @@ async function checkFork () {
         f.done = f.branch_ids.every((id) => arrived(id, f.round))
         if (!f.done && ++f.reads >= FORK_RUN_READS) {
           forked.value = null
-          forkError.value = 'Fork decided, but its branches have not reached the run: Refresh, or fork again'
+          forkError.value = 'Fork decided, but its branches have not reached the run: reload the page, or fork again'
         }
       }
     }

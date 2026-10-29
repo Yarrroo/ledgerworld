@@ -774,7 +774,7 @@ export const ScreenShell = defineComponent({
       }, [
         h('strong', `${STATES.stale.icon} ${STATES.stale.word}: `),
         `last observed values for ${props.stale.map((f) => `${f.name}${f.at ? `, as of ${f.at}` : ''}`).join('; ')}. ` +
-        'Refresh the evidence before acting on them; they are not current authority.'
+        'Reload the page before acting on them; they are not current authority.'
       ])
       const notices = [
         error && !absent && h('div', { class: 'lw-alert', role: 'alert', 'data-test': 'error' }, [
