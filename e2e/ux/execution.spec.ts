@@ -191,6 +191,28 @@ test('an incident keeps its evidence; nothing is resent or reversed', async ({ p
   expect(posts).toEqual(['POST /approvals', 'POST /executions'])
 })
 
+for (const step of ['reconciled', 'incident'] as const) {
+  test(`a failed Read status after ${step} is said in the dialog, the stage kept`, async ({ page }) => {
+    const posts = await mock(page, { executions: [executionAt(step)] })
+    await review(page)
+    await $(page, 'confirm').click()
+    await $(page, 'execute').click()
+    await expect(dialog(page)).toHaveAttribute('data-stage', step)
+    const kept = await $(page, 'stage-status').innerText()
+    // the newest route answers first: every later read is refused
+    await page.route(`**/api/v1/executions/${APPROVAL.approval_id}`, (r) =>
+      r.fulfill({ status: 403, json: { error: { code: 'forbidden', detail: 'not allowed' } } }))
+    await $(page, 'read-status').click()
+    await expect($(page, 'stage-status')).toContainText(
+      `Could not read the status of execution ${APPROVAL.approval_id}: not allowed. Read status to try again.`)
+    await expect($(page, 'stage-status')).toContainText(kept)
+    await expect(dialog(page)).toHaveAttribute('data-stage', step)
+    await footed(page)
+    await page.screenshot({ path: test.info().outputPath(`read-failed-${step}.png`) })
+    expect(posts).toEqual(['POST /approvals', 'POST /executions'])
+  })
+}
+
 test('focus is trapped in the dialog and returned to Review plan', async ({ page }) => {
   await mock(page, {})
   await review(page)
