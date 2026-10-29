@@ -455,21 +455,36 @@ export const ScreenShell = defineComponent({
     }
 
     /**
-     * The panel at the top of the view: the last one whose top has reached the sticky header; at
-     * the page's end, the chosen one while it is in view, else the last.
+     * The panels as drawn: top to bottom, then left to right within a row. A screen's grid may
+     * place them out of DOM order (Simulation at two columns), so the reading order is read off
+     * their boxes, never off the markup.
+     */
+    function drawn () {
+      return elements.map((el) => {
+        const box = el.getBoundingClientRect()
+        return { el, top: Math.round(box.top), left: box.left }
+      }).sort((a, b) => a.top - b.top || a.left - b.left)
+    }
+
+    /**
+     * The panel at the top of the view: the first in the lowest drawn row whose top has reached
+     * the sticky header; at the page's end, the chosen one while it is in view, else the first in
+     * the bottom row.
      */
     function track () {
       if (!elements.length) return
-      let current = elements[0]
-      for (const el of elements) {
-        if (el.getBoundingClientRect().top <= stickyH + 16) current = el
+      const order = drawn()
+      let current = order[0]
+      for (const p of order) {
+        if (p.top <= stickyH + 16 && p.top > current.top) current = p
       }
-      const chosen = pinned && elements.find((el) => el.id === pinned)
-      const top = chosen?.getBoundingClientRect().top
-      if (!chosen || top < 0 || top >= window.innerHeight) pinned = null
+      const chosen = pinned && order.find((p) => p.el.id === pinned)
+      if (!chosen || chosen.top < 0 || chosen.top >= window.innerHeight) pinned = null
       const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2
-      if (atEnd && window.scrollY > 0) current = pinned ? chosen : elements[elements.length - 1]
-      active.value = current.id
+      if (atEnd && window.scrollY > 0) {
+        current = pinned ? chosen : order.find((p) => p.top === order[order.length - 1].top)
+      }
+      active.value = current.el.id
     }
 
     /** Whether the marked panels changed since the last look. */

@@ -18,7 +18,8 @@ rebuilt; the six views keep their bodies and gain only `data-panel` labels.
 Above the page title on every width: breadcrumb (`LedgerWorld › Screen`, plus `run <id>` when the
 route carries one) and a context bar — mode (`data-test="mode"`), model, as of (UTC · local),
 snapshot / source (`data-test="source"`). Below it, the **panel index**: one link per element the
-view marks `data-panel="<name>"`; the one nearest the top of the viewport carries
+view marks `data-panel="<name>"`; the one nearest the top of the viewport, by where it is drawn
+(top, then left; never its DOM order, which a grid may rearrange), carries
 `aria-current="true"` and updates while scrolling (one rAF per frame, no focus moves); a panel
 chosen from the index stays marked even where the page's end stops the scroll short of it.
 
