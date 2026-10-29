@@ -398,6 +398,8 @@ function panelId (label, taken) {
 }
 
 const PHONE = '(max-width: 767px)'
+const SETTLE = 150 // ms without a scroll event after which a choice's scroll has stopped
+const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '])
 
 /**
  * One screen, in the handoff's shell (prp/2026-10-29-ux-shell/design.md): the logo and six
@@ -411,7 +413,8 @@ const PHONE = '(max-width: 767px)'
  * The drawer is modal while open: the page behind it is inert, Escape, the scrim or any link
  * closes it, and leaving the phone width closes it. The panel index lists every element the
  * screen marks `data-panel="<name>"`; the one at the top of the view carries aria-current while
- * the page scrolls. Choosing one scrolls to it, keeps it marked, and leaves focus where it was.
+ * the page scrolls. Choosing one scrolls to it and leaves focus where it was; it stays marked through
+ * that scroll, and after it while in view, until the reader scrolls on their own (wheel, touch, keys).
  */
 export const ScreenShell = defineComponent({
   name: 'ScreenShell',
@@ -435,6 +438,7 @@ export const ScreenShell = defineComponent({
     const menuButton = ref(null)
     let elements = [] // the panels' elements, in page order
     let pinned = null // the panel last chosen from the index
+    let flight = 0 // the settle timer of the scroll a choice started; 0 once that scroll has stopped
     let stickyH = 0
     let frame = 0
     let stale = { panels: true, size: true }
@@ -467,18 +471,22 @@ export const ScreenShell = defineComponent({
     }
 
     /**
-     * The panel at the top of the view: the first in the lowest drawn row whose top has reached
-     * the sticky header; at the page's end, the chosen one while it is in view, else the first in
-     * the bottom row.
+     * The panel at the top of the view: the chosen one while the scroll it started is under way;
+     * else the first in the lowest drawn row whose top has reached the sticky header; at the
+     * page's end, the chosen one while it is in view, else the first in the bottom row.
      */
     function track () {
       if (!elements.length) return
       const order = drawn()
+      const chosen = pinned && order.find((p) => p.el.id === pinned)
+      if (chosen && flight) {
+        active.value = pinned // its target may still be below the view
+        return
+      }
       let current = order[0]
       for (const p of order) {
         if (p.top <= stickyH + 16 && p.top > current.top) current = p
       }
-      const chosen = pinned && order.find((p) => p.el.id === pinned)
       if (!chosen || chosen.top < 0 || chosen.top >= window.innerHeight) pinned = null
       const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2
       if (atEnd && window.scrollY > 0) {
@@ -515,7 +523,29 @@ export const ScreenShell = defineComponent({
         track()
       })
     }
-    const onScroll = () => schedule()
+    /** The chosen panel's scroll has stopped: from here the page decides, the chosen one kept while in view. */
+    function land () {
+      clearTimeout(flight)
+      flight = 0
+      schedule()
+    }
+    /** A choice's scroll is under way: it has stopped once no scroll event came for SETTLE ms (no scrollend in some browsers). */
+    function hold () {
+      clearTimeout(flight)
+      flight = setTimeout(land, SETTLE)
+    }
+    /** The reader scrolls on their own: a scroll a choice started is over, and the index follows the page again. */
+    function release () {
+      clearTimeout(flight)
+      flight = 0
+      pinned = null
+    }
+
+    const onScroll = () => {
+      if (flight) hold()
+      schedule()
+    }
+    const onScrollEnd = () => { if (flight) land() }
     const onResize = () => schedule('size')
 
     function closeMenu (refocus) {
@@ -527,6 +557,7 @@ export const ScreenShell = defineComponent({
 
     function onKey (event) {
       if (event.key === 'Escape') closeMenu(true)
+      else if (SCROLL_KEYS.has(event.key) && !event.target?.closest?.('input, textarea, select, [contenteditable]')) release()
     }
 
     function onPhone (event) {
@@ -552,6 +583,9 @@ export const ScreenShell = defineComponent({
       phone = window.matchMedia?.(PHONE)
       phone?.addEventListener?.('change', onPhone)
       window.addEventListener('scroll', onScroll, { passive: true })
+      window.addEventListener('scrollend', onScrollEnd)
+      window.addEventListener('wheel', release, { passive: true })
+      window.addEventListener('touchmove', release, { passive: true })
       window.addEventListener('resize', onResize)
       window.addEventListener('keydown', onKey)
       schedule('panels')
@@ -561,7 +595,11 @@ export const ScreenShell = defineComponent({
       resizes?.disconnect()
       phone?.removeEventListener?.('change', onPhone)
       if (frame) cancelAnimationFrame(frame)
+      clearTimeout(flight)
       window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('scrollend', onScrollEnd)
+      window.removeEventListener('wheel', release)
+      window.removeEventListener('touchmove', release)
       window.removeEventListener('resize', onResize)
       window.removeEventListener('keydown', onKey)
     })
@@ -582,9 +620,10 @@ export const ScreenShell = defineComponent({
       const el = document.getElementById(id)
       if (!el) return
       const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-      el.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' })
       pinned = id
       active.value = id
+      hold()
+      el.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' })
     }
 
     return () => {
