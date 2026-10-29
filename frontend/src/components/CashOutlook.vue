@@ -214,11 +214,11 @@ const lowLabel = computed(() => {
   const x = p.px + (right ? -10 : 10)
   const anchor = right ? 'end' : 'start'
   const fy = floorY.value
+  const floorBox = fy === null ? null : box(floorText.value, width.value - M.right, fy - 6, 'end')
   const clears = (baseline) => {
     if (fy === null) return true
     const b = box(text, x, baseline, anchor)
-    return !(fy > b.top && fy < b.bottom) &&
-      !meets(b, box(floorText.value, width.value - M.right, fy - 6, 'end'))
+    return !(fy > b.top && fy < b.bottom) && !meets(b, floorBox)
   }
   const y = [p.py + 24, p.py - 14, p.py + 40, p.py - 30].find(clears) ?? p.py + 24
   return { x, y, anchor, text }
