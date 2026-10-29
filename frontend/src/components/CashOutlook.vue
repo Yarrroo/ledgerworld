@@ -208,7 +208,7 @@ const around = (x1, y1, x2, y2, pad) =>
   ({ left: Math.min(x1, x2) - pad, right: Math.max(x1, x2) + pad, top: Math.min(y1, y2) - pad, bottom: Math.max(y1, y2) + pad })
 
 /** What the low-point label must not touch besides the floor: the step line P (each H and V
- * stretch) and every point marker. */
+ * stretch) and every other point marker (its own sits 10 px off its text by construction). */
 const marks = computed(() => {
   const pts = valued.value
   return [
@@ -216,7 +216,7 @@ const marks = computed(() => {
       around(pts[n].px, pts[n].py, p.px, pts[n].py, 2),
       around(p.px, pts[n].py, p.px, p.py, 2)
     ]),
-    ...drawn.value.map((p) => around(p.px, p.py, p.px, p.py, (p.low ? 7 : 5) + 1))
+    ...drawn.value.filter((p) => !p.low).map((p) => around(p.px, p.py, p.px, p.py, 6))
   ]
 })
 
@@ -233,9 +233,10 @@ const lowLabel = computed(() => {
   const floorBox = fy === null ? null : box(floorText.value, width.value - M.right, fy - 6, 'end')
   const candidates = [24, -14, 40, -30, 56, -46].flatMap((dy) => sides.map((anchor) => {
     const x = p.px + (anchor === 'end' ? -10 : 10)
-    const b = box(text, x, p.py + dy, anchor)
+    const y = p.py + dy
+    const b = box(text, x, y, anchor)
     return {
-      x, y: p.py + dy, anchor,
+      x, y, anchor,
       floor: fy === null || (!(fy > b.top && fy < b.bottom) && !meets(b, floorBox)),
       clear: b.left >= 0 && b.right <= width.value && b.top >= 0 && b.bottom <= height.value - M.bottom + 8 &&
         marks.value.every((m) => !meets(b, m))
