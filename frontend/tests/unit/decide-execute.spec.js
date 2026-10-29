@@ -7,6 +7,7 @@ import { h, nextTick } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
+import { onPage, visibleText } from './visible.js'
 import Decisions from '../../src/views/Decisions.vue'
 import Execution, { forgetTab } from '../../src/views/Execution.vue'
 
@@ -151,12 +152,6 @@ const disabled = (w, test) => w.get(`[data-test="${test}"]`).attributes('disable
 const focused = () => document.activeElement
 /** A link to work held for another run: its words, and its tooltip naming that run (and execution). */
 const heldLink = (l) => [l.text().replace(/\s+/g, ' '), l.element.closest('.lw-tip').querySelector('[role="tooltip"]').textContent.trim()]
-/** An element's own words, without the tooltip bubbles it carries (hidden until asked for). */
-function bare (wrapper) {
-  const copy = wrapper.element.cloneNode(true)
-  copy.querySelectorAll('[role="tooltip"]').forEach((t) => t.remove())
-  return copy.textContent.replace(/\s+/g, ' ').trim()
-}
 const tipOf = (wrapper) => wrapper.element.closest('.lw-tip').querySelector('[role="tooltip"]').textContent.trim()
 /** The scenario-set cost as the screens print it (the design fixture's cost_label predates the plain-words copy). */
 const COST = '$2,400 across 3 what-ifs'
@@ -232,10 +227,19 @@ describe('Decisions: policies side by side', () => {
     serve({ 'GET /overview': overview(), 'GET /decisions/run-1': decisionsBody() })
     const w = await open(Decisions, '/decisions')
     const cost = w.get('[data-test="policy-integrated"]').get('[data-test="cost"]')
-    expect(bare(cost)).toBe(COST)
+    expect(visibleText(cost)).toBe(COST) // its tooltip is not on the page
     expect(cost.get('[role="tooltip"]').text()).toContain('the current plan\'s fee is set at review')
     expect(w.get('[data-test="policy-no-action"]').text()).toContain('broken in 2 of 3 what-ifs')
     expect(w.get('[data-test="policy-integrated"]').text()).toContain('kept in all 3 what-ifs')
+  })
+
+  it('a reading with no results still draws the page, its header included', async () => {
+    const body = decisionsBody()
+    delete body.results
+    serve({ 'GET /overview': overview(), 'GET /decisions/run-1': body })
+    const w = await open(Decisions, '/decisions')
+    expect(onPage(w, 'mode')).toMatch(/^Simulated provider\b/)
+    expect(w.find('[data-test="replay"]').exists()).toBe(false)
   })
 
   it('all-infeasible offers escalation, not approval', async () => {
@@ -262,8 +266,11 @@ describe('Decisions: policies side by side', () => {
   it('a replayed comparison is labelled replay and reviews the current observed plan, not the branch', async () => {
     serve({ 'GET /overview': overview(), 'GET /decisions/run-1': decisionsBody({ replay: true }) })
     const w = await open(Decisions, '/decisions')
+    // on the page, in the header, as Simulation says it; How we know names each replayed branch
+    expect(onPage(w, 'mode')).toMatch(/ · Replay$/)
+    expect(onPage(w, 'context-line')).toMatch(/ · Replay$/)
     expect(text(w, 'replay')).toContain('Replay')
-    expect(w.text()).toContain('Replay · Hypothetical branch run-1-s1-integrated')
+    expect(w.get('[data-test="how-integrated"] [role="tooltip"]').text()).toContain('Replay · Hypothetical branch run-1-s1-integrated')
     const review = w.get('[data-test="review-plan"]')
     expect(review.attributes('href')).toBe('/execution?run_id=run-1&review=1')
     expect(tipOf(review)).toContain('worked out again on today\'s real figures')
@@ -275,7 +282,7 @@ describe('Decisions: policies side by side', () => {
     serve({ 'GET /overview': overview(), 'GET /decisions/run-1': body })
     const w = await open(Decisions, '/decisions')
     expect(text(w, 'context-line')).toBe('Snapshot lf1 · USD · Replay')
-    expect(bare(w.get('[data-test="mode"]'))).toContain('Replay')
+    expect(onPage(w, 'mode')).toContain('Replay')
   })
 
   it('a fresh comparison carries no Replay label in the header', async () => {
@@ -294,6 +301,7 @@ describe('Execution: authority and the bounded approval', () => {
     const calls = serve({ 'GET /overview': overview(), 'GET /decisions/run-1': decisionsBody() })
     const w = await open(Execution, '/execution')
     expect(text(w, 'context-provider')).toBe('Simulated provider')
+    expect(onPage(w, 'mode')).toMatch(/^Simulated provider\b/)
     expect(text(w, 'review-why')).toBe(c.expect.reason)
     expect(w.find('[data-test="token"]').exists()).toBe(false) // the read path never asks for it
     await w.get('[data-test="review-plan"]').trigger('click')
@@ -476,6 +484,7 @@ describe('Execution: provider state, receipts and reconciliation', () => {
     const c = kase('fake').expect
     const w = await showing(executionBody({ legs: [advance()] }))
     expect(text(w, 'context-provider')).toBe(c.banner_and_receipt)
+    expect(onPage(w, 'mode').startsWith(c.banner_and_receipt)).toBe(true)
     expect(text(w, 'receipt-mode').toLowerCase()).toBe('simulated provider')
     expect(text(w, 'receipt')).toContain(c.banner_and_receipt)
     expect(w.text()).not.toMatch(/live checkpoint/i)
@@ -486,6 +495,7 @@ describe('Execution: provider state, receipts and reconciliation', () => {
     const leg = { ...advance(), receipt: { ...advance().receipt, mode: 'sandbox' } }
     const w = await showing(executionBody({ legs: [leg], mode: 'sandbox' }))
     expect(text(w, 'context-provider')).toBe(c.banner)
+    expect(onPage(w, 'mode').startsWith(c.banner)).toBe(true)
     expect(text(w, 'leg-advance')).toContain(c.advance_label)
     expect(text(w, 'receipt-mode')).toBe('Airwallex sandbox')
   })
