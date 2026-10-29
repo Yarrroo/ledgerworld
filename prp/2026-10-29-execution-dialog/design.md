@@ -43,5 +43,3 @@ Provider-confirmed → Reconciled per leg, raw status, amount; expands to E5 rec
 (each with affected leg, provider/request ids, observed status, opened and last-read times).
 Desktop: legs left, terms and incidents right. Tablet/phone: one column, terms above legs.
 
----
-Run: architect tier Sketch (one view, spec fixed by the handoff); no reviewer pack on this node; not published.

@@ -1878,4 +1878,147 @@ describe('the approval dialog, one stage at a time (board item 133)', () => {
     await box.trigger('keydown', { key: 'Tab', shiftKey: true })
     expect(focused()).toBe(last)
   })
+
+  describe('vet round 1', () => {
+    it('Escape and Tab still reach the dialog when focus has fallen to the page', async () => {
+      const { w } = await reviewReady()
+      await approve(w)
+      document.body.focus()
+      document.activeElement?.blur?.()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+      await flushPromises()
+      expect(w.get('[data-test="review"]').element.contains(focused())).toBe(true)
+      document.activeElement.blur()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await flushPromises()
+      expect(w.find('[data-test="review"]').exists()).toBe(false)
+    })
+
+    it('Read status keeps its focus while its read is out', async () => {
+      let answer
+      const { w } = await reviewReady({
+        'POST /executions': accepted(),
+        'GET /executions/apr-1': () => answer ?? executionBody({ legs: [sentPayout()] })
+      })
+      await approve(w)
+      await w.get('[data-test="execute"]').trigger('click')
+      await flushPromises()
+      answer = new Promise(() => {}) // a read that does not answer yet
+      const button = w.get('[data-test="read-status"]')
+      button.element.focus()
+      await button.trigger('click')
+      expect(button.attributes('disabled')).toBeUndefined()
+      expect(focused()).toBe(button.element)
+    })
+
+    it('a status read refused outright is said in the dialog, not "reading status"', async () => {
+      const { w } = await reviewReady({
+        'POST /executions': accepted(),
+        'GET /executions/apr-1': refuse(403, 'forbidden', 'not allowed')
+      })
+      await approve(w)
+      await w.get('[data-test="execute"]').trigger('click')
+      await flushPromises()
+      expect(text(w, 'stage-status')).toContain('Could not read')
+      expect(text(w, 'stage-status')).not.toContain('reading status')
+    })
+
+    it('an execution refused for its access is said refused, not "no longer executable"', async () => {
+      const { w } = await reviewReady({ 'POST /executions': refuse(401, 'unauthorised', 'bad access') })
+      await approve(w)
+      await w.get('[data-test="execute"]').trigger('click')
+      await flushPromises()
+      expect(text(w, 'review')).toContain('Execution refused')
+      expect(text(w, 'review')).not.toContain('no longer executable')
+    })
+
+    it('a block raised for this run while an approval is open is not shown as approved', async () => {
+      let approvals = 0
+      serve({
+        'GET /overview': overview(),
+        'GET /decisions/run-1': decisionsBody(),
+        'POST /approvals': () => (++approvals === 1 ? approvalBody() : timeout())
+      })
+      const a = await open(Execution, '/execution')
+      await a.get('[data-test="review-plan"]').trigger('click')
+      await flushPromises()
+      await enterToken(a)
+      await approve(a)
+      expect(a.get('[data-test="review"]').attributes('data-stage')).toBe('approved')
+      const b = await open(Execution, '/execution')
+      await b.get('[data-test="review-plan"]').trigger('click')
+      await flushPromises()
+      await approve(b)
+      await flushPromises()
+      expect(disabled(a, 'execute')).toBe(true)
+      expect(a.get('[data-test="review"]').attributes('data-stage')).toBe('unknown')
+      for (const w of [b, a]) { // both views share one tab's memory: released here, in order
+        mounted.splice(mounted.indexOf(w), 1)
+        w.unmount()
+      }
+    })
+
+    it('a failed leg is not shown as still in progress at Submitted', async () => {
+      serve({
+        'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+        'GET /decisions/run-1': decisionsBody(),
+        'GET /executions/apr-1': executionBody({ legs: [payout({ state: 'failed' })] })
+      })
+      const w = await open(Execution, '/execution')
+      expect(w.get('[data-test="leg-payout"] [aria-current="step"]').text()).toMatch(/failed/i)
+    })
+
+    it('a leg whose outcome is unknown keeps the dialog executing, not incident', async () => {
+      const { w } = await reviewReady({
+        'POST /executions': accepted(),
+        'GET /executions/apr-1': executionBody({ legs: [payout({ state: 'unknown' })] })
+      })
+      await approve(w)
+      await w.get('[data-test="execute"]').trigger('click')
+      await flushPromises()
+      expect(w.get('[data-test="review"]').attributes('data-stage')).toBe('executing')
+    })
+
+    it('two open incidents of one kind on one leg each keep their own evidence row', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const leg = { ...paidPayout(), state: 'submitted', reconciled: false } // still moving: read again
+      const other = payout({ leg_id: 'leg-2', state: 'unknown' })
+      const twice = { leg_id: leg.leg_id, kind: 'paid_then_failed', state: 'open', opened_at: '2026-11-05T10:05:00Z' }
+      const pair = [twice, { ...twice, opened_at: '2026-11-05T10:06:00Z' }]
+      let body = executionBody({ legs: [other, leg], incidents: pair })
+      fakeTimers()
+      serve({
+        'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+        'GET /decisions/run-1': decisionsBody(),
+        'GET /executions/apr-1': () => body
+      })
+      const w = await open(Execution, '/execution')
+      // the unknown leg resolves and a third incident opens: the list is re-keyed, not appended
+      body = executionBody({
+        legs: [{ ...other, state: 'submitted' }, leg],
+        incidents: [...pair, { ...twice, incident_id: 'inc-3', kind: 'amount_mismatch' }]
+      })
+      await tick()
+      expect(w.get('[data-test="incident"]').findAll('ul.lw-evidence > li')).toHaveLength(3)
+      expect(warn.mock.calls.flat().join(' ')).not.toMatch(/Duplicate keys/)
+      warn.mockRestore()
+    })
+
+    it('a poll that changes only the read time does not change what the live status says', async () => {
+      fakeTimers()
+      let body = executionBody({ legs: [sentPayout()] })
+      const { w } = await reviewReady({
+        'POST /executions': accepted(),
+        'GET /executions/apr-1': () => body
+      })
+      await approve(w)
+      await w.get('[data-test="execute"]').trigger('click')
+      await flushPromises()
+      const said = text(w, 'stage-status')
+      body = { ...executionBody({ legs: [sentPayout()] }), as_of: '2026-11-05T10:09:00Z' }
+      await tick()
+      expect(text(w, 'stage-status')).toBe(said)
+    })
+  })
 })
+

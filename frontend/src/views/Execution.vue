@@ -79,7 +79,8 @@
                 <li v-for="(step, n) in STEPS" :key="step"
                     :class="{ 'lw-steps__done': n <= leg.step, 'lw-steps__now': n === leg.step }"
                     :aria-current="n === leg.step ? 'step' : undefined">
-                  <span aria-hidden="true">{{ n <= leg.step ? '●' : '○' }}</span> {{ step }}<span
+                  <span aria-hidden="true">{{ n <= leg.step ? '●' : '○' }}</span> {{ step }}<template
+                    v-if="n === leg.step && leg.stepNote"> · {{ leg.stepNote }}</template><span
                     v-if="n <= leg.step" class="lw-visually-hidden">, reached</span>
                 </li>
               </ol>
@@ -131,7 +132,7 @@
 
     <div v-if="flow.open" class="lw-overlay">
       <div ref="dialog" class="lw-dialog" role="dialog" aria-modal="true" aria-labelledby="review-heading"
-           data-test="review" :data-stage="stage" @keydown.esc.prevent="closeReview" @keydown.tab="trap">
+           data-test="review" :data-stage="stage">
         <div class="lw-dialog__body">
           <p :class="['lw-status', `lw-status--${STAGES[stage].tone}`]" data-test="stage">
             <span aria-hidden="true">{{ STAGES[stage].icon }}</span><span>{{ STAGES[stage].word }}</span>
@@ -186,7 +187,7 @@
               <dt>Expires</dt>
               <dd data-test="expires">{{ expires.utc }} · {{ expires.local }}</dd>
             </dl>
-            <div v-if="stage === 'approved' || stage === 'expired'" class="lw-table-wrap" tabindex="0"
+            <div v-if="!flow.executed || flow.invalid" class="lw-table-wrap" tabindex="0"
                  role="region" aria-label="Bound legs">
               <table class="lw-table" data-test="legs">
                 <thead>
@@ -219,11 +220,12 @@
         <div class="lw-dialog__footer lw-actions">
           <button v-if="!flow.approval" type="button" class="lw-button" data-test="confirm" :disabled="!!confirmWhy"
                   aria-describedby="confirm-why" @click="confirmApproval">Confirm approval</button>
-          <button v-else-if="stage === 'approved' || stage === 'expired'" type="button" class="lw-button"
+          <button v-else-if="!flow.executed || flow.invalid" type="button" class="lw-button"
                   data-test="execute" :disabled="!!executeWhy" aria-describedby="execute-why"
                   @click="executePlan">Execute approved plan</button>
           <button v-else type="button" class="lw-button" data-test="read-status"
-                  :disabled="flow.submitting || readingNow" @click="readNow">Read status</button>
+                  :disabled="flow.submitting" :aria-disabled="readingNow || undefined"
+                  @click="readNow">Read status</button>
           <button type="button" class="lw-button lw-button--quiet" :disabled="flow.submitting"
                   @click="closeReview">{{ flow.approval ? 'Close' : 'Cancel' }}</button>
           <span v-if="!flow.approval" id="confirm-why" class="lw-time" data-test="confirm-why">{{ confirmWhy }}</span>
@@ -818,7 +820,8 @@ const legs = computed(() => {
     const mode = leg.receipt?.mode ?? body.mode
     // an open incident takes the leg back from Reconciled: the tracker never outruns the evidence
     const step = leg.reconciled && leg.state === 'settled' && !open.length ? 3 : STEP[leg.state] ?? 0
-    return { ...leg, text, tone, icon, step, mode: LABELS[mode] || mode }
+    const stepNote = { failed: 'failed', unknown: 'outcome unknown' }[leg.state] ?? ''
+    return { ...leg, text, tone, icon, step, stepNote, mode: LABELS[mode] || mode }
   })
 })
 
@@ -842,8 +845,8 @@ const incidents = computed(() => {
       line: `${l.leg_id}: Outcome unknown; checking provider status. Do not send again.`,
       evidence: evidence(l)
     })),
-    ...body.incidents.filter((i) => i.state === 'open').map((i) => ({
-      key: `incident:${i.incident_id ?? `${i.leg_id}:${i.kind}`}`,
+    ...body.incidents.filter((i) => i.state === 'open').map((i, n) => ({
+      key: `incident:${i.incident_id ?? `${i.leg_id}:${i.kind}:${n}`}`, // no id: the order tells them apart
       line: `${i.kind.replace(/_/g, ' ')} on ${i.leg_id}, opened ${formatTime(i.opened_at).utc}`,
       evidence: evidence(legOf(i.leg_id), [['Opened', formatTime(i.opened_at).utc]])
     }))
@@ -868,20 +871,23 @@ const stage = computed(() => {
   if (flow.executed) {
     const body = sent.value
     if (!flow.submitting && body) {
-      if (incidents.value.length || body.legs.some((l) => l.state === 'failed')) return 'incident'
+      // an unknown leg is still being read (executing); an open incident or a failure is not
+      const opened = body.incidents.some((i) => i.state === 'open')
+      if (opened || body.legs.some((l) => l.state === 'failed')) return 'incident'
       if (body.legs.length && body.legs.every((l) => l.reconciled)) return 'reconciled'
     }
     return 'executing'
   }
+  if (flow.blocked) return 'unknown' // an outcome held for this run blocks the bound approval too
   return staleWhy.value ? 'expired' : 'approved'
 })
 
 const stageHeading = computed(() => ({
   review: `Review plan · ${NAMES[policy.value]}`,
   submitting: 'Creating approval',
-  unknown: 'Approval outcome unknown',
+  unknown: flow.blocked === APPROVAL_UNKNOWN ? 'Approval outcome unknown' : 'Outcome unknown for this run',
   approved: 'Approved terms · not yet executed',
-  expired: 'Approval no longer executable',
+  expired: flow.invalid ? 'Execution refused · not executed' : 'Approval no longer executable',
   executing: 'Executing approved plan',
   reconciled: 'Reconciled',
   incident: 'Incident · evidence kept'
@@ -896,9 +902,13 @@ const stageStatus = computed(() => {
   }
   if (stage.value === 'incident') return `Read status stays available; nothing is resent or reversed.`
   if (flow.blocked) return flow.blocked
-  return body
-    ? `Execution ${id}: reading status, last read ${formatTime(body.as_of).utc}.`
-    : `Execution ${id}: reading status.`
+  // said once per change of state, never per poll: no read time in this live text
+  if (pollError.value) {
+    return rereading.value
+      ? `Could not read the status of execution ${id}; reading again.`
+      : `Could not read the status of execution ${id}: ${pollError.value.replace(/\.$/, '')}. Read status to try again.`
+  }
+  return `Execution ${id}: reading status.`
 })
 
 // ------------------------------------------------------------------ dialog mechanics
@@ -951,6 +961,17 @@ function trap (event) {
     first.focus()
   }
 }
+
+/** Escape (when safe) and Tab while the dialog is open, wherever focus has gone. */
+function onKey (event) {
+  if (!flow.open) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeReview()
+  } else if (event.key === 'Tab') trap(event)
+}
+document.addEventListener('keydown', onKey)
+onUnmounted(() => document.removeEventListener('keydown', onKey))
 
 // A new stage keeps focus in the dialog: a control that went away or was disabled hands focus to
 // the heading; focus already on a live control inside stays where it is.
@@ -1070,6 +1091,7 @@ watch(stage, async () => {
   align-items: center;
   justify-content: center;
   padding: var(--lw-space-4);
+  overflow-y: auto;
   background: rgb(14 20 17 / 0.45);
 }
 /* one focused dialog: the body scrolls, the action footer stays in view */
@@ -1077,6 +1099,7 @@ watch(stage, async () => {
   display: flex;
   flex-direction: column;
   width: min(48rem, 100%);
+  max-height: calc(100vh - 2 * var(--lw-space-4));
   max-height: calc(100dvh - 2 * var(--lw-space-4));
   border: 1px solid var(--lw-rule);
   border-radius: var(--lw-radius);
@@ -1105,6 +1128,7 @@ watch(stage, async () => {
   .lw-overlay { padding: 0; align-items: stretch; }
   .lw-dialog {
     width: 100%;
+    height: 100vh;
     height: 100dvh;
     max-height: none;
     border: 0;
