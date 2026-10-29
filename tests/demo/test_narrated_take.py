@@ -38,6 +38,15 @@ def test_rate_fits_a_clip_to_its_window_or_refuses(seconds: float, window: int, 
     assert voiceover.rate_for(seconds, window) == rate
 
 
+@pytest.mark.parametrize(("rate", "seconds", "window", "again"), [
+    (0, 13.4, 10, 40), (0, 10.0, 10, 5), (36, 9.85, 10, 40), (40, 9.7, 10, None), (0, 20.0, 10, None),
+])
+def test_a_long_clip_is_voiced_again_faster_up_to_the_cap(rate: int, seconds: float, window: int,
+                                                          again: int | None) -> None:
+    # 36 ran long by a little: +40% is tried, never skipped for a step that would overshoot it
+    assert voiceover.next_rate(rate, seconds, window) == again
+
+
 def test_every_line_is_estimated_to_fit_its_beat() -> None:
     for line in voiceover.lines():
         assert voiceover.rate_for(voiceover.estimate(line["text"]), line["end"] - line["start"]) is not None
@@ -84,7 +93,7 @@ def test_mux_places_each_clip_at_its_beats_actual_start_after_the_card() -> None
     voice, beats = _docs({b: 10.0 * i for i, b in enumerate(BEATS)})
     beats["beats"][3]["began"] = 41.234  # a late beat: its voice moves with it
     command = voiceover.mux_command("ffmpeg", "/v/take.webm", voiceover.placements(voice, beats), "/v/take.mp4",
-                                    voiceover.ending(beats))
+                                    voiceover.ending(voice, beats))
     assert command[:6] == ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i"]
     assert command[6] == "/v/take.webm" and command[-1] == "/v/take.mp4"
     inputs = [command[i + 1] for i, arg in enumerate(command) if arg == "-i"]
@@ -93,11 +102,15 @@ def test_mux_places_each_clip_at_its_beats_actual_start_after_the_card() -> None
     assert "[1:a]adelay=3020:all=1[a1]" in graph
     assert "[4:a]adelay=44254:all=1[a4]" in graph
     assert "amix=inputs=7:duration=longest:normalize=0,apad[voice]" in graph
-    for pair in (["-map", "0:v"], ["-map", "[voice]"], ["-c:v", "libx264"], ["-c:a", "aac"]):
+    for pair in (["-map", "[video]"], ["-map", "[voice]"], ["-c:v", "libx264"], ["-c:a", "aac"]):
         assert any(command[i:i + 2] == pair for i in range(len(command)))
-    assert "-shortest" in command  # the padded voice ends with the video, never after it
+    # the last frame is held and both streams stop at the end: a late line is never cut short
+    assert "[0:v]tpad=stop_mode=clone:stop_duration=75[video]" in graph and "-shortest" not in command
     # Explain left at 70.0: the MP4 stops a second later, not when the recorder closed
     assert command[command.index("-t") + 1] == "74.020"
+    # a late last beat: it began at 69.0 and left at 70.0, its 5 s line runs to 74.0
+    beats["beats"][-1]["began"] = 69.0
+    assert voiceover.ending(voice, beats) == pytest.approx(3.02 + 74.0 + 1.0)
 
 
 def test_mux_refuses_a_take_missing_a_beat() -> None:
@@ -145,6 +158,7 @@ def test_subtitles_follow_the_voice_as_placed_in_the_mp4() -> None:
 
 
 def test_the_fresh_run_request_is_one_the_api_accepts() -> None:
+    from app.demo import prepare
     from app.finance.schemas import RunRequest
     from app.jobs.runner import family_of
 
@@ -154,19 +168,22 @@ def test_the_fresh_run_request_is_one_the_api_accepts() -> None:
     request = RunRequest.model_validate({"snapshot_id": "demo-world", "scenario": scenario,
                                          "rounds": rounds})
     assert family_of(request.scenario.model_dump(mode="json")).scripted
+    # the prepared run's own scenario, in the request's spelling
+    assert family_of(scenario).id == family_of(prepare.SCENARIO).id
+    assert scenario["seed"] == prepare.SCENARIO["seed"]
 
 
-def _take(url: str) -> subprocess.CompletedProcess:
-    env = {**os.environ, "LEDGERWORLD_DEMO_TOKEN": "placeholder-not-a-token"}
+def _take(url: str, tmp: Path) -> subprocess.CompletedProcess:
+    env = {**os.environ, "LEDGERWORLD_DEMO_TOKEN": "placeholder-not-a-token", "TMPDIR": str(tmp)}
     return subprocess.run(["bash", str(ROOT / "scripts" / "narrated_take.sh"), url], env=env,
                           capture_output=True, text=True, timeout=120, check=False)
 
 
-def test_the_token_never_rides_plain_http_to_another_machine() -> None:
-    done = _take("http://demo.example.test")
+def test_the_token_never_rides_plain_http_to_another_machine(tmp_path: Path) -> None:
+    done = _take("http://demo.example.test", tmp_path)
     assert done.returncode == 2 and "must be https" in done.stderr
     # this machine's own app is allowed: the take goes on to the pre-flight, which finds nothing
-    done = _take("http://127.0.0.1:9")
+    done = _take("http://127.0.0.1:9", tmp_path)
     assert "must be https" not in done.stderr and "no GO" in done.stderr
     assert "placeholder-not-a-token" not in done.stdout + done.stderr
 
@@ -191,6 +208,24 @@ def test_a_dropped_tts_connection_is_tried_again(tmp_path: Path, monkeypatch) ->
     fake.Communicate = Communicate
     fake.exceptions = types.SimpleNamespace(EdgeTTSException=RuntimeError)
     monkeypatch.setitem(sys.modules, "edge_tts", fake)
+
+    class ServerDisconnectedError(Exception):  # aiohttp's: neither OSError nor EdgeTTSException
+        pass
+
+    drops = iter([ServerDisconnectedError("Server disconnected")])
+
+    class Dropping(Communicate):
+        async def save(self, path: str) -> None:
+            error = next(drops, None)
+            if error:
+                raise error
+            Path(path).write_bytes(b"mp3")
+
+    fake.Communicate = Dropping
+    asyncio.run(voiceover._speak("line", tmp_path / "e.mp3", 0, pause_s=0))
+    assert (tmp_path / "e.mp3").exists()
+    fake.Communicate = Communicate
+    calls.clear()
     asyncio.run(voiceover._speak("line", tmp_path / "c.mp3", 5, pause_s=0))
     assert calls == ["+5%"] * 3 and (tmp_path / "c.mp3").read_bytes() == b"mp3"
     calls.clear()

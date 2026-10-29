@@ -76,8 +76,9 @@ async function call (method: 'GET' | 'POST', path: string, data?: object, timeou
   return answer
 }
 
-/** An ErrorResponse's `error: {code, detail}`, as one line. */
-const reason = (a: Answer): string => [a.body?.error?.code, a.body?.error?.detail].filter(Boolean).join(': ')
+/** An ErrorResponse's `error: {code, detail}`, as one line; any other JSON body's own message. */
+const reason = (a: Answer): string => [a.body?.error?.code, a.body?.error?.detail ?? a.body?.message ?? a.body?.detail]
+  .filter((part) => typeof part === 'string' && part !== '').join(': ')
 const refusal = (a: Answer): string => [a.status, reason(a)].filter(Boolean).join(' ')
 
 /** The caption box: fixed over the bottom of the screen, never in the way of a click. */
@@ -99,7 +100,7 @@ async function caption (page: Page, title: string, text: string, notes: string[]
     const body = document.createElement('div')
     body.textContent = text
     box.append(head, body)
-    for (const note of notes.slice(-3)) { // the newest three: an answer is never the one clipped
+    for (const note of notes.slice(-3)) { // the newest three: older notes give way, never the latest
       const line = document.createElement('em')
       line.style.display = 'block'
       line.textContent = note

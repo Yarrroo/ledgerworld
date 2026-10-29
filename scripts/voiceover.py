@@ -36,7 +36,7 @@ ENGINE = "Microsoft Edge neural text-to-speech, through edge-tts"
 CARD_S = 3
 MAX_RATE = 40  # percent faster than the voice's own pace; beyond it speech stops being clear
 MARGIN_S = 0.4  # silence kept between a clip's end and its beat's end
-TAIL_S = 1.0  # the MP4 ends this long after the last beat, never at the recorder's close
+TAIL_S = 1.0  # the MP4 ends this long after the last beat or line, never at the recorder's close
 WPS = 2.3  # edge-tts words per second at +0%, its trailing pause included (measured, 2026-10-29)
 
 
@@ -53,6 +53,15 @@ def rate_for(seconds: float, window: float) -> int | None:
         return 0
     need = math.ceil((seconds / room - 1) * 100)
     return need if need <= MAX_RATE else None
+
+
+def next_rate(rate: int, seconds: float, window: float) -> int | None:
+    """The rate to voice again at after `seconds` at `rate` ran long: at least 5 points faster,
+    never past MAX_RATE; None once MAX_RATE itself ran long."""
+    faster = rate_for(seconds * (100 + rate) / 100, window)
+    if faster is None or rate >= MAX_RATE:
+        return None
+    return min(max(faster, rate + 5), MAX_RATE)
 
 
 def estimate(text: str) -> float:
@@ -101,7 +110,7 @@ async def _speak(text: str, path: Path, rate: int, tries: int = 3, pause_s: floa
         try:
             await edge_tts.Communicate(text, VOICE, rate=f"+{rate}%").save(str(path))
             return
-        except (OSError, edge_tts.exceptions.EdgeTTSException):
+        except Exception:  # aiohttp's disconnects are not OSError; the last try's error is raised
             if attempt == tries:
                 raise
             await asyncio.sleep(pause_s * attempt)
@@ -121,9 +130,8 @@ def voice(out: Path, dry: bool) -> int:
                 seconds = media_seconds(path)
                 if seconds <= window - MARGIN_S:
                     break
-                faster = rate_for(seconds * (100 + rate) / 100, window)
-                if faster is None or (rate := max(faster, rate + 5)) > MAX_RATE:
-                    rate = None
+                rate = next_rate(rate, seconds, window)
+                if rate is None:
                     break
         if rate is None:
             failed.append(line["beat"])
@@ -150,14 +158,18 @@ def placements(voice_doc: dict, beats_doc: dict) -> list[tuple[str, float]]:
     return [(c["file"], beats_doc["offset"] + began[c["beat"]]) for c in voice_doc["clips"]]
 
 
-def ending(beats_doc: dict) -> float:
-    """Where the MP4 stops: TAIL_S after the last beat left its screen."""
-    return beats_doc["offset"] + beats_doc["beats"][-1]["left"] + TAIL_S
+def ending(voice_doc: dict, beats_doc: dict) -> float:
+    """Where the MP4 stops: TAIL_S after the last beat left its screen or its line was spoken,
+    whichever is later; a late beat never has its line cut off."""
+    last = beats_doc["beats"][-1]
+    spoken = last["began"] + (voice_doc["clips"][-1]["seconds"] or 0)
+    return beats_doc["offset"] + max(last["left"], spoken) + TAIL_S
 
 
 def mux_command(exe: str, video: str, clips: list[tuple[str, float]], out: str,
                 end: float) -> list[str]:
-    """The video as recorded up to `end`, each clip delayed to its place, padded with silence."""
+    """The video as recorded, its last frame held, each clip delayed to its place over silence;
+    both cut at `end`, so a line that outlasts the recording is still heard to its end."""
     command = [exe, "-hide_banner", "-loglevel", "error", "-y", "-i", video]
     chains = []
     for i, (path, at) in enumerate(clips, 1):
@@ -165,9 +177,10 @@ def mux_command(exe: str, video: str, clips: list[tuple[str, float]], out: str,
         chains.append(f"[{i}:a]adelay={round(at * 1000)}:all=1[a{i}]")
     mix = "".join(f"[a{i}]" for i in range(1, len(clips) + 1))
     chains.append(f"{mix}amix=inputs={len(clips)}:duration=longest:normalize=0,apad[voice]")
-    return command + ["-filter_complex", ";".join(chains), "-map", "0:v", "-map", "[voice]",
+    chains.append(f"[0:v]tpad=stop_mode=clone:stop_duration={math.ceil(end)}[video]")
+    return command + ["-filter_complex", ";".join(chains), "-map", "[video]", "-map", "[voice]",
                       "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-                      "-r", "25", "-c:a", "aac", "-b:a", "128k", "-shortest", "-t", f"{end:.3f}",
+                      "-r", "25", "-c:a", "aac", "-b:a", "128k", "-t", f"{end:.3f}",
                       "-movflags", "+faststart", out]
 
 
@@ -194,7 +207,7 @@ def mux(video: Path, voice_path: Path, beats: Path | None, out: Path, dry: bool)
     try:
         clips = placements(voice_doc, beats_doc)
         command = mux_command("ffmpeg" if dry else ffmpeg(), str(video), clips, str(out),
-                              ending(beats_doc))
+                              ending(voice_doc, beats_doc))
     except ValueError as error:
         print(f"voiceover: {error}", file=sys.stderr)
         return 1

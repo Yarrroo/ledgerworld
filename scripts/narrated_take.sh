@@ -45,7 +45,7 @@ voiceover() { (cd "$root" && env -u LEDGERWORLD_DEMO_TOKEN uv run "$@"); }
 
 if ((dry)); then
   [[ -f "$e2e/narrated-take.spec.ts" && -f "$e2e/narrated-take.config.ts" ]] || fail "the spec or its config is missing"
-  voiceover python scripts/walkthrough_plan.py --json "$out/plan.json" --srt "$out/take.srt" \
+  voiceover python scripts/walkthrough_plan.py --json "$out/plan.json" --srt "$out/plan-planned-times.srt" \
     || fail "the plan could not be built from docs/video-script.md"
   voiceover python scripts/voiceover.py voice --out "$out/voice" --dry-run || fail "a Voice line cannot fit its beat"
   voiceover python scripts/voiceover.py label --operator >"$out/label.json" || fail "the opening card could not be built"
@@ -65,7 +65,8 @@ fi
 
 voiceover python checks/recording_ready.py "$url" || fail "the deployment is not ready to record (no GO)"
 
-voiceover python scripts/walkthrough_plan.py --json "$out/plan.json" --srt "$out/take.srt" \
+# the plan's own SRT is at planned times and stays out of the way; the MP4's is written beside it
+voiceover python scripts/walkthrough_plan.py --json "$out/plan.json" --srt "$out/plan-planned-times.srt" \
   || fail "the plan could not be built from docs/video-script.md"
 voiceover "${tts[@]}" python scripts/voiceover.py voice --out "$out/voice" || fail "the voice could not be built"
 if [[ -n "${LEDGERWORLD_DEMO_TOKEN:-}" ]]; then operator=--operator; else
