@@ -43,7 +43,9 @@ review ──Confirm──▶ submitting ──201──▶ approved ──Execu
 
 E1 Execution context · E2 Approval review (opener + operator access) · E3 Approval summary (from
 the execution read: approval id, snapshot, mode, read time) · E4 Leg tracker (Ready → Submitted →
-Provider-confirmed → Reconciled per leg, raw status, amount; expands to E5 receipt) · E6 Incidents
+Provider-confirmed → Reconciled per leg, raw status, amount; expands to E5 receipt; a mode-B
+ledger-only repayment, settled with no provider id, skips Submitted and Provider-confirmed as
+"not applicable" and reconciles "ledger only") · E6 Incidents
 (each with affected leg, provider/request ids, observed status, opened and last-read times).
 Desktop: legs left, terms and incidents right. Tablet/phone: one column, terms above legs.
 
