@@ -32,4 +32,4 @@ is reachable from the app: `POST /api/v1/runs/<id>/fork`, `GET /decisions/<id>`,
 
 - The public URL: not reachable from the verifying machine, so the deployed surface was not walked.
 - The verdict write: recording it on the board is outside this checkout. The verdicts to record
-  are the table above — g2 verified with its two receipts; g3 partial with gaps 1 and 2.
+  are the table above — g2 verified with its two receipts; g3 partial with gaps 1 to 3.
