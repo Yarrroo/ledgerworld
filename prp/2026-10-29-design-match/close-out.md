@@ -43,3 +43,15 @@ company only after the screen's own read, so it adds no concurrent request.
 - `/simplify` did not run over this diff; a quality pass is owed.
 - Chart notes are not checked against each other or the lowest-point box; the floor label's width is an
   estimate (130 px), short for a seven-figure floor.
+
+## Correction (board item 165)
+
+A cross-family review found one warning folded away by mistake: Simulation's handoff echo went wholly into the
+(i) tooltip, so a reader handed onto a run from another snapshot, or onto a run playing another scenario than the
+link asked for, was not told. The disagreement is now a visible note beside the run context
+(`data-test="handoff-mismatch"`, `role="status"`); the account echo, and a scenario echo that agrees with the run,
+stay behind the (i). Pinned by `frontend/tests/unit/ux-panels.spec.js` (snapshot and scenario, mismatch and match;
+the mismatch cases fail before the fix) and `e2e/ux/simulation-handoff.spec.ts` (1440, 834, 390 px). The default
+Simulation page is unchanged, so its word count is too. Verified: `vitest run` 302 passed; `ux-check.sh` green for
+`simulation-handoff`, `simulation` and `match-shared`, each with a green judge path; `vite build`, `ruff check e2e`,
+`checks/attribution.py`, `checks/no_secrets.py` green.
