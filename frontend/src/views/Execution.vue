@@ -266,7 +266,7 @@ export function forgetTab () {
 import { computed, nextTick, onUnmounted, reactive, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
-  ApiError, LABELS, STATES, ScreenShell, formatMoney, formatTime, getOverview, latestOnly, money, noDemoRun,
+  ApiError, LABELS, STATES, ScreenShell, formatMoney, formatTime, getOverview, kindText, latestOnly, money, noDemoRun,
   request, useReading
 } from '../api/v1.js'
 
@@ -848,7 +848,7 @@ const incidents = computed(() => {
     })),
     ...body.incidents.filter((i) => i.state === 'open').map((i, n) => ({
       key: `incident:${i.incident_id ?? `${i.leg_id}:${i.kind}:${n}`}`, // no id: the order tells them apart
-      line: `${i.kind.replace(/_/g, ' ')} on ${i.leg_id}, opened ${formatTime(i.opened_at).utc}`,
+      line: `${kindText(i.kind)} on ${i.leg_id}, opened ${formatTime(i.opened_at).utc}`,
       evidence: evidence(legOf(i.leg_id), [['Opened', formatTime(i.opened_at).utc]])
     }))
   ]

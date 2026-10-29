@@ -37,7 +37,7 @@
  * Choosing an item emits `pick` with it, for the screen to highlight its actor and open its evidence.
  */
 import { computed } from 'vue'
-import { formatMoney } from '../api/v1.js'
+import { formatMoney, kindText } from '../api/v1.js'
 
 const props = defineProps({
   round: { type: Number, default: null },
@@ -68,7 +68,7 @@ const items = computed(() => {
       id: i.intent_id,
       kind: c?.journal_id ? 'Intent · ledger change' : 'Intent · proposed',
       actor: i.actor_id,
-      text: `${i.type.replace(/_/g, ' ')}${amount ? ` ${formatMoney(amount.minor, amount.currency)}` : ''}`,
+      text: `${kindText(i.type)}${amount ? ` ${formatMoney(amount.minor, amount.currency)}` : ''}`,
       status: c ? VERDICT[c.status] : { icon: '–', word: 'No verdict recorded', tone: 'muted' },
       reason: c?.reason ?? null,
       journal: c?.journal_id ?? null,

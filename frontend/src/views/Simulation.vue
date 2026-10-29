@@ -96,7 +96,8 @@
             <li v-for="a in actors" :key="a.id">
               <button type="button" class="lw-button lw-button--quiet" :aria-pressed="a.id === actor ? 'true' : 'false'"
                       :data-actor="a.id" @click="selectActor(a.id)">
-                {{ a.id }}<template v-if="a.active"> · acted this round</template>
+                <span>{{ a.name }}</span>
+                <span class="lw-sim__actor-id">{{ a.id }}<template v-if="a.active"> · acted this round</template></span>
               </button>
             </li>
           </ul>
@@ -121,7 +122,7 @@
             </article>
             <form class="lw-live__interview" data-test="interview" @submit.prevent="interview">
               <label>
-                <span>Ask {{ actor ?? 'an actor' }} about round {{ display ?? '–' }} (read-only)</span>
+                <span>Ask {{ actor ? nameOf(actor) : 'an actor' }} about round {{ display ?? '–' }} (read-only)</span>
                 <textarea v-model="question" rows="2" maxlength="2000" data-test="question" />
               </label>
               <button type="submit" class="lw-button" :disabled="Boolean(interviewWhy)" data-test="ask">
@@ -132,7 +133,7 @@
             <p v-if="interviewError" class="lw-alert" role="alert" data-test="interview-error">{{ interviewError }}</p>
             <article v-if="answer" class="lw-live__answer" data-test="answer">
               <p class="lw-live__note">
-                Read-only answer · {{ answer.actor_id }} at round {{ answer.round }} · {{ answer.branch_id }}
+                Read-only answer · {{ nameOf(answer.actor_id) }} at round {{ answer.round }} · {{ answer.branch_id }}
                 <span v-if="answer.replay" class="lw-live-tag">Replay</span>
               </p>
               <p>{{ answer.answer }}</p>
@@ -205,7 +206,7 @@ import DetailSheet from '../components/DetailSheet.vue'
 import WorldMap from '../components/WorldMap.vue'
 import { FAMILIES, ROUND_HOURS, familyOf, observedBy, worldFor } from '../api/world.js'
 import {
-  LABELS, ScreenShell, formatMoney, getOverview, noDemoRun, request, routeExists, sourceLabel,
+  LABELS, ScreenShell, formatMoney, getOverview, kindText, noDemoRun, request, routeExists, sourceLabel,
   useReading
 } from '../api/v1.js'
 
@@ -370,7 +371,7 @@ const actorInfo = computed(() => {
     for (const i of view.intents.filter((x) => x.actor_id === actor.value)) {
       const v = verdictOf(verdicts.get(i.intent_id))
       actions.push({
-        id: i.intent_id, round: r, type: i.type.replace(/_/g, ' '), tone: v.tone,
+        id: i.intent_id, round: r, type: kindText(i.type), tone: v.tone,
         verdict: `${v.text}${v.journal ? ` · journal ${v.journal}` : ''}`,
         evidence: (i.evidence_ids ?? []).join(', ')
       })
@@ -381,7 +382,7 @@ const actorInfo = computed(() => {
     label: nameOf(actor.value),
     role: w?.role ?? null,
     objective: w?.objective ?? null,
-    sees: w ? w.sees.map((x) => x.replace(/_/g, ' ')).join(', ') : 'its own scoped observations',
+    sees: w ? w.sees.map(kindText).join(', ') : 'its own scoped observations',
     actions: actions.sort((x, y) => x.round - y.round)
   }
 })
@@ -421,21 +422,21 @@ const worldMap = computed(() => {
         const amount = i.params.amount
         edges.set(`intent:${i.intent_id}`, { id: `intent:${i.intent_id}`, from: i.actor_id, to, type: 'request',
           label: `request advance${amount ? ` ${formatMoney(amount.minor, amount.currency)}` : ''} · round ${i.round}`,
-          source: `intent ${i.intent_id}`, verdict })
+          tag: 'request advance', source: `intent ${i.intent_id}`, verdict })
       }
       for (const e of i.evidence_ids ?? []) {
         const author = authors.get(e)
         if (author && author !== i.actor_id) {
           node(author)
           edges.set(`cite:${i.intent_id}:${e}`, { id: `cite:${i.intent_id}:${e}`, from: author, to: i.actor_id,
-            type: 'information', label: `post ${e}, cited by ${i.intent_id}`, source: `intent ${i.intent_id}` })
+            type: 'information', label: `post ${e}, cited by ${i.intent_id}`, tag: 'cited post', source: `intent ${i.intent_id}` })
         }
         const owner = owners.get(e)
         if (owner && owner !== i.actor_id) {
           edges.set(`cite:${i.intent_id}:${e}`, { id: `cite:${i.intent_id}:${e}`, from: i.actor_id, to: owner,
             type: moved ? 'financial' : 'request',
-            label: `${verdict.accepted ? '' : 'proposed '}${i.type.replace(/_/g, ' ')} on ${e} · round ${i.round}`,
-            source: `intent ${i.intent_id}`, verdict })
+            label: `${verdict.accepted ? '' : 'proposed '}${kindText(i.type)} on ${e} · round ${i.round}`,
+            tag: `${verdict.accepted ? '' : 'proposed '}${kindText(i.type)}`, source: `intent ${i.intent_id}`, verdict })
         }
       }
     }
@@ -488,7 +489,7 @@ const actors = computed(() => {
       seen.set(i.actor_id, a)
     }
   }
-  return [...seen.values()].sort((x, y) => x.id.localeCompare(y.id))
+  return [...seen.values()].map((a) => ({ ...a, name: nameOf(a.id) })).sort((x, y) => x.name.localeCompare(y.name))
 })
 
 const graphData = computed(() => {
@@ -762,7 +763,7 @@ const interviewWhy = computed(() => {
   if (!currentRun.value) return 'Not current: load this run first'
   if (!current.value) return 'Round not loaded: nothing to ask about'
   if (!actor.value) return 'Pick an actor above'
-  if (!actors.value.some((a) => a.id === actor.value)) return `${actor.value} has not acted by round ${display.value}`
+  if (!actors.value.some((a) => a.id === actor.value)) return `${nameOf(actor.value)} has not acted by round ${display.value}`
   if (!question.value.trim()) return 'Write a question'
   if (!token.value) return 'Enter operator access to interview'
   if (asking.value) return 'Asking'
@@ -1011,6 +1012,15 @@ const exportHref = computed(() => {
   background: var(--lw-brand);
   color: var(--lw-on-brand);
 }
+
+.lw-live__actors .lw-button {
+  flex-direction: column;
+  align-items: flex-start;
+  padding-block: var(--lw-space-1);
+  text-align: left;
+}
+
+.lw-sim__actor-id { font-size: 12px; font-weight: 400; }
 
 .lw-sim__actor { margin-top: var(--lw-space-4); }
 .lw-sim__actor h3 { margin: 0 0 var(--lw-space-2); font-size: 18px; }
