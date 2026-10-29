@@ -2,7 +2,9 @@
 // the page end when the end stops the scroll short of it. happy-dom neither lays out nor scrolls,
 // so the page here is drawn by hand (five stacked panels on a 2600 px page in a 900 px view) and
 // the smooth scroll is played frame by frame: scrollIntoView records the target and the test moves
-// the page, as the browser would, from the top to where it stops.
+// the page, as the browser would, from the top to where it stops. Timers are the test's: a
+// choice's scroll that the browser does not end is ended by one, and here time moves only when
+// the test says so.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { h, nextTick } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -25,6 +27,7 @@ function lay () {
   scrollY = 0
   reduced = false
   jumps = []
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   vi.spyOn(window, 'scrollY', 'get').mockImplementation(() => scrollY)
   vi.spyOn(window, 'innerHeight', 'get').mockImplementation(() => VIEW)
   vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockImplementation(() => PAGE)
@@ -58,10 +61,25 @@ async function scrollEnd () {
   await nextTick()
 }
 
+/** The reader's hand on the page (wheel, touch, pointer, a key), then the frame after it. */
+async function reach (event) {
+  (event.target ?? window).dispatchEvent(event.event)
+  await frame()
+  await nextTick()
+}
+
+/** Time passing with no scroll event: a stall mid-scroll, or the page at rest. */
+async function idle (ms) {
+  vi.advanceTimersByTime(ms)
+  await frame()
+  await nextTick()
+}
+
 const mounted = []
+let router = null
 async function open () {
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true, model: 'scripted' }) })))
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/treasury', component: { render: () => null } }] })
+  router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/treasury', component: { render: () => null } }] })
   await router.push('/treasury')
   await router.isReady()
   const w = mount(ScreenShell, {
@@ -83,6 +101,8 @@ const choose = (w, name) => w.findAll('[data-test="panel-link"]').find((a) => a.
 afterEach(() => {
   while (mounted.length) mounted.pop().unmount()
   delete Element.prototype.scrollIntoView
+  delete window.onscrollend
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -109,12 +129,70 @@ describe('a panel chosen from the index stays marked', () => {
     const w = await open()
     await choose(w, 'Ledger')
     for (const y of [400, 1000, END]) await scrollTo(y)
-    await new Promise((resolve) => setTimeout(resolve, 400))
-    await frame()
-    await nextTick()
+    await idle(400)
     expect(marked(w)).toEqual(['Ledger'])
     await scrollTo(END) // a late scroll event at the end changes nothing
     expect(marked(w)).toEqual(['Ledger'])
+  })
+
+  it('through a stall mid-scroll where the browser says when the scroll stops', async () => {
+    lay()
+    window.onscrollend = null // the browser sends scrollend
+    const w = await open()
+    await choose(w, 'Ledger')
+    await scrollTo(500)
+    await idle(400) // a long task: no scroll event for 400 ms, Ledger still below the view
+    expect(marked(w)).toEqual(['Ledger'])
+    for (const y of [1300, END]) {
+      await scrollTo(y)
+      expect(marked(w), `at ${y}`).toEqual(['Ledger'])
+    }
+    await scrollEnd()
+    expect(marked(w)).toEqual(['Ledger'])
+  })
+
+  it('when the reader touches the page without moving it', async () => {
+    lay()
+    const w = await open()
+    await choose(w, 'Ledger')
+    await scrollTo(END)
+    await scrollEnd()
+    const refresh = w.find('[data-test="refresh"]').element
+    for (const hand of [
+      { event: new Event('wheel') }, // at the end already, or a nested scroller
+      { event: new Event('touchmove') }, // a sideways swipe of the index strip
+      { event: new Event('pointerdown') },
+      { event: new KeyboardEvent('keydown', { key: ' ', bubbles: true }), target: refresh }, // Space on a button
+      { event: new KeyboardEvent('keydown', { key: 'End' }) }
+    ]) {
+      await reach(hand)
+      await idle(400)
+      window.dispatchEvent(new Event('resize'))
+      await frame()
+      await nextTick()
+      expect(marked(w), hand.event.type).toEqual(['Ledger'])
+    }
+  })
+
+  it('until the reader drags the scrollbar mid-way', async () => {
+    lay()
+    const w = await open()
+    await choose(w, 'Ledger')
+    await scrollTo(500)
+    await reach({ event: new Event('pointerdown') })
+    await scrollTo(300)
+    expect(marked(w)).toEqual(['Summary'])
+  })
+
+  it('until the route changes mid-way', async () => {
+    lay()
+    const w = await open()
+    await choose(w, 'Ledger')
+    await scrollTo(500)
+    await router.push('/treasury?run_id=r2')
+    await flushPromises()
+    await scrollTo(0)
+    expect(marked(w)).toEqual(['Summary'])
   })
 
   it('with reduced motion: one instant jump to the page end', async () => {
