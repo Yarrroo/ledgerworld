@@ -341,6 +341,40 @@
   border-radius: var(--lw-radius);
 }
 
+.lw-skeleton--label,
+.lw-skeleton--figure {
+  display: block;
+}
+
+.lw-skeleton--figure {
+  width: 14ch;
+  height: 1.6em;
+  margin-top: var(--lw-space-2);
+}
+
+.lw-loading {
+  color: var(--lw-ink-muted);
+  margin: 0 0 var(--lw-space-3);
+}
+
+.lw-empty {
+  border: 1px dashed var(--lw-rule);
+  border-radius: var(--lw-radius);
+  padding: var(--lw-space-4);
+  margin-bottom: var(--lw-space-4);
+  max-width: 72ch;
+}
+
+.lw-band {
+  border: 1px solid var(--lw-warn);
+  border-left-width: 4px;
+  border-radius: var(--lw-radius);
+  padding: var(--lw-space-2) var(--lw-space-3);
+  margin: 0 0 var(--lw-space-4);
+}
+
+.lw-band strong { color: var(--lw-warn-text); }
+
 .lw-time {
   font-size: 13px;
   line-height: 18px;
