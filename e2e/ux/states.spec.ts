@@ -262,7 +262,7 @@ test('permission: Operator access inline near the writes, password-style, Forget
   // Execution: the approval asks for operator access in its review, not a login wall
   await page.goto(`/execution?run_id=${runId}`)
   await settled(page)
-  await expect($(page, 'authority')).toContainText('Reading needs no access')
+  await expect($(page, 'authority')).toContainText('Reading needs no operator access')
   const review = $(page, 'review-plan')
   test.skip(await review.isDisabled(), `the prepared run offers no review: ${await $(page, 'review-why').textContent()}`)
   await expect($(page, 'review-why')).toHaveText('Operator access required')
