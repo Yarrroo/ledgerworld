@@ -1,0 +1,46 @@
+<!doctype html>
+<!--
+  The link-preview card (frontend/public/og-card.png, 1200x630), in the ivory system of
+  frontend/src/styles/tokens.css. After a change, render it again with the frontend and e2e
+  dependencies installed:
+
+    (cd e2e && npx playwright screenshot --viewport-size=1200,630 \
+      "file://$PWD/../scripts/og-card.html" ../frontend/public/og-card.png)
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<style>
+  @font-face { font-family: 'Source Serif 4 Variable'; font-weight: 200 900;
+    src: url('../frontend/node_modules/@fontsource-variable/source-serif-4/files/source-serif-4-latin-wght-normal.woff2') format('woff2'); }
+  @font-face { font-family: 'Inter Variable'; font-weight: 100 900;
+    src: url('../frontend/node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2') format('woff2'); }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+  body { background: #FAF8F3; color: #17251E; font-family: 'Inter Variable', system-ui, sans-serif;
+    box-sizing: border-box; padding: 72px 88px; display: flex; flex-direction: column;
+    border-bottom: 18px solid #174A38; }
+  .brand { display: flex; align-items: center; gap: 24px; }
+  .brand svg { width: 88px; height: 88px; }
+  .brand span { font-family: 'Source Serif 4 Variable', Georgia, serif; font-size: 64px;
+    font-weight: 600; color: #174A38; letter-spacing: -0.5px; }
+  h1 { font-family: 'Source Serif 4 Variable', Georgia, serif; font-weight: 500; font-size: 58px;
+    line-height: 1.12; margin: 64px 0 0; max-width: 980px; letter-spacing: -0.5px; }
+  p { margin: auto 0 0; font-size: 28px; color: #525E57; }
+  p b { color: #174A38; font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="brand">
+    <svg viewBox="0 0 32 32" aria-hidden="true">
+      <path fill="#2469E8" d="M16 2L28 9L22 12.5L16 9L10 12.5L10 19.5L16 23L22 19.5L28 23L16 30L4 23L4 9Z"/>
+      <path fill="#FFFFFF" fill-opacity="0.3" d="M16 2L28 9L22 12.5L16 9Z"/>
+      <path fill="#FFFFFF" fill-opacity="0.1" d="M4 9L16 2L16 9L10 12.5Z"/>
+      <path fill="#000000" fill-opacity="0.2" d="M4 9L10 12.5L10 19.5L4 23Z"/>
+      <path fill="#000000" fill-opacity="0.1" d="M4 23L10 19.5L16 23L16 30Z"/>
+    </svg>
+    <span>LedgerWorld</span>
+  </div>
+  <h1>An agentic treasury that rehearses a crisis before it spends a dollar.</h1>
+  <p>Simulate the shock · keep every obligation · execute through <b>Airwallex</b></p>
+</body>
+</html>
