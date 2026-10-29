@@ -2096,24 +2096,67 @@ describe('the Approval summary shows the approval this tab holds (board item 151
     expect(text(w, 'summary-approval')).toContain('apr-1')
   })
 
-  it('an approval bound for another run is neither summarised nor executable here', async () => {
-    let demo = { run_id: 'run-1', execution_id: null }
-    const { w, calls } = await reviewReady({
-      'GET /overview': () => overview(demo),
-      'GET /decisions/run-2': { ...decisionsBody(), run_id: 'run-2' }
-    })
+  it('Forget access: the summary says access is needed, and an expired approval still goes on Close', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const { w } = await reviewReady()
     await approve(w)
     await closeDialog(w)
-    expect(held(w).exists()).toBe(true)
-    demo = { run_id: 'run-2', execution_id: null } // the prepared run changed under the same address
-    await w.get('[data-test="refresh"]').trigger('click')
+    await w.get('[data-test="forget-token"]').trigger('click')
+    expect(text(w, 'summary-held-state')).toContain('operator access is needed')
+    expect(text(w, 'summary-held-state')).not.toContain('executable until')
+    vi.advanceTimersByTime(15 * 60 * 1000)
     await flushPromises()
-    expect(text(w, 'context')).toContain('run-2')
-    expect(held(w).exists()).toBe(false)
     await reopen(w)
-    expect(disabled(w, 'execute')).toBe(true)
-    expect(text(w, 'execute-why')).toContain('another run')
-    await w.get('[data-test="execute"]').trigger('click')
-    expect(posts(calls, '/executions')).toHaveLength(0)
+    await closeDialog(w)
+    expect(held(w).exists()).toBe(false)
+    await reopen(w) // a fresh review, where access can be entered again
+    expect(w.find('[data-test="token"]').exists()).toBe(true)
+    expect(w.find('[data-test="confirm"]').exists()).toBe(true)
+  })
+
+  describe('a refresh that names another prepared run', () => {
+    let demo
+    const prepared = (answers = {}) => {
+      demo = { run_id: 'run-1', execution_id: null }
+      return reviewReady({
+        'GET /overview': () => overview(demo),
+        'GET /decisions/run-2': { ...decisionsBody(), run_id: 'run-2' },
+        ...answers
+      })
+    }
+    const refreshTo = async (w, run) => {
+      demo = { run_id: run, execution_id: null }
+      await w.get('[data-test="refresh"]').trigger('click')
+      await flushPromises()
+    }
+
+    it('drops the approval: a fresh review for the new run, and nothing comes back with the old one', async () => {
+      const { w, calls } = await prepared()
+      await approve(w)
+      await closeDialog(w)
+      expect(held(w).exists()).toBe(true)
+      await refreshTo(w, 'run-2')
+      expect(text(w, 'context')).toContain('run-2')
+      expect(held(w).exists()).toBe(false)
+      await reopen(w)
+      expect(w.get('[data-test="review"]').attributes('data-stage')).toBe('review')
+      expect(w.find('[data-test="execute"]').exists()).toBe(false)
+      await closeDialog(w)
+      await refreshTo(w, 'run-1')
+      expect(held(w).exists()).toBe(false)
+      expect(posts(calls, '/executions')).toHaveLength(0)
+    })
+
+    it('an approval answered after the run changed is not installed under the new run', async () => {
+      let answer
+      const { w } = await prepared({ 'POST /approvals': () => new Promise((resolve) => { answer = resolve }) })
+      await w.get('[data-test="confirm"]').trigger('click')
+      await flushPromises()
+      await refreshTo(w, 'run-2')
+      answer(approvalBody())
+      await flushPromises()
+      expect(held(w).exists()).toBe(false)
+      expect(text(w, 'message')).toContain('was created after this screen moved on')
+    })
   })
 })

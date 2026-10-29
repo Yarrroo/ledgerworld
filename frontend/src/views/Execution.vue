@@ -412,7 +412,7 @@ const scenarioCost = computed(() => {
 // ------------------------------------------------------------------ approve, then execute
 
 const flow = reactive({
-  open: false, approval: null, run: null, serverAt: 0, receivedAt: 0, submitting: false, executed: false,
+  open: false, approval: null, serverAt: 0, receivedAt: 0, submitting: false, executed: false,
   invalid: '', blocked: '', message: ''
 })
 const opener = shallowRef(null)
@@ -470,8 +470,6 @@ const expires = computed(() => formatTime(flow.approval?.expires_at))
 const staleWhy = computed(() => {
   const a = flow.approval
   if (!a) return ''
-  // a refresh can name another prepared run under the same address
-  if (flow.run !== state.body?.run_id) return 'Bound for another run; review again'
   if (a.mode !== state.body?.mode) return 'The bound provider mode differs from this screen; review again'
   if ((decisions.value?.results ?? []).some((r) => r.branch_id === a.snapshot_id)) {
     return 'Bound to a hypothetical branch, not the observed state; review again'
@@ -492,12 +490,14 @@ const executeWhy = computed(() => {
 })
 
 /** The approval this tab confirmed for the run on screen and has not executed, or null. */
-const held = computed(() =>
-  flow.approval && !flow.executed && flow.run === state.body?.run_id ? flow.approval : null)
+const held = computed(() => flow.executed ? null : flow.approval)
 /** What the held approval can do now, with the reason when it cannot be executed. */
 const heldState = computed(() => {
-  const why = flow.invalid || flow.blocked || staleWhy.value
-  return why ? `${STAGES[stage.value].word}: ${why}` : 'Approved, not executed; executable until it expires'
+  const why = flow.blocked || staleWhy.value
+  if (why) return `${STAGES[stage.value].word}: ${why}`
+  return authority.value
+    ? 'Approved, not executed; operator access is needed to execute it'
+    : 'Approved, not executed; executable until it expires'
 })
 
 /**
@@ -531,7 +531,8 @@ function hold (runId, patch) {
   unresolved.set(runId, { ...unresolved.get(runId), ...patch })
 }
 
-let screen = 0 // bumped by every navigation to another run or execution, and on leaving the view
+let screen = 0 // bumped by every navigation to another run or execution, a refresh naming another
+// run, and on leaving the view
 let sentFrom = -1 // the screen this view's own POST in flight was sent from
 
 /** Where a POST was sent from, fixed when it is sent: the run, and the screen it was asked on. */
@@ -554,7 +555,8 @@ async function openReview () {
 async function closeReview () {
   if (flow.submitting) return // the answer to an in-flight POST is shown where it was asked
   flow.open = false
-  if (flow.invalid || flow.executed || (flow.approval && executeWhy.value && !authority.value)) dropReview()
+  // an approval that can no longer execute goes, with or without operator access held
+  if (flow.approval && (flow.invalid || flow.executed || flow.blocked || staleWhy.value)) dropReview()
   await nextTick()
   opener.value?.focus()
 }
@@ -581,7 +583,6 @@ async function confirmApproval () {
       return
     }
     flow.approval = approval
-    flow.run = runId
     flow.serverAt = Date.parse(answer.as_of)
     flow.receivedAt = Date.now()
     now.value = flow.receivedAt
@@ -768,8 +769,14 @@ function restore (body) {
   return Boolean(resume)
 }
 
-watch(() => state.body, (body) => {
+watch(() => state.body, (body, before) => {
   if (!body) return
+  // a refresh that names another prepared run under the same address is a new screen, as a
+  // navigation is: the review and its approval go, and a POST in flight answers to the last one
+  if (before && body.run_id !== before.run_id) {
+    screen += 1
+    dropReview()
+  }
   if (restore(body)) return
   if (followed) {
     poll() // Refresh re-reads the execution this tab sent
