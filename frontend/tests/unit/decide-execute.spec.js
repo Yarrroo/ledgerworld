@@ -15,6 +15,7 @@ import accessibility from '../../../prp/2026-10-20-ledgerworld/design/modules/ui
 import policyComparison from '../../../prp/2026-10-20-ledgerworld/design/modules/decisions/fixtures/policy-comparison.json'
 import allInfeasible from '../../../prp/2026-10-20-ledgerworld/design/modules/decisions/fixtures/all-infeasible.json'
 import approvalBinding from '../../../prp/2026-10-20-ledgerworld/design/modules/execution/fixtures/approval-binding.json'
+import legStateMachine from '../../../prp/2026-10-20-ledgerworld/design/modules/execution/fixtures/leg-state-machine.json'
 import overviewLf1 from '../../../contracts/examples/c6_api/valid-overview-lf1.json'
 import executionSettled from '../../../contracts/examples/c6_api/valid-execution.json'
 import boundApproval from '../../../contracts/examples/c3_bound_approval/valid-lf1-integrated.json'
@@ -451,6 +452,32 @@ describe('Execution: provider state, receipts and reconciliation', () => {
     expect(text(w, 'mode')).toBe(c.banner)
     expect(text(w, 'leg-advance')).toContain(c.advance_label)
     expect(text(w, 'receipt-mode')).toBe('Airwallex sandbox')
+  })
+
+  // board item 149: the ledger-only repayment as GET /executions serialises it (routes._leg) after
+  // the outbox's pending → settled ledger_only move: no provider id, so no receipt
+  it('mode B: a ledger-only repayment is reconciled locally, never submitted or provider-confirmed', async () => {
+    const machine = legStateMachine.ledger_only
+    const repayment = {
+      leg_id: 'apr-1:repayment', request_id: 'req-repayment-1', kind: 'repayment',
+      provider_id: machine.provider_id, state: machine.path.at(-1), receipt: null,
+      reconciled: true, journal_id: 'j-repayment-1', label: machine.receipt_label
+    }
+    const w = await showing(executionBody({ legs: [advance(), repayment], mode: 'sandbox' }))
+    const tile = w.get('[data-test="leg-repayment"]')
+    const steps = tile.get('[data-test="steps"]')
+    const done = steps.findAll('.lw-steps__done').map((s) => s.text())
+    expect(done.join(' | ')).not.toMatch(/Submitted|Provider-confirmed/)
+    expect(done).toHaveLength(2) // Ready and Reconciled
+    expect(steps.findAll('.lw-steps__skipped').map((s) => s.text().replace(/\s+/g, ' '))).toEqual([
+      '– Submitted · not applicable', '– Provider-confirmed · not applicable'
+    ])
+    expect(steps.get('[aria-current="step"]').text()).toMatch(/^● Reconciled · ledger only/)
+    expect(tile.get('[data-test="leg-status"]').text()).toMatch(/^✓Ledger only, no provider operation · reconciled as of/)
+    expect(tile.get('[data-test="receipt-mode"]').text()).toBe('Ledger only (simulated)')
+    expect(tile.find('[data-test="receipt"]').exists()).toBe(false)
+    // the provider-backed advance beside it still reaches every milestone on its evidence
+    expect(w.get('[data-test="leg-advance"]').findAll('.lw-steps__done')).toHaveLength(4)
   })
 
   it('no execution linked: unavailable, never another run\'s receipt', async () => {

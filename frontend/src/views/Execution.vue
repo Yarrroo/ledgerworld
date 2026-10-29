@@ -76,12 +76,12 @@
                 <span aria-hidden="true">{{ leg.icon }}</span><span>{{ leg.text }}</span>
               </div>
               <ol class="lw-steps" :aria-label="`Progress of ${leg.label || leg.kind}`" data-test="steps">
-                <li v-for="(step, n) in STEPS" :key="step"
-                    :class="{ 'lw-steps__done': n <= leg.step, 'lw-steps__now': n === leg.step }"
-                    :aria-current="n === leg.step ? 'step' : undefined">
-                  <span aria-hidden="true">{{ n <= leg.step ? '●' : '○' }}</span> {{ step }}<template
-                    v-if="n === leg.step && leg.stepNote"> · {{ leg.stepNote }}</template><span
-                    v-if="n <= leg.step" class="lw-visually-hidden">, reached</span>
+                <li v-for="step in leg.steps" :key="step.name"
+                    :class="{ [`lw-steps__${step.mark}`]: step.mark !== 'todo', 'lw-steps__now': step.now }"
+                    :aria-current="step.now ? 'step' : undefined">
+                  <span aria-hidden="true">{{ STEP_MARK[step.mark] }}</span> {{ step.name }}<template
+                    v-if="step.note"> · {{ step.note }}</template><span
+                    v-if="step.mark === 'done'" class="lw-visually-hidden">, reached</span>
                 </li>
               </ol>
               <div class="lw-time">
@@ -284,6 +284,9 @@ const REFUSALS = {
 /** E4: how far a leg has come; a leg is reconciled only once confirmed and journalled. */
 const STEPS = ['Ready', 'Submitted', 'Provider-confirmed', 'Reconciled']
 const STEP = { pending: 0, submitted: 1, unknown: 1, settled: 2, failed: 1 }
+/** The steps only a provider operation reaches; a ledger-only leg skips them. */
+const PROVIDER_STEPS = new Set([1, 2])
+const STEP_MARK = { done: '●', skipped: '–', todo: '○' }
 /** The dialog's stages (HANDOFF "Approval & execution state machine"), each with a word and icon. */
 const STAGES = {
   review: { word: 'Review', icon: '○', tone: 'muted' },
@@ -805,7 +808,10 @@ const legs = computed(() => {
   if (!body) return []
   return body.legs.map((leg) => {
     const open = body.incidents.filter((i) => i.leg_id === leg.leg_id && i.state === 'open')
-    const status = leg.receipt?.status ?? 'no provider status'
+    // a provider-backed leg settles only on a provider object, which names it; one settled with no
+    // provider id is the ledger-only repayment (mode B): nothing was submitted or confirmed
+    const local = leg.state === 'settled' && !leg.provider_id
+    const status = leg.receipt?.status ?? (local ? 'Ledger only, no provider operation' : 'no provider status')
     let text, tone, icon
     if (leg.state === 'unknown') {
       [text, tone, icon] = ['Outcome unknown; checking provider status. Do not send again.', 'bad', '!']
@@ -820,9 +826,14 @@ const legs = computed(() => {
     }
     const mode = leg.receipt?.mode ?? body.mode
     // an open incident takes the leg back from Reconciled: the tracker never outruns the evidence
-    const step = leg.reconciled && leg.state === 'settled' && !open.length ? 3 : STEP[leg.state] ?? 0
-    const stepNote = { failed: 'failed', unknown: 'outcome unknown' }[leg.state] ?? ''
-    return { ...leg, text, tone, icon, step, stepNote, mode: LABELS[mode] || mode }
+    const reconciled = leg.reconciled && leg.state === 'settled' && !open.length
+    const step = reconciled ? 3 : local ? 0 : STEP[leg.state] ?? 0
+    const now = local && reconciled ? 'ledger only' : { failed: 'failed', unknown: 'outcome unknown' }[leg.state] ?? ''
+    const steps = STEPS.map((name, n) => {
+      const mark = local && PROVIDER_STEPS.has(n) ? 'skipped' : n <= step ? 'done' : 'todo'
+      return { name, mark, now: n === step, note: mark === 'skipped' ? 'not applicable' : n === step ? now : '' }
+    })
+    return { ...leg, text, tone, icon, steps, mode: local ? 'Ledger only (simulated)' : LABELS[mode] || mode }
   })
 })
 
