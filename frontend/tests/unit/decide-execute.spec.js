@@ -176,6 +176,12 @@ async function approve (w) {
   await flushPromises()
 }
 
+/** The dialog's way out (Cancel before an approval, Close after): it never closes itself. */
+async function closeDialog (w) {
+  await w.get('[data-test="review"]').find('button.lw-button--quiet').trigger('click')
+  await flushPromises()
+}
+
 afterEach(async () => {
   while (mounted.length) {
     const w = mounted.pop()
@@ -296,6 +302,10 @@ describe('Execution: authority and the bounded approval', () => {
     expect(posts(calls, '/executions')[0].body).toEqual({ approval_id: 'apr-1' })
     for (const p of posts(calls)) expect(p.headers.Authorization).toBe(`Bearer ${TOKEN}`)
     expect(calls.some((x) => x.method === 'GET' && x.path === '/executions/apr-1')).toBe(true)
+    // the dialog follows what it sent: executing until every leg reads reconciled
+    expect(w.get('[data-test="review"]').attributes('data-stage')).toBe('executing')
+    expect(w.find('[data-test="execute"]').exists()).toBe(false) // no execute-again action
+    await closeDialog(w)
     expect(w.find('[data-test="review"]').exists()).toBe(false)
     expect(text(w, 'context')).toContain(`execution ${c.execution_id === 'approval_id' ? 'apr-1' : c.execution_id}`)
   })
@@ -499,6 +509,8 @@ describe('accessibility: keyboard review (mocked transport only)', () => {
     await w.get('[data-test="execute"]').trigger('click')
     await flushPromises()
     expect(posts(calls, '/executions')).toHaveLength(1)
+    expect(focused().id).toBe('review-heading') // the Execute button went: focus stays in the dialog
+    await closeDialog(w)
     expect(focused()).toBe(w.get('[data-test="review-plan"]').element)
   })
 
@@ -1207,6 +1219,7 @@ describe('a POST answered after a query navigation stays with its own run', () =
     await approve(w)
     await w.get('[data-test="execute"]').trigger('click')
     await flushPromises()
+    await closeDialog(w)
     await w.get('[data-test="review-plan"]').trigger('click')
     await flushPromises()
     await w.get('[data-test="confirm"]').trigger('click')
@@ -1492,6 +1505,7 @@ describe('vet round 2: an answer belongs to the run it was sent for (board item 
     await approve(w)
     await w.get('[data-test="execute"]').trigger('click')
     await flushPromises()
+    await closeDialog(w)
     await w.get('[data-test="review-plan"]').trigger('click')
     await flushPromises()
     await approve(w)
@@ -1774,5 +1788,94 @@ describe('correction: a status read never overwrites a newer one', () => {
     const reads404 = calls.filter((c) => c.path === '/executions/apr-1').length
     await tick()
     expect(calls.filter((c) => c.path === '/executions/apr-1')).toHaveLength(reads404)
+  })
+})
+
+describe('the approval dialog, one stage at a time (board item 133)', () => {
+  const stage = (w) => w.get('[data-test="review"]').attributes('data-stage')
+
+  it('review, approved, then reconciled once every leg the execution read is reconciled', async () => {
+    const { w } = await reviewReady({
+      'POST /executions': accepted(),
+      'GET /executions/apr-1': executionBody({ legs: [advance(), paidPayout()] })
+    })
+    expect(stage(w)).toBe('review')
+    await approve(w)
+    expect(stage(w)).toBe('approved')
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    expect(stage(w)).toBe('reconciled')
+    expect(text(w, 'stage-status')).toContain('not final')
+    expect(w.get('[data-test="stage-legs"]').findAll('li')).toHaveLength(2)
+    expect(w.find('[data-test="read-status"]').exists()).toBe(true)
+  })
+
+  it('an open incident on the sent execution is its own stage, evidence kept, nothing to resend', async () => {
+    const leg = paidPayout()
+    const { w, calls } = await reviewReady({
+      'POST /executions': accepted(),
+      'GET /executions/apr-1': executionBody({
+        legs: [leg],
+        incidents: [{ incident_id: 'inc-1', leg_id: leg.leg_id, kind: 'paid_then_failed', state: 'open', opened_at: '2026-11-05T10:05:00Z' }]
+      })
+    })
+    await approve(w)
+    await w.get('[data-test="execute"]').trigger('click')
+    await flushPromises()
+    expect(stage(w)).toBe('incident')
+    expect(text(w, 'stage-incident')).toContain('paid then failed')
+    expect(text(w, 'incident')).toContain('fake-payout-1') // the page keeps the provider id as evidence
+    expect(w.get('[data-test="leg-payout"] [aria-current="step"]').text()).toContain('Provider-confirmed')
+    const before = gets(calls, '/executions/apr-1').length
+    await w.get('[data-test="read-status"]').trigger('click')
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1').length).toBe(before + 1)
+    expect(posts(calls, '/executions')).toHaveLength(1)
+  })
+
+  it('an unanswered approval is the unknown stage: confirm disabled, the reason said in the dialog', async () => {
+    const { w } = await reviewReady({ 'POST /approvals': timeout() })
+    await approve(w)
+    expect(stage(w)).toBe('unknown')
+    expect(text(w, 'stage-blocked')).toBe(kase('approval-post-timeout').expect.message)
+    expect(disabled(w, 'confirm')).toBe(true)
+  })
+
+  it('an expired approval is the expired stage', async () => {
+    const { w } = await reviewReady({
+      'POST /approvals': { ...approvalBody(), as_of: boundApproval.instance.expires_at }
+    })
+    await approve(w)
+    expect(stage(w)).toBe('expired')
+    expect(disabled(w, 'execute')).toBe(true)
+  })
+
+  it('copying the plan hash announces it, and says so when the clipboard refuses', async () => {
+    const { w } = await reviewReady()
+    await approve(w)
+    const writeText = vi.fn(async () => {})
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    await w.get('[data-test="copy-hash"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith(boundApproval.instance.plan_hash)
+    expect(text(w, 'copied')).toBe('Plan hash copied')
+    writeText.mockRejectedValueOnce(new Error('denied'))
+    await w.get('[data-test="copy-approval"]').trigger('click')
+    await flushPromises()
+    expect(text(w, 'copied')).toContain('Approval id not copied')
+  })
+
+  it('Tab from the last control wraps to the first, Shift+Tab from the first to the last', async () => {
+    const { w } = await reviewReady()
+    await approve(w)
+    const box = w.get('[data-test="review"]')
+    const controls = box.findAll('button, [tabindex="0"]').filter((b) => b.attributes('disabled') === undefined)
+    const [first, last] = [controls[0].element, controls[controls.length - 1].element]
+    last.focus()
+    await box.trigger('keydown', { key: 'Tab' })
+    expect(focused()).toBe(first)
+    first.focus()
+    await box.trigger('keydown', { key: 'Tab', shiftKey: true })
+    expect(focused()).toBe(last)
   })
 })
