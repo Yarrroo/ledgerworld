@@ -85,9 +85,10 @@ def import_oasis() -> SimpleNamespace:
     from oasis import AgentGraph, LLMAction, Platform
     from oasis.environment.env import OasisEnv
     from oasis.social_platform.typing import ActionType
+    from oasis_finance.channel import PromptChannel
 
     return SimpleNamespace(AgentGraph=AgentGraph, LLMAction=LLMAction, Platform=Platform,
-                           OasisEnv=OasisEnv, ActionType=ActionType)
+                           OasisEnv=OasisEnv, ActionType=ActionType, Channel=PromptChannel)
 
 
 def hours_of(when: datetime, epoch: datetime) -> int:
@@ -248,7 +249,8 @@ class World:
         graph = self.oasis.AgentGraph()
         for agent in self.agents.values():
             graph.add_agent(agent)
-        platform = self.oasis.Platform(db_path=str(self.db_path), recsys_type="random")
+        platform = self.oasis.Platform(db_path=str(self.db_path), channel=self.oasis.Channel(),
+                                       recsys_type="random")
         self.env = self.oasis.OasisEnv(graph, platform, database_path=str(self.db_path))
         # The platform task and every step (its agents' tasks too) draw from this world's RNG.
         self._own_draws(platform, "running")
