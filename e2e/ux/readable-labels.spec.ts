@@ -7,6 +7,7 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
+import { PLANS } from './copy'
 import { demoRunId, settled } from './routes'
 
 const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
@@ -78,7 +79,7 @@ test('the actor list and the cash paths lead with names, ids second', async ({ p
     const name = row.locator('.lw-cash__branch')
     const lead = (await name.textContent())!.trim()
     expect(lead, `cash row ${branch.branch_id} leads with the raw id`).not.toContain(branch.branch_id)
-    if (branch.policy) expect(lead).toBe(branch.policy)
+    if (branch.policy) expect(lead).toBe(PLANS[branch.policy] ?? branch.policy) // the plan's plain name
     // a name on one line: never broken mid-word
     expect(await name.evaluate((el) => el.getClientRects().length), `"${lead}" wraps`).toBe(1)
     await expect(row.locator('.lw-cash__account')).toContainText(branch.branch_id)

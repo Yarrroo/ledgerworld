@@ -7,6 +7,9 @@ import { settled } from './routes'
 
 export const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 
+/** The three plans' plain names (COPY.md glossary), by policy id. */
+export const PLANS: Record<string, string> = { 'no-action': 'Do nothing', 'fixed-reserve': 'Keep a fixed buffer', integrated: 'Borrow just enough' }
+
 export interface Money { minor: number | null, currency: string }
 /** "USD 70,000.00", as the screens format integer minor units. */
 export const fmt = (m: Money) => `${m.currency} ${(m.minor! / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`

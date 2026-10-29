@@ -13,11 +13,10 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
-import { $, fmt, folded, open, plainHeadings, read, technical, words } from './copy'
+import { $, PLANS, fmt, folded, open, plainHeadings, read, technical, words } from './copy'
 import { demoRunId, settled } from './routes'
 
 const FAMILY = (id: string) => JSON.parse(readFileSync(join(__dirname, `../../scenarios/families/${id}.json`), 'utf-8'))
-const PLANS: Record<string, string> = { 'no-action': 'Do nothing', 'fixed-reserve': 'Keep a fixed buffer', integrated: 'Borrow just enough' }
 const DOING: Record<string, string> = { 'fixed-reserve': 'Keeping a fixed buffer', integrated: 'Borrowing just enough' }
 const RIPPLE = 'Watch how it ripples through your partners, round by round.'
 
