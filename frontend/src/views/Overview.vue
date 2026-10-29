@@ -9,7 +9,7 @@
       <p v-if="leadSeen" class="lw-time" data-test="lead-stale">{{ leadSeen }}</p>
       <div class="lw-ov-labels" data-test="labels">
         <span class="lw-ov-tag" data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span>
-        <span v-if="PLAIN[model]" class="lw-ov-tag">{{ PLAIN[model] }}</span>
+        <span v-if="AGENTS[model]" class="lw-ov-tag">{{ AGENTS[model] }}</span>
       </div>
       <HowWeKnow test="how-context">
         <dl class="lw-ov-facts">
@@ -200,7 +200,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import CashOutlook from '../components/CashOutlook.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
 import {
-  FLOOR_WORDS, LABELS, PLAIN, STATES, ScreenShell, accountName, amountWords, dayText, floorState, formatAmount, formatMoney,
+  AGENTS, FLOOR_WORDS, LABELS, PLAIN, STATES, ScreenShell, accountName, amountWords, dayText, floorState, formatAmount, formatMoney,
   formatTime, freshness, getOverview, hoursFrom, hoursWords, kindText, lastSeen, metricStatus, metricText, modelSource, money,
   pendingFlows, routeExists, rowLink, staleOf, useReading
 } from '../api/v1.js'
@@ -390,7 +390,7 @@ const delayed = computed(() => {
   const hours = state.body?.scenario?.params?.delay_h
   if (!f || !Number.isInteger(hours)) return ''
   const from = hoursFrom(state.body.as_of, f.expected_at)
-  return `${f.flow_id} expected ${from}, delayed ${hoursWords(hours)}`
+  return `${f.flow_id} expected ${from}, ${hours < 0 ? `early by ${hoursWords(-hours)}` : `delayed ${hoursWords(hours)}`}`
 })
 /** The scenario's parameters as text: an `<x>_minor` amount in its currency, never raw units. */
 const scenarioParams = computed(() => {

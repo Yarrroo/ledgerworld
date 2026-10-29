@@ -90,6 +90,14 @@ describe('Overview panels on the baseline', () => {
     expect(text(w, 'settled')).toContain('USD 70,000.00') // nothing observed changed
   })
 
+  it('O6 says an early arrival as early, never as an unknown delay', async () => {
+    const body = withRun()
+    body.scenario.params.delay_h = -2
+    const w = await open(body)
+    await w.get('[data-test="preview-scenario"]').trigger('click')
+    expect(text(w, 'scenario-timing')).toBe('receivable-1 expected in 12 hours, early by 2 hours')
+  })
+
   it('O6 shows a scenario amount in its currency, never as raw minor units', async () => {
     const body = withRun()
     body.scenario = { family: 'fx-gap', about: 'A currency gap.', params: { amount_minor: 1000000, currency: 'EUR' } }

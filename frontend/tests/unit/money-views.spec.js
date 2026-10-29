@@ -160,7 +160,7 @@ describe('money-views fixture', () => {
     const calc = text(w, 'calculation')
     expect(calc).toContain(want.calculation.split(';')[0])
     // the delayed receipt and the withdrawal 48 hours out are named as not yet counted 40 hours out
-    expect(calc).toContain('not yet counted in 40 hours')
+    expect(calc).toContain('due after this point (in 40 hours), so not counted')
     expect(calc).toMatch(/exchange withdrawal wd-1 in \(expected in 2 days\)/)
     expect(calc).toMatch(/receivable rcv-1 in \(expected in 252 hours\)/)
     // S and P are separate measures

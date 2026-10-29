@@ -205,6 +205,8 @@ export function accountName (id, { currency, owner = false } = {}) {
   if (cut < 0) return text ? `${capital(text.replace(/[-_]+/g, ' '))} account${currency ? ` · ${currency}` : ''}` : 'An unnamed account'
   const who = text.slice(0, cut).replace(/[-_]+/g, ' ')
   const kind = text.slice(cut + 1).replace(/[-_/]+/g, ' ')
+  // a kind that is the currency itself ("treasury/eur") is named by its code, and once
+  if (currency && kind.toUpperCase() === currency) return owner ? `${capital(who)} ${currency} account` : `${currency} account`
   const name = owner ? `${capital(who)} ${kind} account` : `${capital(kind)} account`
   return currency ? `${name} · ${currency}` : name
 }
@@ -302,7 +304,7 @@ export function projectionTerms (account, t, obligations, asOf) {
   const result = account.projected.find((p) => p.t === t)?.value
   return {
     line: `${terms.join(' ')} = ${result ? amountText(result) : 'Unavailable'}`,
-    excluded: excluded.length ? `not yet counted ${hoursFrom(asOf, t)}: ${excluded.join(', ')}` : ''
+    excluded: excluded.length ? `due after this point (${hoursFrom(asOf, t)}), so not counted: ${excluded.join(', ')}` : ''
   }
 }
 
@@ -332,11 +334,16 @@ export const LABELS = {
 export const PLAIN = {
   fake: 'Simulated bank connection',
   sandbox: 'Sandbox bank',
-  scripted: 'Scripted agents',
-  live: 'Live AI agents',
   branch: 'What-if',
   replay: 'Replay'
 }
+
+/** The agents' model kind (/health `model`) in the cash owner's words; its own keyspace, never a mode's. */
+export const AGENTS = { scripted: 'Scripted agents', live: 'Live AI agents' }
+
+/** The bar's tag for figures that are not the observed snapshot: "What-if", "Replay", or both. */
+export const contextTag = (body) =>
+  [body?.replay && PLAIN.replay, body?.branch_id && PLAIN.branch].filter(Boolean).join(' · ')
 
 export const FLOOR_WORDS = {
   kept: 'Above your safety minimum',
@@ -795,6 +802,7 @@ export const ScreenShell = defineComponent({
       const body = absent ? null : props.reading.body
       const busy = status === 'loading'
       const time = formatTime(body?.as_of)
+      const tag = body ? contextTag(body) : ''
       const mode = body ? (PLAIN[body.mode] || LABELS[body.mode] || body.mode) : 'Bank connection not loaded'
       const brand = (attrs) => home({ class: 'lw-brand', 'aria-label': 'LedgerWorld, Overview', ...attrs },
         [logoMark(), h('span', 'LedgerWorld')])
@@ -834,10 +842,9 @@ export const ScreenShell = defineComponent({
         crumbs,
         h('div', { class: 'lw-context__bar' }, [
           h('span', { class: 'lw-context__mode', 'data-test': 'mode' }, mode),
-          model.value && h('span', { class: 'lw-context__item', 'data-test': 'model' }, PLAIN[model.value] || `Agents on ${model.value}`),
+          model.value && h('span', { class: 'lw-context__item', 'data-test': 'model' }, AGENTS[model.value] || `Agents on ${model.value}`),
           body && h('span', { class: 'lw-context__item', 'data-test': 'context-as-of' }, ['As of ', h('b', asOfText(body.as_of))]),
-          body && (body.branch_id || body.replay) && h('span', { class: 'lw-tag', 'data-test': 'context-what-if' },
-            body.branch_id ? PLAIN.branch : PLAIN.replay),
+          tag && h('span', { class: 'lw-tag', 'data-test': 'context-what-if' }, tag),
           body && h(HowWeKnow, { test: 'how-context-bar' }, () => h('dl', { class: 'lw-context__facts' }, [
             h('div', [h('dt', 'Provider'), h('dd', { 'data-test': 'context-provider' }, LABELS[body.mode] || body.mode)]),
             h('div', [h('dt', 'Model'), h('dd', model.value || 'Not reported')]),
