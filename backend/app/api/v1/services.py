@@ -74,7 +74,7 @@ class Services:
     report_key: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     lock: threading.RLock = field(default_factory=threading.RLock)
     _gateway: Gateway | None = None
-    _baselines: dict[str, tuple[LedgerStore, Snapshot]] = field(default_factory=dict)
+    _baseline: tuple[str, LedgerStore, Snapshot] | None = None  # the prepared run's
 
     def __post_init__(self) -> None:
         if self.beneficiaries is None:
@@ -153,14 +153,14 @@ class Services:
         if run_id is None:
             return self.store, self.snapshot, self.now()
         with self.lock:
-            if run_id not in self._baselines:
+            if self._baseline is None or self._baseline[0] != run_id:
                 from ...demo.run import observed_snapshot  # the snapshot prepare decided on
 
                 snapshot = observed_snapshot(load_world(), run_id)
                 store = LedgerStore("sqlite://")
                 from_snapshot(store, snapshot)
-                self._baselines = {run_id: (store, snapshot)}  # only the current run is kept
-            store, snapshot = self._baselines[run_id]
+                self._baseline = (run_id, store, snapshot)
+            _, store, snapshot = self._baseline
         return store, snapshot, snapshot.as_of
 
     def authorised(self, header: str | None) -> bool:
