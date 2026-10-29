@@ -31,6 +31,7 @@ an upstream path is modified or deleted and not listed in the second table.
 | `fixtures/`, `scenarios/` | the synthetic money fixtures LF-1 and LF-2, the demo world and the six scenario families |
 | `frontend/src/views/Overview.vue`, `Treasury.vue`, `Lending.vue`, `Simulation.vue` | the new screens |
 | `frontend/src/api/v1.js`, `frontend/src/components/ActionFeed.vue`, `CashPaths.vue`, `Scrubber.vue`, `frontend/src/styles/tokens.css` | their API client, components and design tokens |
+| `frontend/src/components/logo.js`, `frontend/public/logo.svg` | the LedgerWorld mark, inline in the shell and as the favicon |
 | `frontend/tests/unit/`, `frontend/vitest.config.js` | frontend unit tests |
 | `deploy/` | one-machine deployment: compose file, image, role entrypoint, host settings, their tests |
 | `scripts/demo.sh` | the one-command demo |
@@ -56,7 +57,7 @@ an upstream path is modified or deleted and not listed in the second table.
 | `frontend/src/components/GraphPanel.vue` | exposes its own `closeDetailPanel` so the `/simulation` screen closes a selection when the round or run changes |
 | `frontend/package.json` | adds the `test:unit` script and its dev dependencies (vitest, happy-dom, @vue/test-utils), and the self-hosted fonts (`@fontsource-variable/inter`, `@fontsource-variable/source-serif-4`, SIL OFL 1.1) |
 | `frontend/package-lock.json` | the lock for those dependencies |
-| `frontend/index.html` | no longer loads fonts from a font CDN: the finance screens bundle their own; the upstream screens fall back to local fonts |
+| `frontend/index.html` | no longer loads fonts from a font CDN: the finance screens bundle their own; the upstream screens fall back to local fonts; the favicon is the LedgerWorld mark (`/logo.svg`) |
 | `backend/app/utils/openai_chat_compat.py` | `create_chat_completion` sends its request through the daily model budget (`app.utils.llm_budget.metered`) |
 | `backend/app/services/oasis_profile_generator.py` | its persona retry loop takes a daily model budget refusal (`LLMBudgetExceeded`) straight to the rule-based profile instead of retrying it |
 | `backend/app/services/simulation_config_generator.py` | its config retry loop re-raises a daily model budget refusal (`LLMBudgetExceeded`) instead of retrying it |

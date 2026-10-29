@@ -127,7 +127,8 @@
   gap: var(--lw-space-1);
 }
 
-.lw-nav a {
+/* the six screen links, not the brand above them, which keeps its own size */
+.lw-nav li a {
   display: flex;
   align-items: center;
   gap: var(--lw-space-3);
@@ -139,17 +140,17 @@
   font-size: 15px;
 }
 
-.lw-nav a svg {
+.lw-nav li a svg {
   flex: none;
   width: 20px;
   height: 20px;
 }
 
-.lw-nav a:hover {
+.lw-nav li a:hover {
   background: var(--lw-selected);
 }
 
-.lw-nav a[aria-current='page'] {
+.lw-nav li a[aria-current='page'] {
   background: var(--lw-selected);
   color: var(--lw-brand);
   font-weight: 700;
@@ -509,7 +510,7 @@
     display: none;
   }
 
-  .lw-nav a {
+  .lw-nav li a {
     flex-direction: column;
     justify-content: center;
     gap: 2px;
