@@ -18,7 +18,7 @@
         <button ref="opener" type="button" class="lw-button" data-test="review-plan"
                 :disabled="!!reviewWhy" aria-describedby="review-why" @click="openReview">Review plan</button>
         <button v-if="token" type="button" class="lw-button lw-button--quiet"
-                data-test="forget-token" @click="token = ''">Forget access</button>
+                data-test="forget-token" @click="forgetAccess">Forget access</button>
         <span id="review-why" class="lw-time" data-test="review-why">{{ reviewWhy || authority }}</span>
       </div>
     </section>
@@ -489,16 +489,28 @@ const executeWhy = computed(() => {
   return ''
 })
 
-/** The approval this tab confirmed for the run on screen and has not executed, or null. */
+/**
+ * The approval this tab confirmed and has not executed, or null. It belongs to the screen it was
+ * confirmed on: a new screen (newScreen) and Forget access both drop it.
+ */
 const held = computed(() => flow.executed ? null : flow.approval)
 /** What the held approval can do now, with the reason when it cannot be executed. */
 const heldState = computed(() => {
   const why = flow.blocked || staleWhy.value
-  if (why) return `${STAGES[stage.value].word}: ${why}`
-  return authority.value
-    ? 'Approved, not executed; operator access is needed to execute it'
-    : 'Approved, not executed; executable until it expires'
+  return why ? `${STAGES[stage.value].word}: ${why}` : 'Approved, not executed; executable until it expires'
 })
+
+/**
+ * Forget the operator token, and with it an approval confirmed and not executed: only a fresh
+ * review takes access again, so a kept approval could be neither executed nor replaced.
+ */
+function forgetAccess () {
+  token.value = ''
+  const id = held.value?.approval_id
+  if (!id || flow.submitting) return
+  dropReview()
+  flow.message = `Approval ${id} was not executed and expires unused.`
+}
 
 /**
  * No answer, a server/proxy failure, or a 2xx this screen cannot read: the POST may or may not
@@ -531,8 +543,7 @@ function hold (runId, patch) {
   unresolved.set(runId, { ...unresolved.get(runId), ...patch })
 }
 
-let screen = 0 // bumped by every navigation to another run or execution, a refresh naming another
-// run, and on leaving the view
+let screen = 0 // bumped by every new screen (newScreen) and on leaving the view
 let sentFrom = -1 // the screen this view's own POST in flight was sent from
 
 /** Where a POST was sent from, fixed when it is sent: the run, and the screen it was asked on. */
@@ -542,7 +553,7 @@ const moved = (from) => from.screen !== screen
 
 const waiting = computed(() => [...unresolved].filter(([, held]) => held.unseen))
 const accepted = (id) => `Execution ${id} accepted; reading its provider state.`
-/** The review and its approval go: after a navigation, or when a waiting outcome is shown. */
+/** The review and its approval go: on a new screen, on Forget access, or when a waiting outcome is shown. */
 const dropReview = () => Object.assign(flow, { open: false, approval: null, invalid: '', executed: false })
 
 async function openReview () {
@@ -771,12 +782,8 @@ function restore (body) {
 
 watch(() => state.body, (body, before) => {
   if (!body) return
-  // a refresh that names another prepared run under the same address is a new screen, as a
-  // navigation is: the review and its approval go, and a POST in flight answers to the last one
-  if (before && body.run_id !== before.run_id) {
-    screen += 1
-    dropReview()
-  }
+  // a refresh that names another prepared run under the same address is a new screen too
+  if (before && body.run_id !== before.run_id) newScreen()
   if (restore(body)) return
   if (followed) {
     poll() // Refresh re-reads the execution this tab sent
@@ -816,9 +823,11 @@ watch([() => state.body?.run_id, () => heldHere()?.blocked, () => heldHere()?.fo
   if (state.status === 'loaded' && run === before) restore(state.body)
 })
 
-// The view is reused across query-only navigation: a new run or execution is a new screen. A
-// POST still in flight answers to the screen it was sent from (origin), never to this one.
-watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
+/**
+ * Another run or execution on this view: nothing shown for the last one stands. A POST still in
+ * flight answers to the screen it was sent from (origin), never to this one.
+ */
+function newScreen () {
   screen += 1
   dropReview()
   flow.message = ''
@@ -829,6 +838,11 @@ watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
   notFound.value = false
   pollError.value = ''
   clearTimeout(timer)
+}
+
+// The view is reused across query-only navigation: a new run or execution is a new screen.
+watch(() => [route.query.run_id, route.query.execution_id].join('|'), () => {
+  newScreen()
   refresh()
 })
 

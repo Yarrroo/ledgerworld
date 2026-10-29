@@ -2096,22 +2096,28 @@ describe('the Approval summary shows the approval this tab holds (board item 151
     expect(text(w, 'summary-approval')).toContain('apr-1')
   })
 
-  it('Forget access: the summary says access is needed, and an expired approval still goes on Close', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
-    const { w } = await reviewReady()
+  it('Forget access drops an unexecuted approval and says so: a fresh review takes access again', async () => {
+    const { w, calls } = await reviewReady()
     await approve(w)
     await closeDialog(w)
     await w.get('[data-test="forget-token"]').trigger('click')
-    expect(text(w, 'summary-held-state')).toContain('operator access is needed')
-    expect(text(w, 'summary-held-state')).not.toContain('executable until')
-    vi.advanceTimersByTime(15 * 60 * 1000)
     await flushPromises()
-    await reopen(w)
-    await closeDialog(w)
     expect(held(w).exists()).toBe(false)
-    await reopen(w) // a fresh review, where access can be entered again
+    expect(text(w, 'message')).toBe('Approval apr-1 was not executed and expires unused.')
+    await reopen(w)
     expect(w.find('[data-test="token"]').exists()).toBe(true)
     expect(w.find('[data-test="confirm"]').exists()).toBe(true)
+    expect(posts(calls, '/executions')).toHaveLength(0)
+  })
+
+  it('an approval past its expiry is dropped on Close', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    const { w } = await reviewReady()
+    await approve(w)
+    vi.advanceTimersByTime(15 * 60 * 1000)
+    await flushPromises()
+    await closeDialog(w)
+    expect(held(w).exists()).toBe(false)
   })
 
   describe('a refresh that names another prepared run', () => {
@@ -2145,6 +2151,21 @@ describe('the Approval summary shows the approval this tab holds (board item 151
       await refreshTo(w, 'run-1')
       expect(held(w).exists()).toBe(false)
       expect(posts(calls, '/executions')).toHaveLength(0)
+    })
+
+    it('nothing said for the last run stays: its execution message goes with it', async () => {
+      const { w } = await prepared({
+        'POST /executions': accepted(),
+        'GET /executions/apr-1': executionBody({ legs: [advance(), paidPayout()] })
+      })
+      await approve(w)
+      await w.get('[data-test="execute"]').trigger('click')
+      await flushPromises()
+      await closeDialog(w)
+      expect(text(w, 'message')).toContain('Execution apr-1 accepted')
+      await refreshTo(w, 'run-2')
+      expect(w.find('[data-test="message"]').exists()).toBe(false)
+      expect(text(w, 'context')).toContain('no execution is linked')
     })
 
     it('an approval answered after the run changed is not installed under the new run', async () => {
