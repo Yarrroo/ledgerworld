@@ -138,20 +138,46 @@ describe('the world file and the cash chart claim nothing they do not hold', () 
   })
 })
 
+function simRun (branch = 'run-1-base') {
+  return {
+    as_of: '2026-01-01T20:00:00Z', mode: 'fake', run_id: 'run-1', snapshot_id: 'demo-world', status: 'done',
+    committed_round: 1, branches: [{ branch_id: branch, parent_branch_id: null, checkpoint_round: null, policy: null, replay: false }],
+    rounds: [{ round: 1, branch_id: branch, t_hours: 4, intents: [], cleared: [], journal_ids: [] }],
+    feed: [], cash_paths: []
+  }
+}
+
 describe('Simulation names what a Treasury handoff carried', () => {
-  it('the account, and a snapshot other than the run\'s', async () => {
-    serve({
-      '/runs/run-1': {
-        as_of: '2026-01-01T20:00:00Z', mode: 'fake', run_id: 'run-1', snapshot_id: 'demo-world', status: 'done',
-        committed_round: 1, branches: [{ branch_id: 'run-1-base', parent_branch_id: null, checkpoint_round: null, policy: null, replay: false }],
-        rounds: [{ round: 1, branch_id: 'run-1-base', t_hours: 4, intents: [], cleared: [], journal_ids: [] }],
-        feed: [], cash_paths: []
-      }
-    })
+  it('a snapshot other than the run\'s is said on the page; the account stays behind the (i)', async () => {
+    serve({ '/runs/run-1': simRun() })
     const w = await open(Simulation, '/simulation?run_id=run-1&account=treasury/operating&snapshot=lf1')
+    expect(seen(w, 'run-context')).toContain('snapshot lf1')
+    expect(seen(w, 'run-context')).toContain('demo-world')
+    expect(w.get('[data-test="handoff-mismatch"]').attributes('role')).toBe('status')
     expect(text(w, 'handoff')).toContain('treasury/operating')
-    expect(text(w, 'handoff')).toContain('snapshot lf1')
-    expect(text(w, 'handoff')).toContain('demo-world')
+    expect(seen(w, 'run-context')).not.toContain('treasury/operating')
+  })
+
+  it('a handoff on the run\'s own snapshot puts no note on the page', async () => {
+    serve({ '/runs/run-1': simRun() })
+    const w = await open(Simulation, '/simulation?run_id=run-1&account=treasury/operating&snapshot=demo-world')
+    expect(w.find('[data-test="handoff-mismatch"]').exists()).toBe(false)
+    expect(text(w, 'handoff')).toContain('treasury/operating')
+    expect(text(w, 'handoff')).not.toContain('this run is on')
+  })
+
+  it('a scenario other than the run\'s is said on the page', async () => {
+    serve({ '/runs/run-1': simRun('run-1-delayed-receipt-base') })
+    const w = await open(Simulation, '/simulation?run_id=run-1&scenario=fx-gap')
+    expect(seen(w, 'run-context')).toContain('fx-gap')
+    expect(seen(w, 'run-context')).toContain('delayed-receipt')
+  })
+
+  it('the scenario the run plays is only echoed behind the (i)', async () => {
+    serve({ '/runs/run-1': simRun('run-1-delayed-receipt-base') })
+    const w = await open(Simulation, '/simulation?run_id=run-1&scenario=delayed-receipt')
+    expect(w.find('[data-test="handoff-mismatch"]').exists()).toBe(false)
+    expect(text(w, 'handoff')).toContain('Scenario asked for: delayed-receipt')
   })
 })
 
@@ -192,6 +218,6 @@ describe('the observed snapshot of a prepared run is that run\'s world', () => {
     })
     const w = await open(Simulation, '/simulation?run_id=run-1&account=treasury/operating&snapshot=obs-demo-r3-run-1')
     expect(text(w, 'handoff')).toContain('treasury/operating')
-    expect(text(w, 'handoff')).not.toContain('this run is on')
+    expect(w.find('[data-test="handoff-mismatch"]').exists()).toBe(false)
   })
 })

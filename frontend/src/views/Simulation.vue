@@ -28,6 +28,9 @@
             the delay is the family's delay_h.</p>
           <p v-if="handoff" data-test="handoff">{{ handoff }}</p>
         </HowWeKnow>
+        <p v-if="handoffMismatch" class="lw-note lw-sim__handoff" role="status" data-test="handoff-mismatch">
+          {{ handoffMismatch }}
+        </p>
         <button type="button" class="lw-button lw-button--quiet" data-test="settings" @click="settingsOpen = true">
           Scenario settings
         </button>
@@ -258,7 +261,9 @@ const POLL_MS = 4000
 
 const route = useRoute()
 const router = useRouter()
-const runId = computed(() => (typeof route.query.run_id === 'string' && route.query.run_id) || null)
+/** A query value the link carried — the run, or what a handoff brought — when there is one. */
+const handedOff = (key) => (typeof route.query[key] === 'string' && route.query[key]) || null
+const runId = computed(() => handedOff('run_id'))
 
 // With no run named (the nav link), the prepared demonstration run, as Decisions and Execution
 // read it, named in the URL by this read (so the run watcher does not read it again), and only
@@ -393,15 +398,31 @@ const subtitle = computed(() => {
   return [base.value.replay && PLAIN.replay, `${PLAIN.branch} branch`, name].filter(Boolean).join(' · ')
 })
 
-/** What a handoff from Treasury (account, snapshot) or Lending (scenario) carried, said back. */
+/** What a handoff from Treasury (account) or Lending (a scenario this run plays) carried, echoed behind the (i). */
 const handoff = computed(() => {
-  const q = route.query
-  const said = (key) => (typeof q[key] === 'string' && q[key]) || null
-  const [account, snapshot, scenario] = [said('account'), said('snapshot'), said('scenario')]
-  if (!account && !snapshot && !scenario) return ''
+  const [account, scenario] = [handedOff('account'), handedOff('scenario')]
   const parts = []
   if (account) parts.push(`Rehearsing for account ${account}.`)
-  if (scenario) parts.push(`Scenario asked for: ${scenario}.`)
+  if (scenario && !scenarioMismatch.value) parts.push(`Scenario asked for: ${scenario}.`)
+  return parts.join(' ')
+})
+
+/** The scenario a handoff asked for, when the loaded run does not play it. */
+const scenarioMismatch = computed(() => {
+  const scenario = handedOff('scenario')
+  return Boolean(scenario && body.value && family.value?.id !== scenario)
+})
+
+/**
+ * Where the handoff and this run disagree — another snapshot, another scenario — said on the page,
+ * never only in a tooltip: a reader handed onto a different run must be told without asking.
+ */
+const handoffMismatch = computed(() => {
+  const [snapshot, scenario] = [handedOff('snapshot'), handedOff('scenario')]
+  const parts = []
+  if (scenarioMismatch.value) {
+    parts.push(`Scenario asked for: ${scenario}; this run plays ${family.value?.id ?? 'no named scenario'}.`)
+  }
   const runSnapshot = body.value?.snapshot_id
   if (snapshot && runSnapshot && snapshot !== runSnapshot && !observedBy(snapshot, body.value.run_id)) {
     parts.push(`The handoff was made on snapshot ${snapshot}; this run is on ${runSnapshot}.`)
@@ -1017,6 +1038,7 @@ const exportHref = computed(() => {
   min-width: 0;
 }
 
+.lw-sim__handoff { flex: 1 1 20rem; margin: 0; }
 .lw-sim__context dt { font-size: 13px; color: var(--lw-ink-muted); }
 .lw-sim__context dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 
