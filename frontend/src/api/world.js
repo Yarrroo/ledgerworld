@@ -12,6 +12,7 @@ import stablecoinDepeg from '../../../scenarios/families/stablecoin-depeg.json'
 import redemptionSpike from '../../../scenarios/families/redemption-spike.json'
 import borrowerSilence from '../../../scenarios/families/borrower-silence.json'
 import confidenceRumour from '../../../scenarios/families/confidence-rumour.json'
+import { kindText } from './v1.js'
 
 /** The six scenario families, in the handoff's order: id, what happens, and its parameters. */
 export const FAMILIES = [delayedReceipt, fxGap, stablecoinDepeg, redemptionSpike, borrowerSilence, confidenceRumour]
@@ -58,12 +59,12 @@ export function worldFor (snapshotId) {
   const edges = []
   for (const c of world.snapshot.contracts) {
     edges.push({ id: `contract:${c.contract_id}`, from: c.lender, to: c.borrower, type: 'financial',
-      label: `${c.contract_id} · ${c.kind.replace(/_/g, ' ')}`, ref: c.contract_id })
+      label: `${c.contract_id} · ${kindText(c.kind)}`, tag: kindText(c.kind), ref: c.contract_id })
   }
   for (const o of world.snapshot.obligations) {
     if (!ids.has(o.kind)) continue // the payee is an actor only when one carries the obligation's kind
     edges.push({ id: `obligation:${o.obligation_id}`, from: o.entity, to: o.kind, type: 'financial',
-      label: `${o.kind} ${o.obligation_id}`, ref: o.obligation_id })
+      label: `${o.kind} ${o.obligation_id}`, tag: kindText(o.kind), ref: o.obligation_id })
   }
   for (const e of world.snapshot.exposures) {
     for (const party of e.shared_with) {
@@ -72,7 +73,7 @@ export function worldFor (snapshotId) {
       const account = holds ? e.account : null
       const flow = holds ? null : (e.flow_id ?? null)
       edges.push({ id: `exposure:${e.exposure_id}:${party}`, from: party, to: e.venue, type: 'exposure',
-        label: `exposure · ${account ?? flow ?? e.exposure_id}`, ref: e.exposure_id, account, flow })
+        label: `exposure · ${account ?? flow ?? e.exposure_id}`, tag: 'exposure', ref: e.exposure_id, account, flow })
     }
   }
   if (ids.has('market-maker') && ids.has('treasury')) {

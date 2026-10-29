@@ -63,6 +63,15 @@ describe('CashOutlook', () => {
     expect(watched.has(w.get('.lw-outlook__frame').element)).toBe(true)
   })
 
+  it('puts the baseline\'s low-point label just above its point, not out past the floor line', async () => {
+    // below the point crosses the floor; above and right meets the h48 point; above and left is clear
+    const w = mount(CashOutlook, { props: props(body.outlook) })
+    const dot = w.get('.is-low .lw-outlook__dot')
+    const label = w.get('[data-test="outlook-low-label"]')
+    expect(Number(label.attributes('y'))).toBe(Number(dot.attributes('cy')) - 14)
+    expect(label.attributes('text-anchor')).toBe('end')
+  })
+
   it('labels the y axis with representable amounts when every P is zero', async () => {
     const zero = body.outlook.map((p) => ({ ...p, value: { ...p.value, minor: 0 } }))
     const w = mount(CashOutlook, { props: { ...props(zero), floor: null } })

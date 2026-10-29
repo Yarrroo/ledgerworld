@@ -20,7 +20,7 @@
                 class="lw-outlook__floor" aria-hidden="true" data-test="outlook-floor" />
           <text v-if="floorY !== null" :x="width - M.right" :y="floorY - 6" text-anchor="end"
                 class="lw-outlook__floor-label" aria-hidden="true" data-test="outlook-floor-label">{{ floorText }}</text>
-          <path :d="line" class="lw-outlook__line" aria-hidden="true" />
+          <path :d="line" class="lw-outlook__line" aria-hidden="true" data-test="outlook-line" />
           <g v-for="p in drawn" :key="p.t" class="lw-outlook__point"
              :class="{ 'is-low': p.low, [`is-${lowTone}`]: p.low, 'is-active': active === p.t }"
              tabindex="0" role="img" :aria-label="p.text" data-test="outlook-point" :data-t="p.t"
@@ -80,7 +80,7 @@
  * computes money: positions are geometry, figures are the API's.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { STATES, againstFloor, formatAmount, formatMoney, formatTime, hoursFrom, metricText } from '../api/v1.js'
+import { STATES, againstFloor, formatAmount, formatMoney, formatTime, hoursFrom, kindText, metricText } from '../api/v1.js'
 
 const props = defineProps({
   points: { type: Array, required: true },
@@ -168,7 +168,7 @@ const lowTone = computed(() => STATES[lowState.value]?.tone ?? 'muted')
 function eventText (p) {
   if (!p.events.length) return Date.parse(p.t) <= Date.parse(props.asOf) ? 'As of: settled cash' : 'Horizon end: nothing moves'
   return p.events.map((e) =>
-    `${e.kind.replace(/_/g, ' ')} ${e.ref} ${e.direction === 'in' ? '+' : '−'}${formatMoney(e.amount.minor, e.amount.currency)}`
+    `${kindText(e.kind)} ${e.ref} ${e.direction === 'in' ? '+' : '−'}${formatMoney(e.amount.minor, e.amount.currency)}`
   ).join('; ')
 }
 
@@ -203,25 +203,47 @@ function box (text, x, baseline, anchor) {
   return { left: left - 3, right: left + w + 3, top: baseline - 16, bottom: baseline + 7 }
 }
 const meets = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+/** A box around a stretch of the step line or a point marker, `pad` px out each way. */
+const around = (x1, y1, x2, y2, pad) =>
+  ({ left: Math.min(x1, x2) - pad, right: Math.max(x1, x2) + pad, top: Math.min(y1, y2) - pad, bottom: Math.max(y1, y2) + pad })
 
-/** The lowest point's label: below the point unless that crosses the floor line or the floor
- * label, then above it, then a line further out each way; below when nothing clears. */
+/** What the low-point label must not touch besides the floor: the step line P (each H and V
+ * stretch) and every other point marker (its own sits 10 px off its text by construction). */
+const marks = computed(() => {
+  const pts = valued.value
+  return [
+    ...pts.slice(1).flatMap((p, n) => [
+      around(pts[n].px, pts[n].py, p.px, pts[n].py, 2),
+      around(p.px, pts[n].py, p.px, p.py, 2)
+    ]),
+    ...drawn.value.filter((p) => !p.low).map((p) => around(p.px, p.py, p.px, p.py, 6))
+  ]
+})
+
+/** The lowest point's label: to its right (left near the right edge), below the point, then above
+ * it, then a line further out each way, each on the other side next; the first that stays inside
+ * the chart and touches neither the floor line, the floor label, the step line nor a point
+ * marker. When none clears all of that, the first that clears the floor; below when none does. */
 const lowLabel = computed(() => {
   const p = low.value
   if (!p) return { x: 0, y: 0, anchor: 'start', text: '' }
   const text = `Lowest ${short(p.value.minor)} · ${p.h}`
-  const right = p.px > width.value - 160
-  const x = p.px + (right ? -10 : 10)
-  const anchor = right ? 'end' : 'start'
+  const sides = p.px > width.value - 160 ? ['end', 'start'] : ['start', 'end']
   const fy = floorY.value
   const floorBox = fy === null ? null : box(floorText.value, width.value - M.right, fy - 6, 'end')
-  const clears = (baseline) => {
-    if (fy === null) return true
-    const b = box(text, x, baseline, anchor)
-    return !(fy > b.top && fy < b.bottom) && !meets(b, floorBox)
-  }
-  const y = [p.py + 24, p.py - 14, p.py + 40, p.py - 30].find(clears) ?? p.py + 24
-  return { x, y, anchor, text }
+  const candidates = [24, -14, 40, -30, 56, -46].flatMap((dy) => sides.map((anchor) => {
+    const x = p.px + (anchor === 'end' ? -10 : 10)
+    const y = p.py + dy
+    const b = box(text, x, y, anchor)
+    return {
+      x, y, anchor,
+      floor: fy === null || (!(fy > b.top && fy < b.bottom) && !meets(b, floorBox)),
+      clear: b.left >= 0 && b.right <= width.value && b.top >= 0 && b.bottom <= height.value - M.bottom + 8 &&
+        marks.value.every((m) => !meets(b, m))
+    }
+  }))
+  const pick = candidates.find((c) => c.floor && c.clear) ?? candidates.find((c) => c.floor) ?? candidates[0]
+  return { x: pick.x, y: pick.y, anchor: pick.anchor, text }
 })
 
 const step = (pts) => pts.map((p, n) => (n ? `H${p.px}V${p.py}` : `M${p.px},${p.py}`)).join('')

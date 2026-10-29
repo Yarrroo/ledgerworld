@@ -152,6 +152,29 @@ test('approve, then execute: one POST each, the dialog follows the execution to 
   expect(await sideways(page)).toBeLessThanOrEqual(0)
 })
 
+test('a ledger-only repayment (mode B) is reconciled locally, never submitted or provider-confirmed', async ({ page }, info) => {
+  const body = clone(EXECUTION)
+  body.legs.push({ // as GET /executions serialises the outbox's ledger-only leg: no provider id, no receipt
+    leg_id: `${APPROVAL.approval_id}:repayment`, request_id: 'req-repayment-1', kind: 'repayment', provider_id: null,
+    state: 'settled', receipt: null, reconciled: true, journal_id: 'j-repayment-1', label: 'repayment (simulated)'
+  })
+  await mock(page, { executions: [body] })
+  await page.route('**/api/v1/overview', (r) => r.fulfill({
+    json: { ...clone(OVERVIEW), mode: 'fake', demo: { run_id: 'run-1', execution_id: APPROVAL.approval_id } }
+  }))
+  await page.goto('/execution')
+  await settled(page)
+  const leg = $(page, 'leg-repayment')
+  await expect(leg.locator('[data-test="leg-status"]')).toHaveText(/Ledger only, no provider operation · reconciled as of .* UTC/)
+  await expect(leg.locator('.lw-steps__done')).toHaveText([/Ready/, /Reconciled · ledger only/])
+  await expect(leg.locator('.lw-steps__skipped')).toHaveText([/Submitted · not applicable/, /Provider-confirmed · not applicable/])
+  await expect(leg.locator('[data-test="receipt-mode"]')).toHaveText('Ledger only (simulated)')
+  await expect(leg.locator('[data-test="receipt"]')).toHaveCount(0)
+  await expect($(page, 'leg-advance').locator('.lw-steps__done')).toHaveCount(4)
+  expect(await sideways(page)).toBeLessThanOrEqual(0)
+  await leg.screenshot({ path: info.outputPath('ledger-only-repayment.png') })
+})
+
 test('an expired approval disables Execute and says why', async ({ page }) => {
   const posts = await mock(page, { approval: { as_of: APPROVAL.expires_at, mode: 'fake', approval: clone(APPROVAL) } })
   await review(page)
@@ -222,6 +245,28 @@ test('an approval closed unexecuted is summarised with its terms, then as expire
   await expect(summary).toContainText('No approval to summarise')
   expect(posts).toEqual(['POST /approvals'])
 })
+
+for (const step of ['reconciled', 'incident'] as const) {
+  test(`a failed Read status after ${step} is said in the dialog, the stage kept`, async ({ page }) => {
+    const posts = await mock(page, { executions: [executionAt(step)] })
+    await review(page)
+    await $(page, 'confirm').click()
+    await $(page, 'execute').click()
+    await expect(dialog(page)).toHaveAttribute('data-stage', step)
+    const kept = await $(page, 'stage-status').innerText()
+    // the newest route answers first: every later read is refused
+    await page.route(`**/api/v1/executions/${APPROVAL.approval_id}`, (r) =>
+      r.fulfill({ status: 403, json: { error: { code: 'forbidden', detail: 'not allowed' } } }))
+    await $(page, 'read-status').click()
+    await expect($(page, 'stage-status')).toContainText(
+      `Could not read the status of execution ${APPROVAL.approval_id}: not allowed. Read status to try again.`)
+    await expect($(page, 'stage-status')).toContainText(kept)
+    await expect(dialog(page)).toHaveAttribute('data-stage', step)
+    await footed(page)
+    await page.screenshot({ path: test.info().outputPath(`read-failed-${step}.png`) })
+    expect(posts).toEqual(['POST /approvals', 'POST /executions'])
+  })
+}
 
 test('focus is trapped in the dialog and returned to Review plan', async ({ page }) => {
   await mock(page, {})

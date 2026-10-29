@@ -33,6 +33,8 @@ review ──Confirm──▶ submitting ──201──▶ approved ──Execu
 * `reconciled` / `incident` read the same polled execution the page shows; no resend, no reversal.
   A leg whose outcome is unknown keeps the dialog in `executing` (it is still being read); the
   page lists it under Incidents with its evidence, as E6 asks.
+* A failed status read is said in the dialog's status line beside the stage's own text
+  (`reconciled`, `incident`) or a held block, never in place of it; the last read time stays.
 * A block held for the run while an approval is open shows `unknown`; a 4xx on Execute shows
   *Execution refused*. Escape and Tab are handled on the document while the dialog is open.
 * Copy buttons on approval id and plan hash announce *copied* (or why not) in a polite live region.
@@ -44,7 +46,9 @@ review ──Confirm──▶ submitting ──201──▶ approved ──Execu
 E1 Execution context · E2 Approval review (opener + operator access) · E3 Approval summary (an
 approval this tab confirmed and has not executed: id, state, snapshot, mode, plan hash, expiry;
 then the execution read: approval id, snapshot, mode, read time) · E4 Leg tracker (Ready → Submitted →
-Provider-confirmed → Reconciled per leg, raw status, amount; expands to E5 receipt) · E6 Incidents
+Provider-confirmed → Reconciled per leg, raw status, amount; expands to E5 receipt; a mode-B
+ledger-only repayment, settled with no provider id, skips Submitted and Provider-confirmed as
+"not applicable" and reconciles "ledger only") · E6 Incidents
 (each with affected leg, provider/request ids, observed status, opened and last-read times).
 Desktop: legs left, terms and incidents right. Tablet/phone: one column, terms above legs.
 

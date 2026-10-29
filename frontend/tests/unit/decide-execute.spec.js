@@ -15,6 +15,7 @@ import accessibility from '../../../prp/2026-10-20-ledgerworld/design/modules/ui
 import policyComparison from '../../../prp/2026-10-20-ledgerworld/design/modules/decisions/fixtures/policy-comparison.json'
 import allInfeasible from '../../../prp/2026-10-20-ledgerworld/design/modules/decisions/fixtures/all-infeasible.json'
 import approvalBinding from '../../../prp/2026-10-20-ledgerworld/design/modules/execution/fixtures/approval-binding.json'
+import legStateMachine from '../../../prp/2026-10-20-ledgerworld/design/modules/execution/fixtures/leg-state-machine.json'
 import overviewLf1 from '../../../contracts/examples/c6_api/valid-overview-lf1.json'
 import executionSettled from '../../../contracts/examples/c6_api/valid-execution.json'
 import boundApproval from '../../../contracts/examples/c3_bound_approval/valid-lf1-integrated.json'
@@ -451,6 +452,32 @@ describe('Execution: provider state, receipts and reconciliation', () => {
     expect(text(w, 'mode')).toBe(c.banner)
     expect(text(w, 'leg-advance')).toContain(c.advance_label)
     expect(text(w, 'receipt-mode')).toBe('Airwallex sandbox')
+  })
+
+  // board item 149: the ledger-only repayment as GET /executions serialises it (routes._leg) after
+  // the outbox's pending → settled ledger_only move: no provider id, so no receipt
+  it('mode B: a ledger-only repayment is reconciled locally, never submitted or provider-confirmed', async () => {
+    const machine = legStateMachine.ledger_only
+    const repayment = {
+      leg_id: 'apr-1:repayment', request_id: 'req-repayment-1', kind: 'repayment',
+      provider_id: machine.provider_id, state: machine.path.at(-1), receipt: null,
+      reconciled: true, journal_id: 'j-repayment-1', label: machine.receipt_label
+    }
+    const w = await showing(executionBody({ legs: [advance(), repayment], mode: 'sandbox' }))
+    const tile = w.get('[data-test="leg-repayment"]')
+    const steps = tile.get('[data-test="steps"]')
+    const done = steps.findAll('.lw-steps__done').map((s) => s.text())
+    expect(done.join(' | ')).not.toMatch(/Submitted|Provider-confirmed/)
+    expect(done).toHaveLength(2) // Ready and Reconciled
+    expect(steps.findAll('.lw-steps__skipped').map((s) => s.text().replace(/\s+/g, ' '))).toEqual([
+      '– Submitted · not applicable', '– Provider-confirmed · not applicable'
+    ])
+    expect(steps.get('[aria-current="step"]').text()).toMatch(/^● Reconciled · ledger only/)
+    expect(tile.get('[data-test="leg-status"]').text()).toMatch(/^✓Ledger only, no provider operation · reconciled as of/)
+    expect(tile.get('[data-test="receipt-mode"]').text()).toBe('Ledger only (simulated)')
+    expect(tile.find('[data-test="receipt"]').exists()).toBe(false)
+    // the provider-backed advance beside it still reaches every milestone on its evidence
+    expect(w.get('[data-test="leg-advance"]').findAll('.lw-steps__done')).toHaveLength(4)
   })
 
   it('no execution linked: unavailable, never another run\'s receipt', async () => {
@@ -2036,6 +2063,79 @@ describe('the approval dialog, one stage at a time (board item 133)', () => {
       body = { ...executionBody({ legs: [sentPayout()] }), as_of: '2026-11-05T10:09:00Z' }
       await tick()
       expect(text(w, 'stage-status')).toBe(said)
+    })
+  })
+
+  describe('correction: a failed Read status is said after a terminal stage (board item 150)', () => {
+    const incident = () => {
+      const leg = paidPayout()
+      return executionBody({
+        legs: [leg],
+        incidents: [{ incident_id: 'inc-1', leg_id: leg.leg_id, kind: 'paid_then_failed', state: 'open', opened_at: '2026-11-05T10:05:00Z' }]
+      })
+    }
+
+    for (const [name, read, base] of [
+      ['reconciled', () => executionBody({ legs: [advance(), paidPayout()] }), 'Every leg reconciled as of'],
+      ['incident', incident, 'Read status stays available']
+    ]) {
+      it(`${name}: a refused read is said in the dialog, the stage and its last read time kept`, async () => {
+        let answer = read()
+        const { w } = await reviewReady({
+          'POST /executions': accepted(),
+          'GET /executions/apr-1': () => answer
+        })
+        await approve(w)
+        await w.get('[data-test="execute"]').trigger('click')
+        await flushPromises()
+        expect(stage(w)).toBe(name)
+        const kept = text(w, 'stage-status')
+        answer = refuse(403, 'forbidden', 'not allowed.')
+        await w.get('[data-test="read-status"]').trigger('click')
+        await flushPromises()
+        expect(stage(w)).toBe(name)
+        const said = text(w, 'stage-status')
+        expect(said).toContain(base)
+        expect(said).toContain(kept) // the last successful read's time is not dropped
+        expect(said).toContain('Could not read the status of execution apr-1: not allowed. Read status to try again.')
+        answer = read()
+        await w.get('[data-test="read-status"]').trigger('click')
+        await flushPromises()
+        expect(text(w, 'stage-status')).toBe(kept) // a later answer clears the error
+      })
+
+      it(`${name}: an unanswered read says it is reading again`, async () => {
+        fakeTimers()
+        let answer = read()
+        const { w } = await reviewReady({
+          'POST /executions': accepted(),
+          'GET /executions/apr-1': () => answer
+        })
+        await approve(w)
+        await w.get('[data-test="execute"]').trigger('click')
+        await flushPromises()
+        answer = timeout()
+        await w.get('[data-test="read-status"]').trigger('click')
+        await flushPromises()
+        expect(stage(w)).toBe(name)
+        expect(text(w, 'stage-status')).toContain(base)
+        expect(text(w, 'stage-status')).toContain('Could not read the status of execution apr-1; reading again.')
+      })
+    }
+
+    it('an unanswered execution POST: a failed read is said beside its unknown outcome', async () => {
+      const { w } = await reviewReady({
+        'POST /executions': timeout(),
+        'GET /executions/apr-1': refuse(403, 'forbidden', 'not allowed')
+      })
+      await approve(w)
+      await w.get('[data-test="execute"]').trigger('click')
+      await flushPromises()
+      expect(stage(w)).toBe('executing')
+      const said = text(w, 'stage-status')
+      expect(said).toContain('Execution outcome unknown; reading its status by approval id apr-1. Do not send again.')
+      // an execution this tab sent is read until a read shows it finished, refusals included
+      expect(said).toContain('Could not read the status of execution apr-1; reading again.')
     })
   })
 })
