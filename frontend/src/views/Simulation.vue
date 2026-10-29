@@ -203,7 +203,7 @@ import ActionFeed from '../components/ActionFeed.vue'
 import CashPaths from '../components/CashPaths.vue'
 import DetailSheet from '../components/DetailSheet.vue'
 import WorldMap from '../components/WorldMap.vue'
-import { FAMILIES, ROUND_HOURS, familyOf, worldFor } from '../api/world.js'
+import { FAMILIES, ROUND_HOURS, familyOf, observedBy, worldFor } from '../api/world.js'
 import { ApiError, LABELS, ScreenShell, formatMoney, request, routeExists, sourceLabel, useReading } from '../api/v1.js'
 
 const HORIZON_ROUNDS = 18
@@ -301,7 +301,7 @@ const handoff = computed(() => {
   if (account) parts.push(`Rehearsing for account ${account}.`)
   if (scenario) parts.push(`Scenario asked for: ${scenario}.`)
   const runSnapshot = body.value?.snapshot_id
-  if (snapshot && runSnapshot && snapshot !== runSnapshot) {
+  if (snapshot && runSnapshot && snapshot !== runSnapshot && !observedBy(snapshot, body.value.run_id)) {
     parts.push(`The handoff was made on snapshot ${snapshot}; this run is on ${runSnapshot}.`)
   }
   return parts.join(' ')

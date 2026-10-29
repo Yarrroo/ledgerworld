@@ -27,15 +27,25 @@ export const ROUND_HOURS = world.round_hours
 
 const names = new Map(world.snapshot.entities.map((e) => [e.entity_id, e]))
 
+/** A prepared run's observed snapshot, as app/demo/run.py names it: `obs-<world>-r<round>-<run>`. */
+const OBSERVED = new RegExp(`^obs-${world.world_id}-r\\d+-(.+)$`)
+
+/** Whether ``snapshotId`` is the world file's snapshot or one a run observed from it. */
+const ofWorld = (snapshotId) => snapshotId === world.snapshot.snapshot_id || OBSERVED.test(String(snapshotId ?? ''))
+
+/** Whether ``snapshotId`` is the snapshot run ``runId`` observed from this world. */
+export const observedBy = (snapshotId, runId) => String(snapshotId ?? '').match(OBSERVED)?.[1] === runId
+
 /**
- * The world for ``snapshotId``, or null when the world file is about another snapshot.
+ * The world for ``snapshotId`` (the world file's snapshot, or one a run observed from it), or null
+ * when the world file is about another snapshot.
  * `actors` are in the file's order; `edges` are typed and directed:
  * a contract from lender to borrower, an obligation from payer to payee, a shared exposure from
  * each party to the venue, and public prices from the market-maker to the treasury the world
  * is about (the other actors read the same prices; the edge stands for the feed, not a transfer).
  */
 export function worldFor (snapshotId) {
-  if (!snapshotId || snapshotId !== world.snapshot.snapshot_id) return null
+  if (!snapshotId || !ofWorld(snapshotId)) return null
   const actors = world.actors.map((a) => ({
     id: a.actor_id,
     label: names.get(a.actor_id)?.name?.replace(/ \(synthetic\)$/, '') ?? a.actor_id,

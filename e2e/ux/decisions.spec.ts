@@ -1,9 +1,10 @@
 /**
  * Decisions in motion (prp/2026-10-29-ux-pass/HANDOFF.md D1–D6), at every width of
  * e2e/ux.config.ts, on the prepared demonstration run: the cohort context with no probability;
- * the gap explanation and its timing disclosure (h0, the payroll deadline, the venue arrival, the
- * delayed receipt); the three policies as a radio group whose choice highlights its row and
- * updates the explanation without approving anything; the scenario details drawer; the review
+ * the gap explanation and its timing disclosure (the cash observed, the payroll deadline, the
+ * venue arrival, the delayed receipt, in hours from the world's h0); the three policies as a
+ * radio group whose choice highlights its row and updates the explanation without approving
+ * anything; the scenario details drawer; the review
  * handoff to Execution; on a phone, grouped rows stacked, never a carousel. Read-only.
  */
 import { expect, test, type Page } from '@playwright/test'
@@ -40,7 +41,7 @@ test('D1–D2: cohort context, the gap and its timing', async ({ page, baseURL, 
 
   await $(page, 'timing').locator('summary').click()
   const steps = $(page, 'timing').locator('li')
-  await expect(steps.first()).toHaveAttribute('data-at', '0')
+  await expect(steps.first()).toContainText('settled cash observed')
   const hours = (await steps.evaluateAll((els) => els.map((e) => Number(e.getAttribute('data-at')))))
   expect([...hours].sort((a, b) => a - b), 'timing is not in time order').toEqual(hours)
   if (/delayed-receipt/.test(api.cohort)) {

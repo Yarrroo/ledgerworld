@@ -148,3 +148,44 @@ describe('Simulation names what a Treasury handoff carried', () => {
     expect(text(w, 'handoff')).toContain('demo-world')
   })
 })
+
+// With a prepared demo the money screens read the run's observed snapshot, named by the backend
+// `obs-<world>-r<round>-<run>` (app/demo/run.py): the same world, the same run, a later moment.
+describe('the observed snapshot of a prepared run is that run\'s world', () => {
+  it('the world map is drawn for a snapshot observed from the world, and for no other', () => {
+    expect(worldFor('obs-demo-r3-run-1')).not.toBeNull()
+    expect(worldFor('lf1')).toBeNull()
+  })
+
+  it('Decisions judges the gap against the run\'s observed treasury, timed from the world\'s epoch', async () => {
+    const observed = { ...treasury(), snapshot_id: 'obs-demo-r3-run-1' }
+    observed.accounts[0].as_of = '2026-01-01T12:00:00Z'
+    observed.accounts[0].buckets.pending_in = [{ flow_id: 'receivable-1', kind: 'receivable', reservation_id: null,
+      amount: { minor: 2000000, currency: 'USD' }, expected_at: '2026-01-01T12:00:00Z' }]
+    observed.obligations = [{ obligation_id: 'payroll-1', entity: 'treasury', account: 'treasury/operating',
+      amount: { minor: 5000000, currency: 'USD' }, due_at: '2026-01-02T16:00:00Z', kind: 'payroll',
+      mandatory: true, reservation_id: 'payroll-hold', state: 'open' }]
+    serve({
+      '/decisions/run-1': decisions([row('no-action', 's1', usd(2000000), false), row('integrated', 's1', usd(3000000), true)]),
+      '/treasury': observed
+    })
+    const w = await open(Decisions, '/decisions?run_id=run-1')
+    expect(text(w, 'gap-summary')).toContain('short USD 10,000.00')
+    const at = w.findAll('[data-test="timing"] li').map((li) => li.attributes('data-at'))
+    expect(at).toEqual(['12', '40', '252'])
+  })
+
+  it('a handoff from the run\'s own observed snapshot is not called another snapshot', async () => {
+    serve({
+      '/runs/run-1': {
+        as_of: '2026-01-01T20:00:00Z', mode: 'fake', run_id: 'run-1', snapshot_id: 'demo-world', status: 'done',
+        committed_round: 1, branches: [{ branch_id: 'run-1-base', parent_branch_id: null, checkpoint_round: null, policy: null, replay: false }],
+        rounds: [{ round: 1, branch_id: 'run-1-base', t_hours: 4, intents: [], cleared: [], journal_ids: [] }],
+        feed: [], cash_paths: []
+      }
+    })
+    const w = await open(Simulation, '/simulation?run_id=run-1&account=treasury/operating&snapshot=obs-demo-r3-run-1')
+    expect(text(w, 'handoff')).toContain('treasury/operating')
+    expect(text(w, 'handoff')).not.toContain('this run is on')
+  })
+})

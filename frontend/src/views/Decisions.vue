@@ -170,9 +170,9 @@
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import DetailSheet from '../components/DetailSheet.vue'
-import { familyOf } from '../api/world.js'
+import { familyOf, observedBy, worldFor } from '../api/world.js'
 import {
-  ApiError, LABELS, STATES, ScreenShell, againstFloor, contextKey, formatMoney, getOverview, getTreasury,
+  ApiError, LABELS, STATES, ScreenShell, againstFloor, formatMoney, getOverview, getTreasury,
   metricText, money, request, routeExists, useReading
 } from '../api/v1.js'
 
@@ -187,8 +187,9 @@ const { state, refresh } = useReading(async () => {
   // one after the other: the offline app's SQLite refuses a ledger read beside a job-store read
   const decisions = await request(`/decisions/${encodeURIComponent(runId)}`)
   const treasury = await getTreasury().catch(() => null)
-  const same = treasury && treasury.snapshot_id === decisions.snapshot_id &&
-    contextKey({ mode: treasury.mode }) === contextKey({ mode: decisions.mode })
+  // the run's own snapshot, or the one it observed (a prepared demo's money screens read that one)
+  const same = treasury && treasury.mode === decisions.mode &&
+    (treasury.snapshot_id === decisions.snapshot_id || observedBy(treasury.snapshot_id, decisions.run_id))
   return { ...decisions, treasury: same ? treasury : null }
 })
 // The view is reused across query-only navigation: another run is another reading.
@@ -282,20 +283,22 @@ const hoursAt = (asOf, at) => Math.round((Date.parse(at) - Date.parse(asOf)) / 3
 const timed = (row) => Number.isFinite(row.h) // a time that does not parse is left out, never "hNaN"
 
 /**
- * h0 cash, each deadline and arrival of the account, and the delayed receipt the family moves,
- * in whole hours from the account's observation (the snapshot's h0).
+ * The cash observed, each deadline and arrival of the account, and the delayed receipt the family
+ * moves, in whole hours from the world's epoch (h0) when the world file describes this snapshot,
+ * else from the account's observation.
  */
 const timing = computed(() => {
   const t = state.body?.treasury
   const a = account.value
   if (!t || !a) return []
-  const rows = [{ key: 'h0', h: 0, what: `${a.buckets.settled ? money(a.buckets.settled) : 'Unknown'} settled cash on ${a.id}` }]
+  const h0 = worldFor(t.snapshot_id)?.epoch ?? a.as_of
+  const rows = [{ key: 'cash', h: hoursAt(h0, a.as_of), what: `${a.buckets.settled ? money(a.buckets.settled) : 'Unknown'} settled cash observed on ${a.id}` }]
   for (const o of t.obligations.filter((x) => x.account === a.id)) {
-    rows.push({ key: `o:${o.obligation_id}`, h: hoursAt(a.as_of, o.due_at), what: `${o.kind} ${money(o.amount)} due (${o.obligation_id})` })
+    rows.push({ key: `o:${o.obligation_id}`, h: hoursAt(h0, o.due_at), what: `${o.kind} ${money(o.amount)} due (${o.obligation_id})` })
   }
   const delay = family.value?.params ?? {}
   for (const f of a.buckets.pending_in) {
-    const h = hoursAt(a.as_of, f.expected_at)
+    const h = hoursAt(h0, f.expected_at)
     if (delay.flow_id === f.flow_id && Number.isInteger(delay.delay_h)) {
       rows.push({ key: `f:${f.flow_id}`, h: h + delay.delay_h,
         what: `${f.kind} ${money(f.amount)} arrives late in this scenario (h${h} + ${delay.delay_h} h)` })
