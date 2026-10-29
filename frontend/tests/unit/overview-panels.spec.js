@@ -41,39 +41,38 @@ afterEach(() => {
 describe('Overview panels on the baseline', () => {
   it('O1 names the complete snapshot, the currency and the company', async () => {
     const w = await open(baseline.instance)
-    expect(text(w, 'context-snapshot')).toBe('demo-world')
-    expect(text(w, 'context-currency')).toBe('USD')
-    expect(text(w, 'context-panel')).toContain('Northwind Parts treasury (synthetic)')
+    expect(text(w, 'context-line')).toBe('Snapshot demo-world · USD · Synthetic data')
+    expect(text(w, 'context-bar-snapshot')).toBe('demo-world')
+    expect(text(w, 'company')).toBe('Northwind PartsSynthetic company')
+    expect(text(w, 'hero-subtitle')).toContain('Northwind Parts treasury')
   })
 
-  it('O2 opens the API inputs of the metric chosen, one at a time, each linking its Treasury row', async () => {
+  it('O2 carries the API inputs of each metric in its tooltip, shown only when asked for', async () => {
     const w = await open(baseline.instance)
-    expect(w.find('[data-test="metric-inputs"]').exists()).toBe(false)
-    await w.get('[data-test="pick-spendable"]').trigger('click')
-    expect(text(w, 'metric-inputs')).toContain(
-      'treasury/operating (USD): 70,000.00 settled − 50,000.00 reserved − 0.00 pledged = USD 20,000.00')
-    expect(w.get('[data-test="metric-link"]').attributes('href'))
-      .toBe('/treasury?focus=account:treasury/operating&snapshot=demo-world')
-    await w.get('[data-test="pick-settled"]').trigger('click')
-    expect(w.findAll('[aria-expanded="true"]').length).toBe(1)
-    await w.get('[data-test="pick-settled"]').trigger('click')
-    expect(w.find('[data-test="metric-inputs"]').exists()).toBe(false)
+    const tip = w.get('[data-test="tip-spendable"] [role="tooltip"]')
+    expect(tip.attributes('hidden')).toBeDefined()
+    expect(tip.text().replace(/\s+/g, ' ')).toContain(
+      '70,000.00 settled − 50,000.00 reserved − 0.00 pledged = $20,000')
+    await w.get('[data-test="tip-spendable"]').trigger('focusin')
+    expect(tip.attributes('hidden')).toBeUndefined()
+    expect(text(w, 'spendable')).toContain('$20,000')
   })
 
   it('O3 draws every API point and shows them as data, the lowest kept and green', async () => {
     const w = await open(baseline.instance)
     expect(w.findAll('[data-test="outlook-point"]').length).toBe(5)
-    expect(w.get('[data-test="outlook-point"].is-low').classes()).toContain('is-ok')
-    await w.get('[data-test="outlook-view-data"]').trigger('click')
-    const rows = w.findAll('[data-test="outlook-table"] tbody tr').map((r) => r.text())
-    expect(rows.map((r) => r.match(/^(now|in \d+ (hours?|days?))/)[0])).toEqual(['now', 'in 12 hours', 'in 40 hours', 'in 2 days', 'in 3 days'])
-    expect(rows[2]).toContain('USD 40,000.00')
-    expect(rows[2]).toContain('payroll-1 −USD 50,000.00')
+    const lowest = w.findAll('.lw-outlook__dot').filter((d) => d.attributes('r') === '6')
+    expect(lowest).toHaveLength(1)
+    expect(lowest[0].classes()).toContain('is-ok')
+    const rows = w.findAll('[data-test="outlook-tip"]').map((r) => r.text().replace(/\s+/g, ' '))
+    expect(rows.map((r) => r.match(/\((now|in \d+ (hours?|days?))\)/)[1])).toEqual(['now', 'in 12 hours', 'in 40 hours', 'in 2 days', 'in 3 days'])
+    expect(rows[2]).toContain('$40,000')
+    expect(rows[2]).toContain('payroll-1 -$50,000')
   })
 
   it('O4 deep-links the next obligation to its Treasury row in this snapshot', async () => {
     const w = await open(baseline.instance)
-    expect(text(w, 'next-obligation')).toContain('reserved · payroll-hold')
+    expect(text(w, 'next-obligation')).toContain('Held by reservation payroll-hold')
     expect(w.get('[data-test="open-treasury"]').attributes('href'))
       .toBe('/treasury?focus=obligation:payroll-1&snapshot=demo-world')
   })
@@ -81,13 +80,13 @@ describe('Overview panels on the baseline', () => {
   it('O5 lists the relationships as text; O6 previews the scenario read-only', async () => {
     const w = await open(withRun())
     const relations = w.findAll('[data-test="relation"]').map((r) => r.text().replace(/\s+/g, ' '))
-    expect(relations).toHaveLength(4)
-    expect(relations[1]).toMatch(/^Harbourline Credit pool \(synthetic\) → to Bellfield Kitchens \(synthetic\)/)
-    expect(relations[1]).toContain('committed line line-b, limit USD 10,000.00')
-    expect(text(w, 'scenario')).toContain('What if the USD 20,000.00 receivable arrives late?')
+    expect(relations).toHaveLength(3)
+    const lender = relations.find((r) => r.startsWith('Harbourline Credit pool'))
+    expect(lender).toContain('Committed line to Bellfield Kitchens: $10,000.')
+    expect(text(w, 'scenario')).toContain('What if your $20,000 receivable arrives late?')
     await w.get('[data-test="preview-scenario"]').trigger('click')
-    expect(text(w, 'scenario-timing')).toBe('receivable-1 expected in 12 hours, delayed 10 days')
-    expect(text(w, 'settled')).toContain('USD 70,000.00') // nothing observed changed
+    expect(text(w, 'scenario-timing')).toBe('receivable expected in 12h, delayed 10 days')
+    expect(text(w, 'settled')).toContain('$70,000') // nothing observed changed
   })
 
   it('O6 says an early arrival as early, never as an unknown delay', async () => {
@@ -95,7 +94,7 @@ describe('Overview panels on the baseline', () => {
     body.scenario.params.delay_h = -2
     const w = await open(body)
     await w.get('[data-test="preview-scenario"]').trigger('click')
-    expect(text(w, 'scenario-timing')).toBe('receivable-1 expected in 12 hours, early by 2 hours')
+    expect(text(w, 'scenario-timing')).toBe('receivable expected in 12h, early by 2 hours')
   })
 
   it('O6 shows a scenario amount in its currency, never as raw minor units', async () => {
@@ -104,14 +103,37 @@ describe('Overview panels on the baseline', () => {
     const w = await open(body)
     await w.get('[data-test="preview-scenario"]').trigger('click')
     const amount = w.findAll('[data-test="scenario-preview"] dt').find((dt) => dt.text() === 'amount')
-    expect(amount.element.nextElementSibling.textContent).toBe('EUR 10,000.00')
+    expect(amount.element.nextElementSibling.textContent).toBe('€10,000')
     expect(text(w, 'scenario-preview')).not.toContain('1000000')
   })
 
   it('without a prepared run, the scenario cannot be previewed and says why', async () => {
     const w = await open(baseline.instance)
     expect(w.get('[data-test="preview-scenario"]').attributes('disabled')).toBeDefined()
-    expect(text(w, 'preview-why')).toBe('No prepared run, so no scenario to preview')
-    expect(text(w, 'explore-why')).toBe('No demonstration run is prepared')
+    expect(w.get('[data-test="preview-why"] [role="tooltip"]').text()).toBe('No prepared run, so no what-if to preview')
+    expect(w.get('[data-test="explore-why"] [role="tooltip"]').text()).toBe('No demonstration run is prepared')
+  })
+})
+
+describe('Overview shows what a reader must not miss without a tooltip', () => {
+  it('a breached floor is on the page, beside Reserve headroom, not only in its tooltip', async () => {
+    const body = withRun()
+    body.coverage.headroom = { ...body.coverage.headroom, minor: -500000 }
+    body.coverage.min_projected = { ...body.coverage.min_projected, minor: 2500000 }
+    const w = await open(body)
+    const alert = w.get('[data-test="coverage"] [data-test="floor-alert"]')
+    expect(alert.element.closest('[role="tooltip"]')).toBeNull()
+    expect(alert.text()).toContain('Below your safety minimum')
+    w.unmount()
+  })
+
+  it('a payee owed two obligations reads their count, never only the last one\'s amount', async () => {
+    const body = withRun()
+    const owed = body.relations.find((r) => r.kind === 'obligation')
+    body.relations.push({ ...clone(owed), ref: 'payroll-2', amount: { ...owed.amount, minor: 100000 } })
+    const w = await open(body)
+    const node = w.findAll('[data-test="relation"]').find((n) => n.text().includes('payroll bureau'))
+    expect(node.get('small').text()).toBe('2 obligations owed')
+    w.unmount()
   })
 })

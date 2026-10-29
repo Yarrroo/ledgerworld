@@ -1,29 +1,13 @@
 <template>
-  <ScreenShell v-slot="{ body }" title="Decisions" :reading="state" :refresh="refresh">
-    <section class="lw-dec__context" aria-label="The plans compared" data-panel="The plans compared">
-      <p class="lw-lead" data-test="lead">{{ lead }}</p>
-      <div class="lw-labels" data-test="labels">
-        <span class="lw-tag" data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span>
-        <span class="lw-tag" data-test="hypothetical">{{ PLAIN.branch }}</span>
-      </div>
-      <p class="lw-time">
-        Each plan faced the same shock in its own what-if; a count of what-ifs is a count, never odds.
-        <RouterLink v-if="routeExists(router, '/simulation')" data-test="open-simulation"
-                    :to="{ path: '/simulation', query: { run_id: body.run_id } }">Open simulation</RouterLink>
-      </p>
-      <HowWeKnow test="how-decisions">
-        <p class="lw-source" data-test="cohort">
-          Run {{ body.run_id }} · checkpoint round {{ body.checkpoint_round }} · cohort {{ body.cohort }} ·
-          {{ body.weight_kind }} · a scenario comparison, not a probability.
-        </p>
-        <p><template v-if="family">Scenario family {{ family.id }}. </template>Every policy (no-action,
-          fixed-reserve, integrated) ran in a fresh branch from round {{ body.checkpoint_round }} of snapshot
-          {{ body.snapshot_id }}. The shortfall in the sentence above is No action's lowest minimum cash
-          against the operating account's reserve floor; its day is the first payment due on that account.
-          The fee is the selected policy's branch funding cost.</p>
-      </HowWeKnow>
-    </section>
-
+  <ScreenShell title="Decisions" headline="Protect payroll. Preserve your reserve."
+               :subtitle="subtitle" :lead="lead" :reading="state" :refresh="refresh">
+    <template v-if="reviewable" #action="{ body }">
+      <Tip text="A what-if never approves anything: the chosen plan is worked out again on today's real figures, and you check its terms before any money moves.">
+        <RouterLink class="lw-button" data-test="review-plan"
+                    :to="{ path: '/execution', query: { run_id: body.run_id, review: '1' } }">Review current plan<Arrow /></RouterLink>
+      </Tip>
+    </template>
+    <template #default="{ body }">
     <p v-if="body.status === 'pending'" class="lw-note" role="status" data-test="pending">
       The comparison is still running; nothing is selected yet.
     </p>
@@ -42,36 +26,42 @@
           <div class="lw-tile__label">If you {{ PLANS['no-action'].toLowerCase() }}</div>
           <template v-if="gap">
             <p class="lw-dec__line" data-test="gap-summary">
-              Lowest point <strong>{{ metricText(gap.min) }}</strong> against your safety minimum of
-              <strong>{{ gap.floor ? metricText(gap.floor) : 'Not assessed' }}</strong>
-              <template v-if="gap.check.state === 'breached'">: <strong>{{ formatMoney(-gap.check.gap, gap.min.currency) }}</strong> short</template>
+              Lowest point <Tip :text="`${PLANS['no-action']}'s lowest minimum cash across its what-ifs, read from each branch's realised ledger.`"><strong>{{ metricText(gap.min) }}</strong></Tip>
+              against your safety minimum of
+              <Tip :text="floorTip"><strong>{{ gap.floor ? metricText(gap.floor) : 'Not assessed' }}</strong></Tip>
+              <template v-if="gap.check.state === 'breached'">: <Tip text="Safety minimum minus the lowest point."><strong>{{ formatMoney(-gap.check.gap, gap.min.currency) }}</strong></Tip> short</template>
               <template v-else-if="gap.check.state === 'kept'">: you stay above it</template>.
               {{ gap.unmet ? `${gap.unmet} obligation${gap.unmet === 1 ? '' : 's'} unmet.` : 'Every obligation met.' }}
             </p>
-            <div :class="['lw-status', `lw-status--${STATES[gap.check.state].tone}`]">
-              <span aria-hidden="true">{{ STATES[gap.check.state].icon }}</span><span>{{ FLOOR_WORDS[gap.check.state] }}</span>
-            </div>
+            <Tip :text="`${PLANS['no-action']}'s lowest point against the reserve floor${firstDue}.`">
+              <div :class="['lw-status', `lw-status--${STATES[gap.check.state].tone}`]">
+                <span aria-hidden="true">{{ STATES[gap.check.state].icon }}</span><span>{{ FLOOR_WORDS[gap.check.state] }}</span>
+              </div>
+            </Tip>
           </template>
           <p v-else class="lw-time">No result for {{ PLANS['no-action'] }} in this comparison yet.</p>
 
           <div v-if="explained" class="lw-dec__explain" role="status" aria-live="polite" data-test="explanation">
-            <div class="lw-tile__label">With {{ PLANS[explained.policy] }}</div>
+            <Tip text="Choosing a plan here only changes this explanation. It approves nothing.">
+              <div class="lw-tile__label">With {{ PLANS[explained.policy] }}</div>
+            </Tip>
             <p class="lw-dec__line">
               Lowest point {{ explained.min }}; safety minimum
               {{ explained.breached ? `broken in ${explained.breached} of ${explained.rows.length} what-ifs` : `kept in all ${explained.rows.length} what-ifs` }};
               {{ explained.unmet }} obligation{{ explained.unmet === 1 ? '' : 's' }} unmet; {{ explained.cost }}.
             </p>
-            <p class="lw-time">Choosing a plan here only changes this explanation. It approves nothing.</p>
           </div>
 
           <details class="lw-calc" data-test="timing">
             <summary>When the money moves</summary>
             <div class="lw-calc__body">
               <ol v-if="timing.length" class="lw-dec__timing">
-                <li v-for="t in timing" :key="t.key" :data-at="t.h"><strong>h{{ t.h }}</strong> · {{ t.what }}</li>
+                <li v-for="t in timing" :key="t.key" :data-at="t.h">
+                  <Tip :text="`Simulated hour ${t.h} from the snapshot's observation${t.ref ? ` · ${t.ref}` : ''}.`"><strong>h{{ t.h }}</strong></Tip>
+                  · {{ t.what }}
+                </li>
               </ol>
               <p v-else>The treasury read did not answer for this snapshot; timing is not shown.</p>
-              <p>Simulated hours from the snapshot's observation. The minimum is read from each branch's realised ledger.</p>
             </div>
           </details>
         </article>
@@ -79,10 +69,27 @@
 
       <section :aria-labelledby="search ? 'search-heading' : 'policies-heading'" class="lw-dec__policies"
                :data-test="search ? 'search' : 'policies'" :data-panel="search ? 'Search results' : 'Plans side by side'">
-        <h2 v-if="search" id="search-heading">{{ LABELS.search }}</h2>
-        <h2 v-else id="policies-heading">
-          Three plans side by side<template v-if="body.status === 'all_infeasible'"> · ranking shown, not executable</template>
-        </h2>
+        <div class="lw-dec__heading">
+          <h2 v-if="search" id="search-heading">{{ LABELS.search }}</h2>
+          <h2 v-else id="policies-heading">
+            Three plans side by side<template v-if="body.status === 'all_infeasible'"> · ranking shown, not executable</template>
+          </h2>
+          <HowWeKnow test="how-decisions">
+            <p class="lw-source" data-test="cohort">
+              Run {{ body.run_id }} · checkpoint round {{ body.checkpoint_round }} · cohort {{ body.cohort }} ·
+              {{ body.weight_kind }} · a scenario comparison, not a probability.
+            </p>
+            <p>Each plan faced the same shock in its own what-if; a count of what-ifs is a count, never odds.
+              <template v-if="family">Scenario family {{ family.id }}. </template>Every policy (no-action,
+              fixed-reserve, integrated) ran in a fresh branch from round {{ body.checkpoint_round }} of snapshot
+              {{ body.snapshot_id }}. The shortfall is No action's lowest minimum cash against the operating
+              account's reserve floor; its day is the first payment due on that account. The fee is the selected
+              policy's branch funding cost.</p>
+            <p v-if="replayed" data-test="replay">
+              Results marked Replay come from an earlier run of that branch, not from this session.
+            </p>
+          </HowWeKnow>
+        </div>
         <div class="lw-dec__rows" :role="search ? undefined : 'radiogroup'" :aria-labelledby="search ? undefined : 'policies-heading'">
           <article v-for="p in policies" :key="p.policy" class="lw-dec__row" :class="{ 'is-chosen': p.policy === chosen }"
                    :data-test="`policy-${p.policy}`">
@@ -90,16 +97,21 @@
               <input v-if="!search" type="radio" name="policy" :value="p.policy" :checked="p.policy === chosen"
                      :disabled="body.status === 'pending'" @change="chosen = p.policy">
               <span class="lw-dec__name">{{ PLANS[p.policy] }}</span>
-              <span v-if="body.selected === p.policy" class="lw-status lw-status--ok" data-test="selected">
-                <span aria-hidden="true">✓</span><span>Selected</span>
-              </span>
+              <Tip v-if="body.selected === p.policy" text="The comparison ranked this plan first. Selecting approves nothing.">
+                <span class="lw-status lw-status--ok" data-test="selected">
+                  <span aria-hidden="true">✓</span><span>Selected</span>
+                </span>
+              </Tip>
             </label>
             <dl class="lw-terms">
-              <dt>Obligations unmet</dt><dd>{{ p.unmet }}</dd>
+              <dt>Obligations unmet</dt>
+              <dd><Tip :text="`Payments missed, summed over ${p.rows.length} what-if${p.rows.length === 1 ? '' : 's'}.`">{{ p.unmet }}</Tip></dd>
               <dt>Safety minimum</dt>
-              <dd>{{ p.breached ? `broken in ${p.breached} of ${p.rows.length} what-ifs` : `kept in all ${p.rows.length} what-ifs` }}</dd>
-              <dt>Largest shortfall</dt><dd>{{ p.short }}</dd>
-              <dt>Fees across what-ifs</dt><dd data-test="cost">{{ p.cost }}</dd>
+              <dd><Tip text="Each what-if's own verdict on the operating account's reserve floor.">{{ p.breached ? `broken in ${p.breached} of ${p.rows.length} what-ifs` : `kept in all ${p.rows.length} what-ifs` }}</Tip></dd>
+              <dt>Largest shortfall</dt>
+              <dd><Tip :text="`The deepest gap below the reserve floor among the what-ifs that broke it; lowest point ${p.min}.`">{{ p.short }}</Tip></dd>
+              <dt>Fees across what-ifs</dt>
+              <dd data-test="cost"><Tip text="Each branch's scenario funding cost; the current plan's fee is set at review.">{{ p.cost }}</Tip></dd>
             </dl>
             <HowWeKnow :test="`how-${p.policy}`">
               <p data-test="weight">Policy {{ p.policy }} · {{ body.weight_kind }} · cohort {{ body.cohort }}</p>
@@ -120,29 +132,27 @@
             </HowWeKnow>
           </article>
         </div>
-        <p v-if="replayed" class="lw-note" data-test="replay">
-          Results marked Replay come from an earlier run of that branch, not from this session.
-        </p>
         <div class="lw-actions">
-          <button type="button" class="lw-button lw-button--quiet" data-test="compare-details" @click="details = true">
-            Compare the what-ifs in detail
-          </button>
+          <Tip text="One row per scenario and plan, from each branch's realised ledger.">
+            <button type="button" class="lw-button lw-button--quiet" data-test="compare-details" @click="details = true">
+              Compare the what-ifs in detail
+            </button>
+          </Tip>
+          <Tip v-if="routeExists(router, '/simulation')" text="The run these plans branched from, round by round.">
+            <RouterLink data-test="open-simulation"
+                        :to="{ path: '/simulation', query: { run_id: body.run_id } }">Open simulation</RouterLink>
+          </Tip>
         </div>
       </section>
     </div>
 
     <section class="lw-dec__review" aria-label="Review handoff" data-panel="Review the plan">
-      <p class="lw-source">
-        A what-if never approves anything: the chosen plan is worked out again on today's real
-        figures, and you check its terms before any money moves.
-      </p>
       <div class="lw-actions">
-        <RouterLink v-if="reviewable" class="lw-button" data-test="review-plan"
-                    :to="{ path: '/execution', query: { run_id: body.run_id, review: '1' } }">Review the plan</RouterLink>
         <RouterLink v-if="routeExists(router, '/execution')" class="lw-button lw-button--quiet"
                     data-test="view-execution"
                     :to="{ path: '/execution', query: { run_id: body.run_id } }">View execution</RouterLink>
       </div>
+      <p class="lw-time">Scenario counts are not probabilities. Selection creates no approval.</p>
     </section>
 
     <DetailSheet :open="details" title="Scenario details" test="details-sheet" @close="details = false">
@@ -168,6 +178,7 @@
         </table>
       </div>
     </DetailSheet>
+    </template>
   </ScreenShell>
 </template>
 
@@ -182,12 +193,14 @@
  */
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import Arrow from '../components/Arrow.vue'
 import DetailSheet from '../components/DetailSheet.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
+import Tip from '../components/Tip.vue'
 import { familyOf, observedBy, worldFor } from '../api/world.js'
 import {
-  FLOOR_WORDS, LABELS, OWED, PLAIN, PLANS, PLANS_DOING, STATES, ScreenShell, againstFloor, dayText,
-  feesAcross, formatMoney, getOverview, getTreasury, metricText, money, noDemoRun, request, routeExists, useReading
+  FLOOR_WORDS, LABELS, OWED, PLANS, PLANS_DOING, STATES, ScreenShell, againstFloor, dayText,
+  feesAcross, formatMoney, formatTime, getOverview, getTreasury, metricText, money, noDemoRun, request, routeExists, useReading
 } from '../api/v1.js'
 
 const ORDER = ['no-action', 'fixed-reserve', 'integrated']
@@ -345,6 +358,21 @@ const lead = computed(() => {
   return `${first} ${second}`.trim()
 })
 
+/** The hero's one line, in the mockup's words: what kind of comparison this is, and of which shock. */
+const subtitle = computed(() => {
+  if (search.value) return LABELS.search
+  const shock = family.value ? family.value.id.replace(/-/g, ' ').replace(/^./, (c) => c.toUpperCase()) : ''
+  const last = state.body?.status === 'pending' ? 'Still running' : 'Same shock for all plans'
+  return ['Hypothetical comparison', shock, last].filter(Boolean).join(' · ')
+})
+
+/** The floor's source, for the tooltip on the safety minimum. */
+const floorTip = computed(() => {
+  const a = account.value
+  if (!gap.value?.floor) return 'No reserve floor in this currency was read from the treasury.'
+  return `Reserve floor of ${a.id}, from the treasury read as of ${formatTime(state.body.treasury.as_of).utc}.`
+})
+
 const hoursAt = (asOf, at) => Math.round((Date.parse(at) - Date.parse(asOf)) / 3_600_000)
 const timed = (row) => Number.isFinite(row.h) // a time that does not parse is left out, never "hNaN"
 
@@ -358,18 +386,18 @@ const timing = computed(() => {
   const a = account.value
   if (!t || !a) return []
   const h0 = worldFor(t.snapshot_id)?.epoch ?? a.as_of
-  const rows = [{ key: 'cash', h: hoursAt(h0, a.as_of), what: `${a.buckets.settled ? money(a.buckets.settled) : 'Unknown'} settled cash observed on ${a.id}` }]
+  const rows = [{ key: 'cash', h: hoursAt(h0, a.as_of), what: `${a.buckets.settled ? money(a.buckets.settled) : 'Unknown'} settled cash observed`, ref: a.id }]
   for (const o of t.obligations.filter((x) => x.account === a.id)) {
-    rows.push({ key: `o:${o.obligation_id}`, h: hoursAt(h0, o.due_at), what: `${o.kind} ${money(o.amount)} due (${o.obligation_id})` })
+    rows.push({ key: `o:${o.obligation_id}`, h: hoursAt(h0, o.due_at), what: `${o.kind} ${money(o.amount)} due`, ref: o.obligation_id })
   }
   const delay = family.value?.params ?? {}
   for (const f of a.buckets.pending_in) {
     const h = hoursAt(h0, f.expected_at)
     if (delay.flow_id === f.flow_id && Number.isInteger(delay.delay_h)) {
       rows.push({ key: `f:${f.flow_id}`, h: h + delay.delay_h,
-        what: `${f.kind} ${money(f.amount)} arrives late in this scenario (h${h} + ${delay.delay_h} h)` })
+        what: `${f.kind} ${money(f.amount)} arrives late in this scenario`, ref: `h${h} + ${delay.delay_h} h · ${f.flow_id}` })
     } else {
-      rows.push({ key: `f:${f.flow_id}`, h, what: `${f.kind} ${money(f.amount)} arrives (${f.flow_id})` })
+      rows.push({ key: `f:${f.flow_id}`, h, what: `${f.kind} ${money(f.amount)} arrives`, ref: f.flow_id })
     }
   }
   return rows.filter(timed).sort((x, y) => x.h - y.h)
@@ -390,6 +418,15 @@ const details = ref(false)
 }
 
 .lw-dec > * { min-width: 0; }
+
+.lw-dec__heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lw-space-2);
+  align-items: center;
+}
+.lw-dec__heading h2 { margin: 0; }
+.lw-dec__policies .lw-dec__heading { margin-bottom: var(--lw-space-3); }
 
 .lw-dec__line { margin: var(--lw-space-2) 0; }
 

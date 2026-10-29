@@ -143,6 +143,13 @@ async function open (body, posts, { realGraph = false } = {}) {
 const mounted = []
 const text = (w, test) => w.get(`[data-test="${test}"]`).text().replace(/\s+/g, ' ')
 const disabled = (w, test) => w.get(`[data-test="${test}"]`).attributes('disabled') !== undefined
+/** The page is shown as loading: the shell marks its main region busy (there is no Refresh button). */
+const busy = (w) => w.get('main').attributes('aria-busy') === 'true'
+/** The tab becomes visible again: the shell re-reads, as the header's Refresh used to. */
+function backOnTab () {
+  Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  document.dispatchEvent(new Event('visibilitychange'))
+}
 const feedIds = (w) => w.findAll('[data-test="feed"] [data-id]').map((e) => e.attributes('data-id'))
 async function scrubTo (w, round) {
   await w.get(`[data-test="tick-${round}"]`).trigger('click')
@@ -168,7 +175,9 @@ describe('scrubber fixture', () => {
     expect(text(w, 'inspector')).toContain(`round ${r}`)
     expect(feedIds(w)).toContain(want.expect.feed_contains)
     expect(feedIds(w)).not.toContain(want.expect.feed_excludes)
-    expect(text(w, 'cash-value')).toBe(want.expect.capacity)
+    // the fixture names it as USD 42,000.00; the screen shows the mockups' figure (MATCH.md item 5)
+    expect(want.expect.capacity).toBe('USD 42,000.00')
+    expect(text(w, 'cash-value')).toBe('$42,000')
     expect(text(w, 'phase')).toContain(`showing round ${r}`)
     // the graph holds only what existed by round 4: the post, its author and borrower-c
     expect(w.get('[data-test="graph-panel"]').attributes('data-nodes')).toBe('3')
@@ -176,7 +185,7 @@ describe('scrubber fixture', () => {
 
   it('round 5 shows its own cash, not round 4\'s, and the lender acted', async () => {
     const { wrapper: w } = await open(run())
-    expect(text(w, 'cash-value')).toBe('USD 30,000.00')
+    expect(text(w, 'cash-value')).toBe('$30,000')
     expect(feedIds(w)).toEqual(scrubber.rounds[2].feed_ids)
     expect(text(w, 'inspector')).toContain('lender · acted this round')
   })
@@ -232,9 +241,11 @@ describe('scrubber fixture', () => {
     expect(w.find('[data-test="tick-6"]').exists()).toBe(false)
     expect(feedIds(w)).not.toContain('i-r6-partial') // partial_journal_visible: false
     expect(disabled(w, 'fork')).toBe(true)
-    const gets = calls.length
+    // the run is polled once per tick; the unanswered treasury read beside it is retried, not counted
+    const runGets = () => calls.filter((c) => c.method === 'GET' && c.path === `/runs/${ctx.run_id}`).length
+    const gets = runGets()
     await vi.advanceTimersByTimeAsync(4000)
-    expect(calls.length).toBe(gets + 1)
+    expect(runGets()).toBe(gets + 1)
   })
 
   it('invalid: the branch is labelled invalid and fork and compare are disabled', async () => {
@@ -255,8 +266,14 @@ describe('scrubber fixture', () => {
     const { wrapper: w } = await open(run(want.change))
     const label = want.expect.label_in_header_and_export
     expect(text(w, 'source').startsWith(`${label} ·`)).toBe(true)
-    expect(text(w, 'feed-replay')).toBe(label)
-    expect(text(w, 'cash-replay')).toBe(label)
+    // the Replay label sits in each feed item's and each cash value's tooltip (MATCH.md item 4)
+    const feedTips = w.findAll('[data-test="feed"] [role="tooltip"]').map((t) => t.text())
+      .filter((t) => t.startsWith('i-') || t.startsWith('p-')) // each item's own tip, not its verdict's
+    expect(feedTips.length).toBeGreaterThan(0)
+    expect(feedTips.every((t) => t.endsWith(` · ${label}`))).toBe(true)
+    const cashTips = w.findAll('[data-test="cash"] [role="tooltip"]').map((t) => t.text())
+    expect(cashTips.length).toBeGreaterThan(0)
+    expect(cashTips.every((t) => t.includes(` · ${label} · `))).toBe(true)
     expect(text(w, 'replay-note')).toContain('replayed, not run fresh') // counts_as_fresh_branch: false
     const exported = JSON.parse(decodeURIComponent(w.get('[data-test="export"]').attributes('href').split(',').slice(1).join(',')))
     expect(exported.label).toBe(label)
@@ -266,8 +283,8 @@ describe('scrubber fixture', () => {
 
   it('a fresh branch carries no Replay label anywhere', async () => {
     const { wrapper: w } = await open(run())
-    expect(w.find('[data-test="feed-replay"]').exists()).toBe(false)
-    expect(w.find('[data-test="cash-replay"]').exists()).toBe(false)
+    expect(w.findAll('[data-test="feed"] [role="tooltip"]').some((t) => t.text().includes('Replay'))).toBe(false)
+    expect(w.findAll('[data-test="cash"] [role="tooltip"]').some((t) => t.text().includes('Replay'))).toBe(false)
     expect(text(w, 'source')).toBe(`Hypothetical branch ${ctx.branch_id}`)
   })
 
@@ -277,13 +294,13 @@ describe('scrubber fixture', () => {
     const { wrapper: w, calls } = await open(run(), { [`/runs/${ctx.run_id}/fork`]: accepted })
     await scrubTo(w, want.select_round)
     expect(disabled(w, 'fork')).toBe(true)
-    expect(text(w, 'fork-why')).toBe('Enter operator access to fork')
+    expect(text(w, 'fork-why')).toBe('Enter operator access to fork.')
     await w.get('[data-test="token"]').setValue('demo-token-for-test')
-    expect(text(w, 'fork')).toBe(want.action)
-    expect(text(w, 'fork-what')).toContain(`Forks ${want.expect.payload_parent_branch} at round ${want.expect.payload_round}`)
+    expect(text(w, 'fork')).toBe('Try the plans on this shock') // the fixture's "Fork this checkpoint", in COPY.md's words
+    expect(text(w, 'fork-what')).toContain(`from round ${want.expect.payload_round}`)
     await w.get('[data-test="fork"]').trigger('click')
     // Fork asks first, naming the checkpoint and the policies; nothing is sent before Confirm
-    expect(text(w, 'fork-confirm-panel')).toContain(`at committed round ${want.expect.payload_round} into no-action, fixed-reserve, integrated`)
+    expect(text(w, 'fork-confirm-panel')).toContain(`Forks ${want.expect.payload_parent_branch} at committed round ${want.expect.payload_round} into no-action, fixed-reserve, integrated`)
     await flushPromises()
     expect(calls.some((c) => c.method === 'POST')).toBe(false)
     await w.get('[data-test="fork-confirm"]').trigger('click')
@@ -294,7 +311,8 @@ describe('scrubber fixture', () => {
     expect(posts[0].body).toEqual({ checkpoint_round: want.expect.payload_round, policies: ['no-action', 'fixed-reserve', 'integrated'] })
     expect(posts[0].headers.Authorization).toBe('Bearer demo-token-for-test')
     expect(calls.some((c) => c.path.startsWith('/approvals'))).toBe(want.expect.creates_approval)
-    expect(text(w, 'forked')).toContain('round 4: b-1, b-2, b-3')
+    expect(text(w, 'forked')).toContain('Fork accepted at round 4')
+    expect(w.get('[data-test="forked"] [role="tooltip"]').text()).toBe('Branches: b-1, b-2, b-3')
     expect(w.html()).not.toContain('demo-token-for-test')
   })
 
@@ -307,7 +325,7 @@ describe('scrubber fixture', () => {
     await scrubTo(w, want.select_round)
     await w.get(`[data-actor="${want.select_actor}"]`).trigger('click')
     await w.get('[data-test="question"]').setValue('Why did you ask for an advance?')
-    expect(text(w, 'interview-why')).toBe('Enter operator access to interview')
+    expect(text(w, 'interview-why')).toBe('Enter operator access to interview.')
     await w.get('[data-test="token"]').setValue('demo-token-for-test')
     await w.get('[data-test="interview"]').trigger('submit')
     await flushPromises()
@@ -316,7 +334,8 @@ describe('scrubber fixture', () => {
     expect(posts[0].body).toMatchObject({ run_id: ctx.run_id, branch_id: ctx.branch_id,
       round: want.expect.payload_round, actor_id: want.select_actor })
     expect(posts[0].headers.Authorization).toBe('Bearer demo-token-for-test')
-    expect(text(w, 'answer')).toContain(`Read-only answer · ${want.select_actor} at round ${want.expect.payload_round}`)
+    expect(text(w, 'answer')).toContain(`${want.select_actor} at round ${want.expect.payload_round}`)
+    expect(w.get('[data-test="answer"] [role="tooltip"]').text()).toBe(`Read-only answer · branch ${ctx.branch_id}`)
     expect(want.expect.read_only).toBe(reply.read_only)
   })
 
@@ -327,8 +346,8 @@ describe('scrubber fixture', () => {
     expect(text(w, 'feed-unloaded')).toBe(want.expect.label)
     expect(text(w, 'cash-unloaded')).toBe(want.expect.label)
     expect(feedIds(w)).toEqual([])
-    expect(w.text()).not.toContain('USD 30,000.00') // substitute_latest: false
-    expect(w.text()).not.toContain('USD 42,000.00')
+    expect(w.text()).not.toContain('$30,000') // substitute_latest: false
+    expect(w.text()).not.toContain('$42,000')
     expect(w.find('[data-test="export"]').exists()).toBe(false)
     expect(disabled(w, 'fork')).toBe(true)
   })
@@ -365,8 +384,8 @@ describe('review findings, each pinned', () => {
     expect(disabled(w, 'fork')).toBe(false)
     await router.push('/simulation?run_id=run-other') // its GET has no answer: it fails
     await flushPromises()
-    expect(text(w, 'fork-why')).toBe('Not current: load this run first')
-    expect(text(w, 'interview-why')).toBe('Not current: load this run first')
+    expect(text(w, 'fork-why')).toBe('Not current: load this run first.')
+    expect(text(w, 'interview-why')).toBe('Not current: load this run first.')
   })
 
   it('an interview answered after the run changed is not shown under the new run', async () => {
@@ -402,7 +421,7 @@ describe('review findings, each pinned', () => {
     await w.get('[data-test="question"]').setValue('Why?')
     expect(disabled(w, 'ask')).toBe(false)
     await scrubTo(w, 4)
-    expect(text(w, 'interview-why')).toBe('lender has not acted by round 4')
+    expect(text(w, 'interview-why')).toBe('lender has not acted by round 4.')
     expect(disabled(w, 'ask')).toBe(true)
   })
 
@@ -415,7 +434,7 @@ describe('review findings, each pinned', () => {
     const { wrapper: w } = await open(() => (++gets === 1 ? body : slow.promise))
     const shown = graphs[graphs.length - 1]
     await vi.advanceTimersByTimeAsync(4000) // the poll is in flight
-    expect(disabled(w, 'refresh')).toBe(false)
+    expect(busy(w)).toBe(false)
     expect(disabled(w, 'play')).toBe(false)
     slow.resolve(body)
     await flushPromises()
@@ -429,7 +448,7 @@ describe('review findings, each pinned', () => {
     const { wrapper: w } = await open(body)
     await scrubTo(w, 4)
     expect(text(w, 'cursor')).toBe('Round 4 of 5 · simulated t=17 h')
-    expect(text(w, 'cash-value')).toBe('USD 42,000.00')
+    expect(text(w, 'cash-value')).toBe('$42,000')
     await scrubTo(w, 2)
     expect(text(w, 'cursor')).toBe('Round 2 of 5 · simulated time not loaded')
   })
@@ -481,14 +500,14 @@ describe('review findings, each pinned', () => {
     let gets = 0
     const { wrapper: w } = await open(() => [body, poll.promise, reload.promise][Math.min(gets++, 2)])
     await vi.advanceTimersByTimeAsync(4000) // the poll is in flight
-    expect(disabled(w, 'refresh')).toBe(false)
+    expect(busy(w)).toBe(false)
     await w.get('[data-test="graph-refresh"]').trigger('click') // the operator reloads
     await flushPromises()
-    expect(disabled(w, 'refresh')).toBe(true)
+    expect(busy(w)).toBe(true)
     poll.resolve(body)
     reload.resolve(body)
     await flushPromises()
-    expect(disabled(w, 'refresh')).toBe(false)
+    expect(busy(w)).toBe(false)
   })
 })
 
@@ -618,7 +637,7 @@ describe('an accepted fork is followed until its branches arrive or it fails', (
     const { wrapper: w, calls } = await forkAt4(() => (finished ? withChildren(run()) : run()),
       () => { finished = true; return decisions('selected') }, () => answer)
     expect(disabled(w, 'fork')).toBe(true)
-    expect(text(w, 'fork-why')).toBe('A fork is running: fork again once its branches arrive')
+    expect(text(w, 'fork-why')).toBe('A fork is running: fork again once its branches arrive.')
     await vi.advanceTimersByTimeAsync(4000)
     expect(text(w, 'forked')).toContain('branches and cash paths loaded')
     expect(disabled(w, 'fork')).toBe(false)
@@ -664,9 +683,10 @@ describe('the real graph view', () => {
     const { wrapper: w, calls } = await open(run(), undefined, { realGraph: true })
     const drawn = circles(w)
     expect(drawn).toBeGreaterThan(0)
-    await w.get('[data-test="refresh"]').trigger('click')
+    backOnTab()
     await flushPromises()
-    expect(calls.filter((c) => c.method === 'GET').length).toBe(2)
+    // two reads of the run; the treasury beside it is unanswered here, so it is read again each time
+    expect(calls.filter((c) => c.method === 'GET' && c.path === `/runs/${ctx.run_id}`).length).toBe(2)
     expect(circles(w)).toBe(drawn)
   })
 })

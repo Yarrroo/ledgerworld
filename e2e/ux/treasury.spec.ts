@@ -8,14 +8,14 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
-import { demoRunId, settled, sideways } from './routes'
+import { crumb, demoRunId, settled, sideways } from './routes'
 
 const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 
 async function open (page: Page): Promise<void> {
   await page.goto('/treasury')
   await settled(page)
-  await expect(page.locator('h1')).toHaveText('Treasury')
+  await expect(crumb(page)).toHaveText('Treasury')
   await expect($(page, 'error')).toHaveCount(0)
 }
 
@@ -41,9 +41,10 @@ test('T1–T3: the selected account drives buckets, S and its calculation togeth
     await $(page, `account-${account.id}`).click()
     await expect($(page, `account-${account.id}`).getByRole('radio')).toBeChecked()
     await expect(page.locator('.lw-tre')).toHaveAttribute('data-account', account.id)
-    // S is the API's, in the account's own currency
+    // S is the API's, in the account's own currency ("$70,000"); the account id is in its (i)
     await expect($(page, 'spendable')).toContainText(account.id)
-    await expect($(page, 'spendable').locator('.lw-figure')).toHaveText(new RegExp(`^${account.currency} |^Unknown$`))
+    const sign = ({ USD: '\\$', EUR: '€', GBP: '£' } as Record<string, string>)[account.currency] ?? `${account.currency} `
+    await expect($(page, 'spendable').locator('.lw-figure')).toHaveText(new RegExp(`^-?${sign}\\d|^Unknown$`))
     await $(page, 'spend-calc').locator('summary').click()
     await expect($(page, 'spend-calculation')).toContainText(`S(now) in ${account.currency}`)
     await expect($(page, 'spend-calculation')).toContainText('(API)')
@@ -119,7 +120,9 @@ test('T5: the chart and the table share the API points; a point shows P at that 
     await expect(points.nth(i)).toHaveAttribute('data-t', known[i].t)
   }
   await expect($(page, 'floor-status')).toHaveText(/[A-Za-z]/)
-  await expect($(page, 'coverage')).toContainText('not spendable now')
+  // the lowest point is projected cash P, not spendable S (the label's old "not spendable now" is in its tooltip)
+  await expect($(page, 'coverage')).toContainText('Lowest point ahead')
+  await expect($(page, 'coverage').locator('[role="tooltip"]').first()).toContainText('Lowest projected cash P')
 
   // keyboard: focus a chart point, its instant's terms are announced
   const last = points.last()
@@ -156,6 +159,6 @@ test('T6: Rehearse a cash shock carries the account and snapshot to the prepared
   expect(query.get('account')).toBe(account)
   expect(query.get('snapshot')).toBe(api.snapshot_id)
   await settled(page)
-  await expect(page.locator('h1')).toHaveText('Live simulation')
+  await expect(crumb(page)).toHaveText('Simulation')
   expect(writes).toEqual([])
 })

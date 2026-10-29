@@ -1,43 +1,51 @@
 <template>
-  <ScreenShell title="Live simulation" :reading="shellReading" :refresh="reload">
+  <ScreenShell title="Simulation" headline="See the crisis before it spreads." :subtitle="subtitle" :lead="lead"
+               :reading="shellReading" :refresh="reload">
+    <template #action>
+      <RouterLink v-if="compareTarget" class="lw-button" :to="compareTarget" data-test="compare">
+        Compare policies<Arrow />
+      </RouterLink>
+      <Tip v-else :text="compareWhy" test="compare-why">
+        <button type="button" class="lw-button" disabled data-test="compare">Compare policies</button>
+      </Tip>
+    </template>
+    <template #default>
     <div class="lw-live" :class="{ 'is-graph-expanded': graphExpanded }">
       <section class="lw-sim__context" aria-labelledby="run-heading" data-panel="The what-if" data-test="run-context">
         <h2 id="run-heading" class="lw-visually-hidden">Run and scenario context</h2>
-        <p class="lw-lead" data-test="lead">{{ lead }}</p>
-        <div class="lw-labels" data-test="labels">
-          <span v-if="body" class="lw-tag" data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span>
-          <span class="lw-tag" data-test="hypothetical">{{ PLAIN.branch }}</span>
-          <span v-if="base.replay" class="lw-tag">Replay</span>
-        </div>
         <HowWeKnow test="how-run">
           <dl>
             <div><dt>Run</dt><dd data-test="run-id">{{ body?.run_id ?? runId ?? '–' }}</dd></div>
-            <div><dt>Branch</dt><dd>{{ base.branch_id ?? '–' }}</dd></div>
+            <div><dt>Branch</dt><dd>{{ base.branch_id ?? '–' }} · <span data-test="hypothetical">{{ PLAIN.branch }}</span></dd></div>
             <div><dt>Checkpoint</dt><dd>{{ checkpoints }}</dd></div>
             <div><dt>Scenario</dt><dd data-test="family">{{ family ? family.id : 'not named by this run' }}</dd></div>
             <div><dt>Provenance</dt><dd>{{ provenance(base.replay) }}</dd></div>
-            <div><dt>Mode</dt><dd>{{ body ? (LABELS[body.mode] || body.mode) : '–' }}</dd></div>
+            <div><dt>Mode</dt><dd>{{ body ? (LABELS[body.mode] || body.mode) : '–' }}<template v-if="body">
+              · <span data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span></template></dd></div>
           </dl>
           <p>The amount in the sentence above is the treasury's pending flow the scenario family delays
             ({{ family?.params.flow_id ?? 'none named' }}), read from the treasury on this run's snapshot;
             the delay is the family's delay_h.</p>
+          <p v-if="handoff" data-test="handoff">{{ handoff }}</p>
         </HowWeKnow>
-        <p v-if="handoff" class="lw-live__note lw-sim__handoff" data-test="handoff">{{ handoff }}</p>
         <button type="button" class="lw-button lw-button--quiet" data-test="settings" @click="settingsOpen = true">
           Scenario settings
         </button>
       </section>
 
       <section class="lw-live-panel lw-live__controls" aria-label="Round and controls" data-test="controls" data-panel="Round and controls">
-        <p class="lw-live__phase" :class="`is-${phase.tone}`" role="status" data-test="phase">
-          {{ phase.icon }} {{ phase.text }}
-        </p>
-        <p v-if="base.replay" class="lw-live__phase" data-test="replay-note">
-          <span class="lw-live-tag">Replay</span> these rounds were replayed, not run fresh
-        </p>
+        <Tip test="phase-tip">
+          <div class="lw-live__phase" :class="`is-${phase.tone}`" role="status" data-test="phase">
+            {{ phase.icon }} {{ phase.text }}
+          </div>
+          <template #tip>
+            <span>Branch {{ base.branch_id ?? '–' }} · {{ PLAIN.branch }}.</span>
+            <span v-if="base.replay" data-test="replay-note"> {{ PLAIN.replay }}: these rounds were replayed, not run fresh.</span>
+          </template>
+        </Tip>
         <Scrubber :model-value="display" :rounds="ticks" :loaded="loadedRounds" :t-hours="current?.t_hours ?? null"
+                  :hint="`Round n is simulated hour ${ROUND_HOURS}n. ←/→ step, Home and End jump; moving the cursor never creates a financial action.`"
                   @update:model-value="scrub" />
-        <p class="lw-live__note">Round n is simulated hour {{ ROUND_HOURS }}n. ←/→ step, Home and End jump; moving the cursor never creates a financial action.</p>
         <div class="lw-live__row">
           <button type="button" class="lw-button" data-test="play" :disabled="!ticks.length"
                   @click="playing ? pause() : play()">
@@ -50,41 +58,42 @@
 
         <div class="lw-live__row lw-sim__access">
           <label class="lw-live__token">
-            <span>Operator access (kept in this tab's memory only)</span>
-            <input v-model="token" type="password" autocomplete="off" spellcheck="false" data-test="token">
+            <span>Operator access</span>
+            <Tip text="Kept in this tab's memory only: never stored, never in the URL or the export.">
+              <input v-model="token" type="password" autocomplete="off" spellcheck="false" data-test="token">
+            </Tip>
           </label>
           <button v-if="token" type="button" class="lw-button lw-button--quiet" data-test="forget" @click="token = ''">
             Forget access
           </button>
         </div>
         <div class="lw-live__row">
-          <button type="button" class="lw-button" data-test="fork" :disabled="Boolean(forkWhy)"
-                  :aria-describedby="forkWhy ? 'fork-why' : undefined" :aria-expanded="confirming ? 'true' : 'false'"
-                  @click="confirming = true">
-            Try the plans on this shock
-          </button>
-          <RouterLink v-if="compareTarget" class="lw-button lw-button--quiet" :to="compareTarget"
-                      data-test="compare">Compare policies</RouterLink>
-          <button v-else type="button" class="lw-button lw-button--quiet" disabled data-test="compare"
-                  :aria-describedby="'compare-why'">Compare policies</button>
+          <Tip test="fork-tip">
+            <button type="button" class="lw-button" data-test="fork" :disabled="Boolean(forkWhy)"
+                    :aria-expanded="confirming ? 'true' : 'false'" @click="confirming = true">
+              Try the plans on this shock
+            </button>
+            <template #tip>
+              <span data-test="fork-what">Tries each plan from round {{ display ?? '–' }} in its own what-if; approves nothing.</span>
+              <span v-if="forkWhy" data-test="fork-why"> {{ forkWhy }}.</span>
+            </template>
+          </Tip>
         </div>
         <div v-if="confirming && !forkWhy" class="lw-sim__confirm" role="group" aria-label="Confirm the fork" data-test="fork-confirm-panel">
           <p>Try {{ listWords(POLICIES.map((p) => PLANS[p])) }} from round {{ display }}, each in its own
             fresh what-if. It creates no approval and moves no money.</p>
-          <p class="lw-live__note">Forks {{ base.branch_id }} at committed round {{ display }} into {{ POLICIES.join(', ') }}.</p>
           <div class="lw-live__row">
-            <button type="button" class="lw-button" data-test="fork-confirm" @click="confirmFork">Try the plans</button>
+            <Tip :text="`Forks ${base.branch_id} at committed round ${display} into ${POLICIES.join(', ')}.`">
+              <button type="button" class="lw-button" data-test="fork-confirm" @click="confirmFork">Try the plans</button>
+            </Tip>
             <button type="button" class="lw-button lw-button--quiet" data-test="fork-cancel" @click="confirming = false">Cancel</button>
           </div>
         </div>
-        <p class="lw-live__note" data-test="fork-what">
-          Tries each plan from round {{ display ?? '–' }} in its own what-if; approves nothing.
-        </p>
-        <p v-if="forkWhy" id="fork-why" class="lw-live__note" data-test="fork-why">{{ forkWhy }}</p>
-        <p v-if="!compareTarget" id="compare-why" class="lw-live__note" data-test="compare-why">{{ compareWhy }}</p>
         <p v-if="forked" class="lw-live__note" role="status" data-test="forked">
-          Fork accepted at round {{ forked.round }}: {{ forked.branch_ids.join(', ') }} ·
-          {{ forked.done ? 'branches and cash paths loaded' : 'running; its branches appear here when it finishes' }}
+          <Tip :text="`Branches: ${forked.branch_ids.join(', ') || 'none named yet'}`">
+            Fork accepted at round {{ forked.round }} ·
+            {{ forked.done ? 'branches and cash paths loaded' : 'running; its branches appear here when it finishes' }}
+          </Tip>
         </p>
         <p v-if="forked?.lag" class="lw-live__note" role="status" data-test="fork-lag">
           Fork progress not read: {{ forked.lag }}; still checking
@@ -105,11 +114,13 @@
           <p v-if="!current" class="lw-live-empty">Round not loaded</p>
           <ul v-else class="lw-live__actors" aria-label="Actors, the keyboard way to the map">
             <li v-for="a in actors" :key="a.id">
-              <button type="button" class="lw-button lw-button--quiet" :aria-pressed="a.id === actor ? 'true' : 'false'"
-                      :data-actor="a.id" @click="selectActor(a.id)">
-                <span>{{ a.name }}</span>
-                <span class="lw-sim__actor-id">{{ a.id }}<template v-if="a.active"> · acted this round</template></span>
-              </button>
+              <Tip :text="`${a.id}${a.active ? ' · acted this round' : ''}`">
+                <button type="button" class="lw-button lw-button--quiet" :aria-pressed="a.id === actor ? 'true' : 'false'"
+                        :data-actor="a.id" @click="selectActor(a.id)">
+                  <span>{{ a.name }}</span>
+                  <span v-if="a.active" class="lw-sim__actor-id">acted this round</span>
+                </button>
+              </Tip>
             </li>
           </ul>
 
@@ -140,19 +151,25 @@
             </article>
             <form class="lw-live__interview" data-test="interview" @submit.prevent="interview">
               <label>
-                <span>Ask {{ actor ? nameOf(actor) : 'an actor' }} about round {{ display ?? '–' }} (read-only)</span>
+                <span>Ask {{ actor ? nameOf(actor) : 'an actor' }} about round {{ display ?? '–' }}</span>
                 <textarea v-model="question" rows="2" maxlength="2000" data-test="question" />
               </label>
-              <button type="submit" class="lw-button" :disabled="Boolean(interviewWhy)" data-test="ask">
-                Interview
-              </button>
-              <p v-if="interviewWhy" class="lw-live__note" data-test="interview-why">{{ interviewWhy }}</p>
+              <Tip test="ask-tip">
+                <button type="submit" class="lw-button" :disabled="Boolean(interviewWhy)" data-test="ask">
+                  Interview
+                </button>
+                <template #tip>
+                  <span>Read-only: the answer changes nothing.</span>
+                  <span v-if="interviewWhy" data-test="interview-why"> {{ interviewWhy }}.</span>
+                </template>
+              </Tip>
             </form>
             <p v-if="interviewError" class="lw-alert" role="alert" data-test="interview-error">{{ interviewError }}</p>
             <article v-if="answer" class="lw-live__answer" data-test="answer">
               <p class="lw-live__note">
-                Read-only answer · {{ nameOf(answer.actor_id) }} at round {{ answer.round }} · {{ answer.branch_id }}
-                <span v-if="answer.replay" class="lw-live-tag">Replay</span>
+                <Tip :text="`Read-only answer · branch ${answer.branch_id}${answer.replay ? ` · ${PLAIN.replay}` : ''}`">
+                  {{ nameOf(answer.actor_id) }} at round {{ answer.round }}
+                </Tip>
               </p>
               <p>{{ answer.answer }}</p>
               <HowWeKnow v-if="answer.evidence_ids.length" test="how-answer">
@@ -163,7 +180,7 @@
         </div>
 
         <div class="lw-sim__map">
-          <h2>World map · round {{ display ?? '–' }} <span class="lw-live-tag">{{ PLAIN.branch }}</span></h2>
+          <h2>World map · round {{ display ?? '–' }}</h2>
           <WorldMap :nodes="worldMap.nodes" :edges="worldMap.edges" :selected="mapSelected" :focus="actor"
                     label="Actors and their typed relationships at the selected round"
                     :empty="current ? 'No actor to draw' : 'Round not loaded'" @select="pickMap" />
@@ -200,12 +217,13 @@
         </li>
       </ol>
     </DetailSheet>
+    </template>
   </ScreenShell>
 </template>
 
 <script setup>
 /**
- * Live simulation (system brief §11–13, ui HANDOFF Simulation row, fixture scrubber.json).
+ * Simulation (system brief §11–13, ui HANDOFF Simulation row, fixture scrubber.json).
  *
  * One committed-round cursor drives the cash paths, the action feed, the graph and the actor
  * inspector. Only rounds 1..committed_round enter the scrubber; a round the API did not return
@@ -224,6 +242,8 @@ import ActionFeed from '../components/ActionFeed.vue'
 import CashPaths from '../components/CashPaths.vue'
 import DetailSheet from '../components/DetailSheet.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
+import Tip from '../components/Tip.vue'
+import Arrow from '../components/Arrow.vue'
 import WorldMap from '../components/WorldMap.vue'
 import { FAMILIES, ROUND_HOURS, familyOf, observedBy, worldFor } from '../api/world.js'
 import {
@@ -364,6 +384,13 @@ const lead = computed(() => {
     return `What if your ${what} arrives ${hoursWords(f.params.delay_h)} late? ${RIPPLE}`
   }
   return `What if the ${f.id.replace(/-/g, ' ')} shock hits? ${RIPPLE}`
+})
+
+/** The hero's one line: the branch this screen plays and the scenario family it names. */
+const subtitle = computed(() => {
+  const f = family.value
+  const name = f ? f.id.replace(/[-_]/g, ' ').replace(/^./, (c) => c.toUpperCase()) : ''
+  return [base.value.replay && PLAIN.replay, `${PLAIN.branch} branch`, name].filter(Boolean).join(' · ')
 })
 
 /** What a handoff from Treasury (account, snapshot) or Lending (scenario) carried, said back. */
@@ -800,7 +827,7 @@ async function checkFork () {
         f.done = f.branch_ids.every((id) => arrived(id, f.round))
         if (!f.done && ++f.reads >= FORK_RUN_READS) {
           forked.value = null
-          forkError.value = 'Fork decided, but its branches have not reached the run: Refresh, or fork again'
+          forkError.value = 'Fork decided, but its branches have not reached the run: reload the page, or fork again'
         }
       }
     }
@@ -961,20 +988,6 @@ const exportHref = computed(() => {
   color: var(--lw-ink);
 }
 
-.lw-live :deep(.lw-live-tag) {
-  display: inline-block;
-  padding: 0 var(--lw-space-2);
-  border: 1px solid var(--lw-warn);
-  border-radius: var(--lw-radius);
-  color: var(--lw-warn-text);
-  font-family: var(--lw-font-text);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 20px;
-  text-transform: uppercase;
-  vertical-align: middle;
-}
-
 .lw-live :deep(.lw-live-empty),
 .lw-live__note {
   margin: var(--lw-space-2) 0 0;
@@ -993,13 +1006,8 @@ const exportHref = computed(() => {
   align-items: center;
   justify-content: space-between;
   padding: var(--lw-space-3) 0;
-  border-top: 1px solid var(--lw-rule);
   border-bottom: 1px solid var(--lw-rule);
 }
-
-/* the lead and its labels take the row; How we know and the settings share the next one */
-.lw-sim__context > .lw-lead,
-.lw-sim__context > .lw-labels { flex: 1 0 100%; margin-bottom: 0; }
 
 .lw-sim__context dl {
   display: flex;

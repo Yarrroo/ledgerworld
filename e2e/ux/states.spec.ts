@@ -10,11 +10,16 @@
  */
 import { expect, test, type Page, type Route as Fulfil } from '@playwright/test'
 import { readOnly } from '../guard'
-import { ROUTES, demoRunId, settled, sideways, urlOf } from './routes'
+import { ROUTES, crumb, demoRunId, settled, sideways, urlOf } from './routes'
 
 const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 const API = '**/api/v1/**'
 const UTC = /\d{4}-\d\d-\d\d \d\d:\d\d UTC/
+const bubble = (tip: ReturnType<Page['locator']>) => tip.locator(':scope > [role="tooltip"]')
+/** The screen's content below the hero: its sections. */
+const panels = (page: Page) => page.locator('main.lw-main section')
+/** The tab comes back into view: a screen reads again (there is no Refresh button). */
+const readAgain = (page: Page) => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
 
 /** The drawer is open on a phone, so the six links are on screen. */
 async function showNav (page: Page): Promise<void> {
@@ -46,22 +51,22 @@ test('loading: skeletons and a polite Loading in place of amounts; navigation st
   for (const route of ROUTES) {
     await page.goto(urlOf(route, runId))
     await expect(page.locator('main.lw-main')).toHaveAttribute('aria-busy', 'true')
-    await expect(page.locator('h1')).toHaveText(route.title)
+    await expect(crumb(page)).toHaveText(route.title)
+    await expect(page.locator('h1')).toHaveText(route.headline)
     const loading = $(page, 'loading')
     await expect(loading).toHaveText(`Loading ${route.title}…`)
     await expect(loading).toHaveAttribute('role', 'status')
     await expect($(page, 'skeleton').locator('.lw-skeleton')).toHaveCount(8)
     await expect(page.locator('main .lw-figure')).toHaveCount(0)
-    await expect(page.locator('main')).not.toContainText(/USD|\d+[.,]\d\d/)
-    await expect($(page, 'refresh')).toBeDisabled()
-    await expect($(page, 'mode')).toHaveText('Bank connection not loaded')
+    await expect(page.locator('main')).not.toContainText(/\$\d|USD|\d+[.,]\d\d/)
+    await expect($(page, 'mode')).toHaveText(/^Provider not loaded/)
     expect(await sideways(page), `${route.path} scrolls sideways while loading`).toBeLessThanOrEqual(0)
   }
   // navigation is not held by a read in flight
   await showNav(page)
   await page.locator('nav.lw-nav').getByRole('link', { name: 'Overview', exact: true }).click()
   await expect(page).toHaveURL(/\/overview$/)
-  await expect(page.locator('h1')).toHaveText('Overview')
+  await expect(crumb(page)).toHaveText('Overview')
   expect(writes).toEqual([])
 })
 
@@ -72,7 +77,7 @@ test('no prepared run: every screen explains the absence, nothing pretends to op
 
   await page.goto('/overview')
   await settled(page)
-  await expect($(page, 'explore-why')).toHaveText('No demonstration run is prepared')
+  await expect(bubble($(page, 'explore-why'))).toHaveText('No demonstration run is prepared')
   await expect($(page, 'open-simulation')).toBeDisabled()
   await expect($(page, 'preview-scenario')).toBeDisabled()
 
@@ -84,20 +89,19 @@ test('no prepared run: every screen explains the absence, nothing pretends to op
   await page.goto('/lending')
   await settled(page)
   await expect($(page, 'rehearse-freeze')).toBeDisabled()
-  await expect($(page, 'freeze-why')).toHaveText(/\w/)
+  await expect(bubble($(page, 'freeze-why'))).toHaveText(/\w/)
 
   for (const route of ROUTES.filter((r) => r.run)) {
     await page.goto(route.path)
     await settled(page)
-    await expect(page.locator('h1')).toHaveText(route.title)
+    await expect(crumb(page)).toHaveText(route.title)
     const empty = $(page, 'empty')
-    await expect(empty.locator('h2')).toHaveText('No prepared run')
-    await expect(empty).toContainText('No demonstration run is prepared')
-    await expect(empty).toContainText(`${route.title} reads a prepared run`)
+    await expect(empty.locator('h2')).toHaveText('No prepared run yet')
+    await expect(empty).toContainText(`${route.title} reads a prepared run, and there is none`)
     await expect($(page, 'error')).toHaveCount(0) // an absence, not a failure
     await expect(page.locator('main [data-panel], main svg, main canvas')).toHaveCount(0) // no fabricated chart
-    await expect(page.locator('main')).not.toContainText(/USD|\d+[.,]\d\d/)
-    await expect($(page, 'refresh')).toHaveText('Refresh')
+    await expect(page.locator('main')).not.toContainText(/\$\d|USD|\d+[.,]\d\d/)
+    await expect($(page, 'empty-overview')).toBeVisible() // the one action that fixes it
     expect(await sideways(page), `${route.path} scrolls sideways`).toBeLessThanOrEqual(0)
   }
   await $(page, 'empty-overview').click()
@@ -121,15 +125,16 @@ test('Overview: known zero, Unknown, Not assessed and Stale stay distinct, with 
   await page.goto('/overview')
   await settled(page)
 
-  const line = (key: string) => $(page, key).locator('.lw-ov-metric__pick > .lw-time')
-  await expect($(page, 'settled').locator('.lw-figure')).toHaveText(`${c} 0.00`) // a known zero
+  // each figure's state is the last line of its tooltip
+  const line = (key: string) => $(page, `tip-${key}`).locator('.lw-ov-tipline').last()
+  await expect($(page, 'settled').locator('.lw-figure')).toHaveText('$0') // a known zero
   await expect(line('settled')).toHaveText(new RegExp(`^● Known as of ${UTC.source}$`))
   await expect($(page, 'spendable').locator('.lw-figure')).toHaveText('Unknown')
   await expect(line('spendable')).toHaveText('? Unknown')
   await expect($(page, 'coverage').locator('.lw-figure')).toHaveText('Not assessed')
   await expect($(page, 'floor-status')).toHaveText(/–\s*Not assessed/)
   await expect($(page, 'coverage')).not.toContainText(/Floor kept|Floor breached|Above your safety minimum|Below your safety minimum/)
-  await expect($(page, 'lender-capacity')).toContainText(`${c} 123,456.00 · stale`)
+  await expect($(page, 'relations')).toContainText('Can lend $123,456 · stale')
 
   const band = $(page, 'stale-band')
   await expect(band).toContainText('◷ Stale')
@@ -145,9 +150,9 @@ test('Treasury: S known at zero, stale with its as of, Unknown; the floor Not as
   const body = await live(page, '/treasury')
   const asOf = body.as_of
   const cases = [
-    { status: 'known', minor: 0, figure: (c: string) => `${c} 0.00`, line: /^● Known as of / },
-    { status: 'stale', minor: 500000, figure: (c: string) => `${c} 5,000.00 · stale`, line: /^◷ Stale as of / },
-    { status: 'unknown', minor: null, figure: () => 'Unknown', line: /^\? Unknown$/ }
+    { status: 'known', minor: 0, figure: (c: string) => (c === 'USD' ? '$0' : `${c} 0`), line: /^● Known$/, tip: /^● Known as of / },
+    { status: 'stale', minor: 500000, figure: (c: string) => `${c === 'USD' ? '$' : `${c} `}5,000 · stale`, line: /^◷ Stale$/, tip: /^◷ Stale as of / },
+    { status: 'unknown', minor: null, figure: () => 'Unknown', line: /^\? Unknown$/, tip: /^\? Unknown$/ }
   ]
   for (const k of cases) {
     await page.unroute('**/api/v1/treasury')
@@ -163,6 +168,8 @@ test('Treasury: S known at zero, stale with its as of, Unknown; the floor Not as
     const currency = body.accounts.find((a: any) => a.id === id).currency
     await expect($(page, 'spendable').locator('.lw-figure')).toHaveText(k.figure(currency))
     await expect($(page, 'spendable-status')).toHaveText(k.line)
+    // its as of is in the status's tooltip
+    await expect(bubble($(page, 'spendable-status').locator('xpath=..'))).toHaveText(k.tip)
     await expect($(page, 'floor-status')).toHaveText(/–\s*Not assessed/)
     await expect($(page, 'coverage')).not.toContainText(/Floor kept|Floor breached|Above your safety minimum|Below your safety minimum/)
     if (k.status === 'stale') {
@@ -191,7 +198,7 @@ test('Lending: K_p known at zero; a stale account is banded and not counted', as
   })
   await page.goto('/lending')
   await settled(page)
-  await expect($(page, 'capacity-value')).toHaveText(new RegExp(`^${c} 0\\.00`))
+  await expect($(page, 'capacity-value')).toHaveText(new RegExp(`^${c === 'USD' ? '\\$' : `${c} `}0(?!\\d)`))
   await expect($(page, 'capacity-status')).toHaveText(/^● Known as of /)
   await expect($(page, 'not-current')).toContainText('Lender stale venue account')
   await expect($(page, 'not-current')).toContainText('◷')
@@ -201,7 +208,7 @@ test('Lending: K_p known at zero; a stale account is banded and not counted', as
   expect(writes).toEqual([])
 })
 
-test('read error: Could not load with Retry; a failed refresh keeps the last values, not current', async ({ page, baseURL, request }) => {
+test('read error: Could not load with Retry; a failed re-read keeps the last values, not current', async ({ page, baseURL, request }) => {
   const writes = await readOnly(page, baseURL!)
   const runId = await demoRunId(request)
   for (const route of ROUTES) {
@@ -214,20 +221,19 @@ test('read error: Could not load with Retry; a failed refresh keeps the last val
     await expect(error).toContainText('! Could not load.')
     await expect(error).toContainText('the API is down for this check')
     await expect($(page, 'retry')).toBeEnabled()
-    await expect($(page, 'refresh')).toHaveText('Retry')
-    await expect(page.locator('main [data-panel]')).toHaveCount(0)
+    await expect(panels(page)).toHaveCount(0)
     await page.unroute(API, down)
     await $(page, 'retry').click()
     await settled(page)
     await expect(error).toHaveCount(0)
-    await expect(page.locator('main [data-panel]').first()).toBeVisible()
-    const panels = await page.locator('main [data-panel]').count()
+    await expect(panels(page).first()).toBeVisible()
+    const shown = await panels(page).count()
 
-    // a refresh fails: the last loaded body stays, labelled not current
+    // a re-read (the tab comes back) fails: the last loaded body stays, labelled not current
     await page.route(API, down)
-    await $(page, 'refresh').click()
+    await readAgain(page)
     await expect(error).toContainText('! Could not refresh. Last loaded, not current.')
-    await expect(page.locator('main [data-panel]')).toHaveCount(panels)
+    await expect(panels(page)).toHaveCount(shown)
     await expect($(page, 'retry')).toBeEnabled()
     await page.unroute(API, down)
     await $(page, 'retry').click()
@@ -248,7 +254,7 @@ test('permission: Operator access inline near the writes, password-style, Forget
   await expect(token).toHaveAttribute('type', 'password')
   await expect(page.locator('label', { has: token })).toContainText('Operator access')
   await expect($(page, 'fork')).toBeDisabled()
-  await expect($(page, 'fork-why')).toHaveText(/\w/)
+  await expect($(page, 'fork-why')).toHaveText(/\w/) // in the fork button's tooltip
   await expect($(page, 'forget')).toHaveCount(0)
   await token.fill('not-a-real-token')
   await expect($(page, 'forget')).toHaveText('Forget access')

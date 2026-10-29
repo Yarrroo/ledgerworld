@@ -1,29 +1,37 @@
 <template>
-  <ScreenShell v-slot="{ body }" title="Lending" :reading="state" :refresh="refresh" :stale="stale">
-    <p class="lw-lead" data-test="lead">{{ lead }}</p>
-    <p v-if="leadSeen" class="lw-time" data-test="lead-stale">{{ leadSeen }}</p>
-
+  <ScreenShell title="Lending" headline="Capacity you can rely on." :subtitle="subtitle" :lead="lead"
+               :reading="state" :refresh="refresh" :stale="stale">
+    <template #action>
+      <Tip v-if="fundingTarget" text="Compare ways to cover a cash gap. Nothing is lent from this page.">
+        <RouterLink class="lw-button" :to="fundingTarget" data-test="fund">Compare funding plans<Arrow /></RouterLink>
+      </Tip>
+      <Tip v-else :text="fundingWhy" test="fund-why">
+        <button type="button" class="lw-button" disabled data-test="fund">Compare funding plans</button>
+      </Tip>
+    </template>
+    <template #default="{ body }">
     <section class="lw-len__context" aria-label="Your lender" data-panel="Your lender" data-test="pool-context">
-      <p>Lender: <b data-test="pool">{{ poolName }}</b></p>
+      <div class="lw-len__lender">Lender: <b data-test="pool">{{ poolName }}</b>
+        <HowWeKnow test="how-lending">
+          <dl>
+            <div><dt>Snapshot</dt><dd>{{ body.snapshot_id }}</dd></div>
+            <div><dt>Currency</dt><dd>{{ capacity.K_p.currency }}</dd></div>
+            <div>
+              <dt>Balance authority</dt>
+              <dd :class="['lw-status', `lw-status--${reduced ? 'warn' : 'muted'}`]" data-test="authority">
+                <span aria-hidden="true">{{ reduced ? '!' : '●' }}</span>
+                <span>Balance authority {{ capacity.authority }}</span>
+              </dd>
+            </div>
+            <div><dt>Source time</dt><dd>{{ formatTime(capacity.K_p.as_of || body.as_of).utc }}</dd></div>
+          </dl>
+          <p>What the lender can still lend is the pool's lender capacity K_p, GET /api/v1/lending: settled
+            known − committed undrawn − pledged − pool obligations due in the horizon − pool reserve floor.</p>
+        </HowWeKnow>
+      </div>
       <p v-if="reduced" class="lw-note" data-test="reduced">
         Some of the lender's balances could not be read, so only the money we can see is counted.
       </p>
-      <HowWeKnow test="how-lending">
-        <dl>
-          <div><dt>Snapshot</dt><dd>{{ body.snapshot_id }}</dd></div>
-          <div><dt>Currency</dt><dd>{{ capacity.K_p.currency }}</dd></div>
-          <div>
-            <dt>Balance authority</dt>
-            <dd :class="['lw-status', `lw-status--${reduced ? 'warn' : 'muted'}`]" data-test="authority">
-              <span aria-hidden="true">{{ reduced ? '!' : '●' }}</span>
-              <span>Balance authority {{ capacity.authority }}</span>
-            </dd>
-          </div>
-          <div><dt>Source time</dt><dd>{{ formatTime(capacity.K_p.as_of || body.as_of).utc }}</dd></div>
-        </dl>
-        <p>What the lender can still lend is the pool's lender capacity K_p, GET /api/v1/lending: settled
-          known − committed undrawn − pledged − pool obligations due in the horizon − pool reserve floor.</p>
-      </HowWeKnow>
     </section>
 
     <div class="lw-len">
@@ -31,24 +39,32 @@
         <section aria-labelledby="capacity-heading" data-panel="What it can lend" data-test="bridge">
           <h2 id="capacity-heading">What the lender can still lend</h2>
           <article class="lw-tile" data-test="capacity">
-            <div class="lw-tile__label">Left to lend · {{ poolName }}</div>
-            <div class="lw-figure" data-test="capacity-value">{{ capacityText }}</div>
-            <div :class="['lw-status', `lw-status--${stateOf(capacity.K_p.status).tone}`]" data-test="capacity-status">
-              {{ metricStatus(capacity.K_p) }}
+            <div class="lw-tile__label">Left to lend</div>
+            <div class="lw-figure" data-test="capacity-value">
+              <Tip>{{ capacityText }}<template #tip>
+                <p>{{ poolName }}: settled known − committed undrawn − pledged − pool obligations due − pool floor.</p>
+                <p>Source time {{ formatTime(capacity.K_p.as_of || body.as_of).utc }}.</p>
+                <p v-if="leadSeen" data-test="lead-stale">{{ leadSeen }}</p>
+              </template></Tip>
+            </div>
+            <div :class="['lw-status', `lw-status--${stateOf(capacity.K_p.status).tone}`]">
+              <Tip><span aria-hidden="true">{{ stateOf(capacity.K_p.status).icon }}</span>
+                {{ stateOf(capacity.K_p.status).word }}<template #tip>
+                  <p data-test="capacity-status">{{ metricStatus(capacity.K_p) }}</p>
+                  <p>Balance authority {{ capacity.authority }}{{ reduced ? ': known funds only' : '' }}.</p>
+                </template></Tip>
             </div>
             <ol class="lw-len__bridge" aria-label="Capacity bridge, every part" data-test="parts">
               <li v-for="p in parts" :key="p.key" :data-part="p.key">
                 <span class="lw-len__sign" aria-hidden="true">{{ p.sign }}</span>
                 <span class="lw-len__part">{{ p.label }}</span>
-                <span class="lw-len__amount">{{ p.sign === '−' ? 'minus ' : '' }}{{ metricText(p.metric) }}</span>
-                <span class="lw-len__state">{{ stateOf(p.metric.status).word }}</span>
+                <span class="lw-len__amount"><Tip :text="metricStatus(p.metric)">{{ p.sign === '−' ? 'minus ' : '' }}{{ metricText(p.metric) }}</Tip></span>
                 <span class="lw-len__bar" aria-hidden="true"><span :style="{ width: p.bar }" :class="`is-${p.tone}`" /></span>
               </li>
               <li class="lw-len__total" data-part="K_p">
                 <span class="lw-len__sign" aria-hidden="true">=</span>
                 <span class="lw-len__part">Left to lend</span>
-                <span class="lw-len__amount">{{ metricText(capacity.K_p) }}</span>
-                <span class="lw-len__state">{{ stateOf(capacity.K_p.status).word }}</span>
+                <span class="lw-len__amount"><Tip :text="metricStatus(capacity.K_p)">{{ metricText(capacity.K_p) }}</Tip></span>
               </li>
             </ol>
             <details class="lw-calc" data-test="expand-calculation">
@@ -73,15 +89,14 @@
           </article>
           <article v-if="notCurrent.length" class="lw-tile lw-len__unobserved" data-test="not-current">
             <div class="lw-tile__label">Couldn't read, so not counted</div>
-            <template v-for="f in notCurrent" :key="f.id">
-              <div class="lw-figure lw-figure--small">
-                {{ f.name }} ·
+            <div v-for="f in notCurrent" :key="f.id" class="lw-figure lw-figure--small">
+              {{ f.name }} ·
+              <Tip :text="`${f.text} (${f.id})`">
                 <span :class="['lw-status', `lw-status--${f.tone}`]">
                   <span aria-hidden="true">{{ f.icon }}</span> {{ f.word }}
                 </span>
-              </div>
-              <div v-if="f.at" class="lw-time">as of {{ f.at }}</div>
-            </template>
+              </Tip>
+            </div>
           </article>
         </section>
 
@@ -91,14 +106,15 @@
                     label="The pool's facilities and shared venue exposure" @select="picked = $event" />
           <ul class="lw-len__relations" aria-label="Relationships as text" data-test="relations">
             <li v-for="e in map.edges" :key="e.id">
-              <button type="button" class="lw-len__link" :data-edge="e.id" @click="picked = { kind: 'edge', id: e.id }">
-                {{ nameOf(e.from) }} → {{ nameOf(e.to) }}
-              </button>
-              <span class="lw-time">{{ e.type }} · {{ e.label }}</span>
+              <Tip :text="`${e.type} · ${e.label}`">
+                <button type="button" class="lw-len__link" :data-edge="e.id" @click="picked = { kind: 'edge', id: e.id }">
+                  {{ nameOf(e.from) }} → {{ nameOf(e.to) }}
+                </button>
+              </Tip>
             </li>
           </ul>
           <p v-if="!map.world" class="lw-time" data-test="no-world">
-            No world topology for snapshot {{ body.snapshot_id }}: only the API's facilities are drawn.
+            Only the lender's loans are drawn for this snapshot.
           </p>
         </section>
       </div>
@@ -109,23 +125,25 @@
           <article class="lw-tile">
             <template v-if="reduced">
               <div class="lw-tile__label">Happening now</div>
-              <p>Some balances can't be read: {{ notCurrent.map((f) => f.text).join('; ') }}.
+              <p>Some balances can't be read: {{ notCurrent.map((f) => f.name).join('; ') }}.
                 Only known money counts, and new lending is paused until they can be read again.</p>
             </template>
             <template v-else>
               <div class="lw-tile__label">What-if</div>
-              <p>If the lender's venue balance{{ venueAccount ? ` (${venueAccount})` : '' }} could not be read,
-                it would count as Unknown, not zero: only known money would count, and new lending would pause.</p>
+              <p>If the lender's venue balance could not be read, it would count as Unknown, not zero:
+                only known money would count, and new lending would pause.</p>
             </template>
             <div class="lw-actions">
-              <RouterLink v-if="freezeTarget" class="lw-button lw-button--quiet" :to="freezeTarget" data-test="rehearse-freeze">
-                Rehearse venue freeze
-              </RouterLink>
-              <template v-else>
-                <button type="button" class="lw-button lw-button--quiet" disabled aria-describedby="freeze-why"
+              <Tip v-if="freezeTarget"
+                   :text="`Opens the simulation on the prepared venue-freeze scenario${venueAccount ? ` (venue account ${venueAccount})` : ''}. Nothing is lent.`">
+                <RouterLink class="lw-button lw-button--quiet" :to="freezeTarget" data-test="rehearse-freeze">
+                  Rehearse venue freeze<Arrow />
+                </RouterLink>
+              </Tip>
+              <Tip v-else :text="freezeWhy" test="freeze-why">
+                <button type="button" class="lw-button lw-button--quiet" disabled
                         data-test="rehearse-freeze">Rehearse venue freeze</button>
-                <span id="freeze-why" class="lw-time" data-test="freeze-why">{{ freezeWhy }}</span>
-              </template>
+              </Tip>
             </div>
           </article>
         </section>
@@ -134,10 +152,11 @@
           <h2 id="facilities-heading">Loans the lender has made</h2>
           <ul class="lw-len__facilities" data-test="facility-list">
             <li v-for="f in body.facilities" :key="f.facility_id">
-              <button type="button" class="lw-len__link" :data-test="`facility-${f.facility_id}`"
-                      @click="picked = { kind: 'facility', id: f.facility_id }">Open facility {{ f.facility_id }}</button>
-              <span class="lw-time">{{ kindText(f.kind) }} · to {{ nameOf(f.borrower) }} · {{ f.state }}</span>
-              <span class="lw-len__owed">outstanding {{ money(f.outstanding) }}</span>
+              <Tip :text="`${kindText(f.kind)} · to ${nameOf(f.borrower)} · ${f.state}`">
+                <button type="button" class="lw-len__link" :data-test="`facility-${f.facility_id}`"
+                        @click="picked = { kind: 'facility', id: f.facility_id }">Open facility {{ f.facility_id }}</button>
+              </Tip>
+              <span class="lw-len__owed"><Tip :text="`Outstanding on ${f.facility_id}, from the lending read`">{{ money(f.outstanding) }}</Tip></span>
             </li>
             <li v-if="!body.facilities.length">No facilities</li>
           </ul>
@@ -167,22 +186,6 @@
             </div>
             <p class="lw-time">Repayment is computed from observed revenue only, never from a forecast.</p>
           </details>
-        </section>
-
-        <section aria-labelledby="plan-heading" data-panel="Compare plans">
-          <h2 id="plan-heading">Compare funding plans</h2>
-          <p class="lw-time">Compare ways to cover a cash gap. Nothing is lent from this page.</p>
-          <div class="lw-actions">
-            <RouterLink v-if="fundingTarget" class="lw-button" :to="fundingTarget" data-test="fund">
-              Compare funding plans
-            </RouterLink>
-            <template v-else>
-              <button type="button" class="lw-button" disabled aria-describedby="fund-why" data-test="fund">
-                Compare funding plans
-              </button>
-              <span id="fund-why" class="lw-time" data-test="fund-why">{{ fundingWhy }}</span>
-            </template>
-          </div>
         </section>
       </div>
     </div>
@@ -227,6 +230,7 @@
         </dl>
       </template>
     </DetailSheet>
+    </template>
   </ScreenShell>
 </template>
 
@@ -242,8 +246,10 @@
  */
 import { computed, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
+import Arrow from '../components/Arrow.vue'
 import DetailSheet from '../components/DetailSheet.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
+import Tip from '../components/Tip.vue'
 import WorldMap from '../components/WorldMap.vue'
 import { FAMILIES, worldFor } from '../api/world.js'
 import {
@@ -283,6 +289,7 @@ const capacityText = computed(() => {
 
 /** The finance lead's answer (COPY.md): the API's K_p, then how it is worked out. */
 const lead = computed(() => {
+  if (!state.body) return ''
   const kp = capacity.value.K_p
   if (kp.minor === null) return 'What your lender can still lend is unknown right now; here is what we can see.'
   if (kp.minor <= 0) return 'Your lender cannot lend you anything right now; here is how that number is worked out.'
@@ -290,6 +297,7 @@ const lead = computed(() => {
   return `Your lender can still lend you up to ${amountWords(kp)}${known}; here is how that number is worked out.`
 })
 const leadSeen = computed(() => lastSeen(capacity.value.K_p))
+const subtitle = computed(() => (state.body ? `${nameOf(state.body.pool)} / Observed snapshot` : ''))
 
 const PARTS = [
   ['settled_known', 'Cash the lender holds', '+'],
@@ -422,6 +430,7 @@ const fundingTarget = computed(() => {
   border-bottom: 1px solid var(--lw-rule);
 }
 
+.lw-len__lender,
 .lw-len__context > p { margin: 0 0 var(--lw-space-2); }
 
 .lw-len__context dt {
@@ -463,7 +472,7 @@ const fundingTarget = computed(() => {
 .lw-len__bridge li {
   display: grid;
   grid-template-columns: 1.5em minmax(0, 1fr) minmax(9em, auto);
-  grid-template-areas: 'sign part amount' '. bar state';
+  grid-template-areas: 'sign part amount' '. bar bar';
   gap: 2px var(--lw-space-3);
   align-items: center;
   padding: var(--lw-space-2) 0;
@@ -473,7 +482,6 @@ const fundingTarget = computed(() => {
 .lw-len__sign { grid-area: sign; font-weight: 700; color: var(--lw-ink-muted); }
 .lw-len__part { grid-area: part; }
 .lw-len__amount { grid-area: amount; font-variant-numeric: tabular-nums; text-align: right; font-weight: 600; }
-.lw-len__state { grid-area: state; font-size: 13px; color: var(--lw-ink-muted); text-align: right; }
 .lw-len__bar { grid-area: bar; height: 6px; background: var(--lw-selected); border-radius: 3px; overflow: hidden; }
 .lw-len__bar span { display: block; height: 100%; }
 .lw-len__bar .is-in { background: var(--lw-brand); }
@@ -500,8 +508,6 @@ const fundingTarget = computed(() => {
   overflow-wrap: anywhere;
 }
 
-.lw-len__relations .lw-time,
-.lw-len__facilities .lw-time { grid-column: 1 / -1; grid-row: 2; }
 .lw-len__owed { grid-column: 2; grid-row: 1; font-variant-numeric: tabular-nums; text-align: right; }
 
 .lw-len__link {

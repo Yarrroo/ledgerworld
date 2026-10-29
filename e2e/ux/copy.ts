@@ -1,6 +1,8 @@
 /**
  * What the copy passes' specs (copy-1, copy-2; prp/2026-10-29-ux-pass/COPY.md) share: the
- * screens' money format, the jargon a lead or heading must not use, and the How we know check.
+ * screens' money format, the jargon a lead or heading must not use, the lead sentence (now the
+ * hero subtitle's tooltip, MATCH.md item 1) and the How we know check (now an (i) tooltip,
+ * MATCH.md item 2 and 4).
  */
 import { expect, type Page } from '@playwright/test'
 import { settled } from './routes'
@@ -11,8 +13,13 @@ export const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 export const PLANS: Record<string, string> = { 'no-action': 'Do nothing', 'fixed-reserve': 'Keep a fixed buffer', integrated: 'Borrow just enough' }
 
 export interface Money { minor: number | null, currency: string }
-/** "USD 70,000.00", as the screens format integer minor units. */
-export const fmt = (m: Money) => `${m.currency} ${(m.minor! / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+const SIGN: Record<string, string> = { USD: '$', EUR: '€', GBP: '£' }
+/** "$70,000", "$1,234.50", "-$50,000", as the screens format integer minor units (MATCH.md item 5). */
+export const fmt = (m: Money) => {
+  const plain = (Math.abs(m.minor!) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 }).replace(/\.00$/, '')
+  const sign = m.minor! < 0 ? '-' : ''
+  return SIGN[m.currency] ? `${sign}${SIGN[m.currency]}${plain}` : `${sign}${m.currency} ${plain}`
+}
 
 /** The words a finance lead should not meet in a heading or a lead sentence (COPY.md rule 2). */
 const JARGON = /\b(snapshot|branch|cohort|checkpoint|intent|provenance|policy|policies)\b/i
@@ -42,20 +49,23 @@ export async function plainHeadings (page: Page): Promise<void> {
   }
 }
 
-/** A How we know disclosure: closed, keyboard-reachable, holding `facts`. */
+/** The screen's lead sentence: the hero subtitle's tooltip, in the DOM until asked for. */
+export const lead = (page: Page) => page.locator('[data-test="hero-lead"] [role="tooltip"]')
+
+/** A How we know (i): closed, keyboard-reachable, named "How we know", its tooltip holding `facts`. */
 export async function folded (page: Page, test: string, facts: string[]): Promise<void> {
   const how = $(page, test)
   await expect(how).toHaveCount(1)
-  await expect(how).not.toHaveAttribute('open', '')
-  await expect(how.locator('.lw-calc__body')).not.toBeVisible()
-  const summary = how.locator('summary')
-  await expect(summary).toHaveText('How we know')
-  await summary.focus()
-  await expect(summary).toBeFocused()
-  await page.keyboard.press('Enter')
-  await expect(how).toHaveAttribute('open', '')
-  for (const fact of facts) await expect(how.locator('.lw-calc__body')).toContainText(fact)
-  expect((await summary.boundingBox())!.height, 'How we know is shorter than 44 px').toBeGreaterThanOrEqual(44)
-  await page.keyboard.press('Enter')
-  await expect(how).not.toHaveAttribute('open', '')
+  const body = how.locator('[role="tooltip"]')
+  await expect(body).toBeHidden()
+  const button = how.locator('.lw-how__icon')
+  await expect(button).toHaveAccessibleName('How we know')
+  await button.focus()
+  await expect(button).toBeFocused()
+  await expect(body).toBeVisible()
+  await expect(button).toHaveAttribute('aria-describedby', new RegExp(await body.getAttribute('id') ?? 'none'))
+  for (const fact of facts) await expect(body).toContainText(fact)
+  expect((await button.boundingBox())!.height, 'the (i) is shorter than 24 px').toBeGreaterThanOrEqual(24)
+  await page.keyboard.press('Escape')
+  await expect(body).toBeHidden()
 }

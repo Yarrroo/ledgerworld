@@ -3,7 +3,7 @@
 // decide-execute.json and accessibility.json, loaded unchanged. No request leaves the test: fetch
 // is replaced by a table of answers keyed "METHOD /path", and every call is recorded.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { h } from 'vue'
+import { h, nextTick } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
@@ -149,6 +149,25 @@ const mounted = []
 const text = (w, test) => w.get(`[data-test="${test}"]`).text().replace(/\s+/g, ' ')
 const disabled = (w, test) => w.get(`[data-test="${test}"]`).attributes('disabled') !== undefined
 const focused = () => document.activeElement
+/** A link to work held for another run: its words, and its tooltip naming that run (and execution). */
+const heldLink = (l) => [l.text().replace(/\s+/g, ' '), l.element.closest('.lw-tip').querySelector('[role="tooltip"]').textContent.trim()]
+/** An element's own words, without the tooltip bubbles it carries (hidden until asked for). */
+function bare (wrapper) {
+  const copy = wrapper.element.cloneNode(true)
+  copy.querySelectorAll('[role="tooltip"]').forEach((t) => t.remove())
+  return copy.textContent.replace(/\s+/g, ' ').trim()
+}
+const tipOf = (wrapper) => wrapper.element.closest('.lw-tip').querySelector('[role="tooltip"]').textContent.trim()
+/** The scenario-set cost as the screens print it (the design fixture's cost_label predates the plain-words copy). */
+const COST = '$2,400 across 3 what-ifs'
+const EXEC_ELSEWHERE = 'Read the execution sent for another run'
+const RUN_ELSEWHERE = 'Open the other run: approval outcome unknown'
+/** The screen's re-read: the tab becomes visible again (the header has no Refresh button). */
+async function reread () {
+  Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  document.dispatchEvent(new Event('visibilitychange'))
+  await nextTick()
+}
 /** Fake only the timers, so promises and fetch still settle; tick() is one poll interval. */
 const fakeTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
 const tick = async () => { vi.advanceTimersByTime(5000); await flushPromises() }
@@ -212,10 +231,11 @@ describe('Decisions: policies side by side', () => {
   it('states the scenario-set cost apart from the current-plan fee', async () => {
     serve({ 'GET /overview': overview(), 'GET /decisions/run-1': decisionsBody() })
     const w = await open(Decisions, '/decisions')
-    const cost = w.get('[data-test="policy-integrated"]').get('[data-test="cost"]').text()
-    expect(cost).toBe(decideExecute.comparison.cost_label)
-    expect(w.get('[data-test="policy-no-action"]').text()).toContain('breached in 2 of 3 scenarios')
-    expect(w.get('[data-test="policy-integrated"]').text()).toContain('kept in all 3 scenarios')
+    const cost = w.get('[data-test="policy-integrated"]').get('[data-test="cost"]')
+    expect(bare(cost)).toBe(COST)
+    expect(cost.get('[role="tooltip"]').text()).toContain('the current plan\'s fee is set at review')
+    expect(w.get('[data-test="policy-no-action"]').text()).toContain('broken in 2 of 3 what-ifs')
+    expect(w.get('[data-test="policy-integrated"]').text()).toContain('kept in all 3 what-ifs')
   })
 
   it('all-infeasible offers escalation, not approval', async () => {
@@ -246,7 +266,7 @@ describe('Decisions: policies side by side', () => {
     expect(w.text()).toContain('Replay · Hypothetical branch run-1-s1-integrated')
     const review = w.get('[data-test="review-plan"]')
     expect(review.attributes('href')).toBe('/execution?run_id=run-1&review=1')
-    expect(w.text()).toContain('re-decided on the current observed snapshot')
+    expect(tipOf(review)).toContain('worked out again on today\'s real figures')
   })
 })
 
@@ -274,8 +294,8 @@ describe('Execution: authority and the bounded approval', () => {
     const review = text(w, 'review')
     expect(review).toContain('15 minutes')
     expect(review).toContain('Simulated provider')
-    expect(text(w, 'scenario-cost')).toBe(decideExecute.comparison.cost_label)
-    expect(text(w, 'branch-fees')).toContain('s1 USD 800.00')
+    expect(text(w, 'scenario-cost')).toBe(COST)
+    expect(text(w, 'branch-fees')).toContain('s1 $800')
     expect(posts(calls)).toHaveLength(kase('review-only').expect.provider_calls)
   })
 
@@ -292,7 +312,7 @@ describe('Execution: authority and the bounded approval', () => {
     expect(posts(calls, '/executions')).toHaveLength(0) // confirmation is not execution
     expect(text(w, 'plan-hash')).toBe(boundApproval.instance.plan_hash)
     expect(text(w, 'expires')).toContain('2026-11-05 10:15 UTC · local')
-    expect(text(w, 'legs')).toContain('USD 10,000.00')
+    expect(text(w, 'legs')).toContain('$10,000')
     expect(text(w, 'legs')).toContain('reservation:res-payroll-1')
 
     const execute = w.get('[data-test="execute"]')
@@ -496,7 +516,7 @@ describe('Execution: provider state, receipts and reconciliation', () => {
       'GET /executions/apr-1': () => body
     })
     const w = await open(Execution, '/execution')
-    const token = w.get('[data-test="refresh"]').element
+    const token = w.get('[data-test="how-context-bar"]').element
     token.focus()
     body = executionBody({ legs: [paidPayout()] })
     vi.advanceTimersByTime(5000)
@@ -513,7 +533,7 @@ describe('accessibility: keyboard review (mocked transport only)', () => {
     const { w, calls } = await reviewReady()
     expect(focused().id).toBe('review-heading')
     const buttons = w.get('[data-test="review"]').findAll('button').map((b) => b.text())
-    expect(buttons).toEqual(['Confirm approval', 'Cancel']) // logical order: the act, then the way out
+    expect(buttons).toEqual(['Approve', 'Cancel']) // logical order: the act, then the way out
     await w.get('[data-test="review"]').trigger('keydown', { key: 'Escape' })
     await flushPromises()
     expect(w.find('[data-test="review"]').exists()).toBe(!c.escape_dismisses_review_without_post)
@@ -593,7 +613,7 @@ describe('vet round 1', () => {
     expect(w.find('[data-test="review"]').exists()).toBe(true)
     await w.get('[data-test="review"]').trigger('keydown', { key: 'Escape' })
     await flushPromises()
-    await w.get('[data-test="refresh"]').trigger('click')
+    await reread()
     await flushPromises()
     expect(w.find('[data-test="review"]').exists()).toBe(false)
   })
@@ -674,7 +694,7 @@ describe('vet round 2', () => {
     expect(text(w, 'leg-status')).toContain('reconciled as of')
     const leg = paidPayout()
     body = executionBody({ legs: [leg], incidents: [{ incident_id: 'inc-1', leg_id: leg.leg_id, kind: 'paid_then_failed', state: 'open', opened_at: '2026-11-05T10:05:00Z' }] })
-    await w.get('[data-test="refresh"]').trigger('click')
+    await reread()
     await flushPromises()
     expect(text(w, 'incident')).toContain('paid then failed')
   })
@@ -1059,7 +1079,7 @@ describe('a POST answered after a query navigation stays with its own run', () =
     expect(text(w, 'message')).toContain('unknown for run run-1')
     expect(text(w, 'message')).toContain('Do not send again')
     expect(w.find('[data-test="blocked"]').exists()).toBe(false) // the block is run-1's, not run-2's
-    expect(text(w, 'elsewhere')).toBe('Read execution apr-1 of run run-1')
+    expect(heldLink(w.get('[data-test="elsewhere"]'))).toEqual([EXEC_ELSEWHERE, 'Execution apr-1 of run run-1'])
     await w.vm.$router.push('/execution')
     await flushPromises()
     expect(text(w, 'context')).toContain('Run run-1 · execution apr-1')
@@ -1080,7 +1100,7 @@ describe('a POST answered after a query navigation stays with its own run', () =
     await w.vm.$router.push('/execution?run_id=run-3')
     await flushPromises()
     expect(text(w, 'context')).toContain('Run run-3')
-    expect(text(w, 'elsewhere')).toBe('Read execution apr-1 of run run-1')
+    expect(heldLink(w.get('[data-test="elsewhere"]'))).toEqual([EXEC_ELSEWHERE, 'Execution apr-1 of run run-1'])
   })
 
   it('two outcomes that answered on other screens each keep their own link', async () => {
@@ -1093,8 +1113,8 @@ describe('a POST answered after a query navigation stays with its own run', () =
     await flushPromises()
     hold.release({ as_of: '2026-11-05T10:00:09Z', mode: 'fake', execution_id: 'apr-2' })
     await flushPromises()
-    expect(w.findAll('[data-test="elsewhere"]').map((l) => l.text())).toEqual([
-      'Read execution apr-1 of run run-1', 'Read execution apr-2 of run run-2'
+    expect(w.findAll('[data-test="elsewhere"]').map(heldLink)).toEqual([
+      [EXEC_ELSEWHERE, 'Execution apr-1 of run run-1'], [EXEC_ELSEWHERE, 'Execution apr-2 of run run-2']
     ])
   })
 
@@ -1205,7 +1225,7 @@ describe('a POST answered after a query navigation stays with its own run', () =
     await flushPromises()
     await w.vm.$router.push('/execution?run_id=run-3')
     await flushPromises()
-    expect(text(w, 'elsewhere')).toBe('Open run run-1: approval outcome unknown')
+    expect(heldLink(w.get('[data-test="elsewhere"]'))).toEqual([RUN_ELSEWHERE, 'Run run-1'])
     await w.get('[data-test="elsewhere"]').trigger('click')
     await flushPromises()
     expect(text(w, 'blocked')).toBe(kase('approval-post-timeout').expect.message)
@@ -1254,7 +1274,7 @@ describe('a POST answered after a query navigation stays with its own run', () =
     await flushPromises()
     held.fail(timeout())
     await flushPromises()
-    expect(text(w, 'elsewhere')).toBe('Open run run-1: approval outcome unknown')
+    expect(heldLink(w.get('[data-test="elsewhere"]'))).toEqual([RUN_ELSEWHERE, 'Run run-1'])
     expect(w.get('[data-test="elsewhere"]').attributes('href')).toBe('/execution?run_id=run-1')
   })
 
@@ -1736,7 +1756,7 @@ describe('correction: a status read never overwrites a newer one', () => {
     expect(text(w, 'leg-status')).toContain('not reconciled')
     reads.holdThen(executionBody({ legs: [paidPayout()] }))
     await tick() // the poll is now in flight, holding the older state
-    await w.get('[data-test="refresh"]').trigger('click')
+    await reread()
     await flushPromises()
     expect(text(w, 'leg-status')).toContain('PAID · reconciled as of')
     reads.release(executionBody({ legs: [settledOnly()] }))
@@ -1748,7 +1768,7 @@ describe('correction: a status read never overwrites a newer one', () => {
     const { w, reads } = await openLinked()
     reads.holdThen(withIncident())
     await tick()
-    await w.get('[data-test="refresh"]').trigger('click')
+    await reread()
     await flushPromises()
     expect(text(w, 'incident')).toContain('paid then failed')
     reads.release(executionBody({ legs: [settledOnly()] }))
@@ -1759,7 +1779,7 @@ describe('correction: a status read never overwrites a newer one', () => {
   it('a poll answered after Refresh began reading stays: the older Refresh read does not replace it', async () => {
     const { w, reads } = await openLinked()
     reads.holdThen(withIncident())
-    await w.get('[data-test="refresh"]').trigger('click') // Refresh's read is now in flight
+    await reread() // Refresh's read is now in flight
     await flushPromises()
     await tick() // a later poll answers with the newer state first
     expect(text(w, 'incident')).toContain('paid then failed')
@@ -1780,7 +1800,7 @@ describe('correction: a status read never overwrites a newer one', () => {
     await flushPromises()
     reads.holdThen(withIncident())
     await tick()
-    await w.get('[data-test="refresh"]').trigger('click')
+    await reread()
     await flushPromises()
     expect(text(w, 'incident')).toContain('paid then failed')
     reads.release(executionBody({ legs: [sentPayout()] }))
@@ -1791,7 +1811,7 @@ describe('correction: a status read never overwrites a newer one', () => {
   it('a poll that fails after Refresh began is no answer: the Refresh read still shows, the error stands', async () => {
     const { w, reads } = await openLinked()
     reads.holdThen(timeout())
-    await w.get('[data-test="refresh"]').trigger('click') // Refresh's read is now in flight
+    await reread() // Refresh's read is now in flight
     await flushPromises()
     await tick() // a later poll fails
     expect(w.find('[data-test="poll-error"]').exists()).toBe(true)
@@ -1804,7 +1824,7 @@ describe('correction: a status read never overwrites a newer one', () => {
   it('a Refresh read older than an applied answer never reaches the screen', async () => {
     const { w, reads, calls } = await openLinked()
     reads.holdThen(refuse(404, 'not_found'))
-    await w.get('[data-test="refresh"]').trigger('click')
+    await reread()
     await flushPromises()
     await tick() // a later poll answers: the server has no record
     reads.release(executionBody({ legs: [paidPayout()] }))
@@ -1827,12 +1847,12 @@ describe('no prepared run on refresh', () => {
     const w = await open(Decisions, '/decisions')
     expect(w.find('[data-test="cohort"]').exists()).toBe(true)
     demo = { run_id: null, execution_id: null }
-    await w.get('[data-test="refresh"]').trigger('click')
+    await reread()
     await flushPromises()
     expect(w.find('[data-test="error"]').exists()).toBe(false)
-    expect(w.get('[data-test="empty"]').text()).toContain('No demonstration run is prepared')
+    expect(w.get('[data-test="empty"]').text()).toContain('No prepared run yet')
     expect(w.find('[data-test="cohort"]').exists()).toBe(false)
-    expect(w.get('[data-test="refresh"]').text()).toBe('Refresh')
+    expect(w.get('main').attributes('aria-busy')).toBe('false')
   })
 })
 
@@ -2232,7 +2252,7 @@ describe('the Approval summary shows the approval this tab holds (board item 151
     }
     const refreshTo = async (w, run) => {
       demo = { run_id: run, execution_id: null }
-      await w.get('[data-test="refresh"]').trigger('click')
+      await reread()
       await flushPromises()
     }
 

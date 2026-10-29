@@ -1,9 +1,6 @@
 <template>
   <section class="lw-live-panel" aria-labelledby="feed-title" data-test="feed">
-    <h2 id="feed-title">
-      Action feed · round {{ round ?? '–' }}
-      <span v-if="replay" class="lw-live-tag" data-test="feed-replay">Replay</span>
-    </h2>
+    <h2 id="feed-title">Action feed · round {{ round ?? '–' }}</h2>
     <p v-if="!loaded" class="lw-live-empty" data-test="feed-unloaded">Round not loaded</p>
     <p v-else-if="!items.length" class="lw-live-empty">No posts or intents in this round</p>
     <ol v-else class="lw-feed">
@@ -11,18 +8,17 @@
           :class="{ 'is-highlight': item.actor === highlight }" :data-id="item.id">
         <div class="lw-feed__head">
           <span class="lw-feed__kind">{{ item.kind }}</span>
-          <button type="button" class="lw-feed__open" data-test="feed-open"
-                  :aria-label="`${item.kind} ${item.id} by ${item.actor}: open its evidence`"
-                  @click="emit('pick', item)">{{ item.actor }}</button>
-          <code class="lw-feed__id">{{ item.id }}</code>
+          <Tip :text="tipOf(item)">
+            <button type="button" class="lw-feed__open" data-test="feed-open"
+                    :aria-label="`${item.kind} ${item.id} by ${item.actor}: open its evidence`"
+                    @click="emit('pick', item)">{{ item.actor }}</button>
+          </Tip>
         </div>
         <p v-if="item.text" class="lw-feed__text">{{ item.text }}</p>
         <p v-if="item.status" class="lw-feed__status" :class="`is-${item.status.tone}`">
-          {{ item.status.icon }} {{ item.status.word }}<template v-if="item.reason"> · {{ item.reason }}</template>
-          <template v-if="item.journal"> · journal {{ item.journal }}</template>
-        </p>
-        <p v-if="item.evidence.length" class="lw-feed__evidence">
-          evidence: {{ item.evidence.join(', ') }}
+          <Tip :text="item.journal ? `Journal ${item.journal}` : 'No ledger change'">
+            {{ item.status.icon }} {{ item.status.word }}<template v-if="item.reason"> · {{ item.reason }}</template>
+          </Tip>
         </p>
       </li>
     </ol>
@@ -37,7 +33,8 @@
  * Choosing an item emits `pick` with it, for the screen to highlight its actor and open its evidence.
  */
 import { computed } from 'vue'
-import { formatMoney, kindText } from '../api/v1.js'
+import { PLAIN, formatMoney, kindText } from '../api/v1.js'
+import Tip from './Tip.vue'
 
 const props = defineProps({
   round: { type: Number, default: null },
@@ -54,6 +51,12 @@ const VERDICT = {
   accepted: { icon: '✓', word: 'Accepted', tone: 'ok' },
   rejected: { icon: '✕', word: 'Rejected', tone: 'bad' },
   pending: { icon: '◷', word: 'Pending', tone: 'warn' }
+}
+
+/** What used to sit beside an item: its id, the evidence it cites, and Replay when the round was replayed. */
+function tipOf (item) {
+  return [item.id, item.evidence.length ? `evidence: ${item.evidence.join(', ')}` : '',
+    props.replay ? PLAIN.replay : ''].filter(Boolean).join(' · ')
 }
 
 const items = computed(() => {
@@ -118,19 +121,13 @@ const items = computed(() => {
   align-items: baseline;
 }
 
-.lw-feed__kind,
-.lw-feed__id,
-.lw-feed__evidence {
+.lw-feed__kind {
   color: var(--live-muted);
   font-size: 12px;
 }
 
-.lw-feed__id,
-.lw-feed__evidence { font-family: var(--lw-font-figure); word-break: break-all; }
-
 .lw-feed__text,
-.lw-feed__status,
-.lw-feed__evidence { margin: var(--lw-space-1) 0 0; }
+.lw-feed__status { margin: var(--lw-space-1) 0 0; }
 
 .lw-feed__status.is-ok { color: var(--live-ok); }
 .lw-feed__status.is-bad { color: var(--live-bad); }

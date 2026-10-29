@@ -4,14 +4,14 @@
 // replaced by a table of recorded answers.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
-import { flushPromises, mount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import Overview from '../../src/views/Overview.vue'
 import Treasury from '../../src/views/Treasury.vue'
 import Lending from '../../src/views/Lending.vue'
 import {
-  PLAIN, contextKey, formatMoney, formatTime, freshness, latestOnly, metricText, useReading
+  FLOOR_WORDS, STATES, contextKey, formatMoney, formatTime, freshness, latestOnly, metricText, useReading
 } from '../../src/api/v1.js'
 
 import moneyViews from '../../../prp/2026-10-20-ledgerworld/design/modules/ui/fixtures/money-views.json'
@@ -76,7 +76,26 @@ async function open (component, path, routes) {
 
 const text = (wrapper, test) => wrapper.get(`[data-test="${test}"]`).text().replace(/\s+/g, ' ')
 const disabled = (wrapper, test) => wrapper.get(`[data-test="${test}"]`).attributes('disabled') !== undefined
+/** What the page shows of an element, its tooltips' words left out (they are not on the page until asked for). */
+function shown (wrapper, test) {
+  const el = wrapper.get(`[data-test="${test}"]`).element.cloneNode(true)
+  for (const bubble of el.querySelectorAll('[role="tooltip"]')) bubble.remove()
+  return el.textContent.replace(/\s+/g, ' ').trim()
+}
+/** The words of the tooltip inside (or on) ``test``. */
+const tip = (wrapper, test) => wrapper.get(`[data-test="${test}"] [role="tooltip"]`).text().replace(/\s+/g, ' ')
+/** The fixtures' "USD 70,000.00" as the mockups' figure: "$70,000" (MATCH.md item 5, formatMoney). */
+const asShown = (s) => s.replace(/USD (-?)(\d[\d,]*)\.(\d\d)/g,
+  (_, sign, whole, cents) => `${sign}$${whole}${cents === '00' ? '' : `.${cents}`}`)
+/** The tab comes back into view: a screen reads again (the header has no Refresh button). */
+async function revisit () {
+  Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  document.dispatchEvent(new Event('visibilitychange'))
+  await flushPromises()
+}
 
+// every screen listens on the document for its tab coming back; one left mounted would answer too
+enableAutoUnmount(afterEach)
 afterEach(() => vi.unstubAllGlobals())
 
 // ------------------------------------------------------------------- money-views.json
@@ -112,16 +131,19 @@ describe('money-views fixture', () => {
     serve({ '/overview': overviewLf1.instance })
     const w = await open(Overview, '/overview')
     const { expect: want } = record('Overview', 'no-shock')
-    expect(text(w, 'settled')).toContain(want.settled)
-    expect(text(w, 'spendable')).toContain(want.spendable)
-    expect(text(w, 'coverage')).toContain(want.coverage)
-    expect(text(w, 'floor-status')).toBe(`✓${want.status}`) // icon, then the word
+    expect(shown(w, 'settled')).toContain(asShown(want.settled))
+    expect(shown(w, 'spendable')).toContain(asShown(want.spendable))
+    // the headroom is the figure; the minimum projected cash and the floor it is against, its tooltip
+    expect(shown(w, 'coverage')).toContain('$10,000')
+    const [minimum, floor] = want.coverage.split(' / ').map((part) => asShown(part.split(' ').slice(0, 2).join(' ')))
+    expect(tip(w, 'tip-coverage')).toContain(`lowest point ahead ${minimum} · safety minimum ${floor}`)
+    expect(text(w, 'floor-status')).toBe(`${STATES.kept.icon} ${FLOOR_WORDS.kept}`) // icon, then the words
     expect(text(w, 'open-simulation')).toBe(want.cta)
     expect(w.get('[data-test="open-simulation"]').attributes('href')).toBe('/simulation?run_id=run-1')
     expect(text(w, 'due')).toContain('2026-01-06 16:00 UTC')
-    expect(text(w, 'due')).toContain('local ')
-    expect(text(w, 'due')).toContain('in 40 hours')
-    expect(text(w, 'next-obligation')).toContain('USD 50,000.00')
+    expect(text(w, 'due')).toContain(formatTime('2026-01-06T16:00:00Z').local)
+    expect(text(w, 'next-due-at')).toContain('in 40h')
+    expect(text(w, 'next-obligation')).toContain('$50,000')
     // source and mode stay on the banner
     expect(text(w, 'context-provider')).toBe(dataStates.labels.fake)
     expect(text(w, 'source')).toBe(`${moneyViews.context.source_label} lf1`)
@@ -131,13 +153,13 @@ describe('money-views fixture', () => {
     serve({ '/overview': overviewLf1.instance })
     let w = await open(Overview, '/overview', [])
     expect(disabled(w, 'open-simulation')).toBe(true)
-    expect(text(w, 'open-simulation-why')).toBe('The simulation screen is not part of this build')
+    expect(tip(w, 'open-simulation-why')).toBe('The simulation screen is not part of this build')
     const body = clone(overviewLf1.instance)
     body.demo.run_id = null
     serve({ '/overview': body })
     w = await open(Overview, '/overview')
     expect(disabled(w, 'open-simulation')).toBe(true)
-    expect(text(w, 'open-simulation-why')).toBe('No demonstration run is prepared')
+    expect(tip(w, 'open-simulation-why')).toBe('No demonstration run is prepared')
   })
 
   it('Overview says it is loading, not that no run exists, while a refresh is in flight', async () => {
@@ -145,18 +167,18 @@ describe('money-views fixture', () => {
     serve({ '/overview': () => (hold ? new Promise(() => {}) : overviewLf1.instance) })
     const w = await open(Overview, '/overview')
     hold = true
-    await w.get('[data-test="refresh"]').trigger('click')
-    await flushPromises()
+    await revisit()
     expect(disabled(w, 'open-simulation')).toBe(true)
-    expect(text(w, 'open-simulation-why')).toBe('Loading the current overview')
+    expect(tip(w, 'open-simulation-why')).toBe('Loading the current overview')
   })
 
   it('Treasury receipt-delayed-240h: floor breached, the shortfall and its calculation', async () => {
     serve({ '/treasury': treasuryDelayed.instance })
     const w = await open(Treasury, '/treasury')
     const { expect: want } = record('Treasury', 'receipt-delayed-240h')
-    expect(text(w, 'floor-status')).toBe(`✕${want.status}`)
-    expect(text(w, 'shortfall')).toBe(want.shortfall)
+    expect(text(w, 'floor-status')).toBe(`${STATES.breached.icon}${FLOOR_WORDS.breached}`) // fixture: ${want.status}
+    // the fixture's "USD 10,000.00 at t=40 h": the amount short, then when (40 hours out)
+    expect(text(w, 'shortfall')).toBe(`${asShown(want.shortfall.split(' at ')[0])} short on 6 Jan (in 40 hours)`)
     const calc = text(w, 'calculation')
     expect(calc).toContain(want.calculation.split(';')[0])
     // the delayed receipt and the withdrawal 48 hours out are named as not yet counted 40 hours out
@@ -164,17 +186,20 @@ describe('money-views fixture', () => {
     expect(calc).toMatch(/exchange withdrawal wd-1 in \(expected in 2 days\)/)
     expect(calc).toMatch(/receivable rcv-1 in \(expected in 252 hours\)/)
     // S and P are separate measures
-    expect(text(w, 'spendable')).toContain('USD 20,000.00')
-    expect(text(w, 'timeline')).toContain('✕ below floor, short USD 10,000.00')
-    // payroll stays visible with its reservation and both time labels
-    const obligations = text(w, 'obligations')
-    expect(obligations).toContain('payroll · payroll-1')
-    expect(obligations).toContain('USD 50,000.00')
-    expect(obligations).toContain('res-payroll-1')
-    expect(obligations).toContain('2026-01-06 16:00 UTC (in 40 hours)')
-    // the currency is always named: every money figure carries it, the calculation names it
+    expect(shown(w, 'spendable')).toContain('$20,000')
+    expect(text(w, 'timeline')).toContain('✕ $10,000 below')
+    // payroll stays visible with its reservation and both time labels (the id, reservation and UTC time in tooltips)
+    const payroll = text(w, 'obligation-payroll-1')
+    expect(payroll).toContain('payroll')
+    expect(payroll).toContain('obligation payroll-1')
+    expect(payroll).toContain('$50,000')
+    expect(payroll).toContain('set aside')
+    expect(payroll).toContain('Reservation res-payroll-1')
+    expect(payroll).toContain('in 40 hours')
+    expect(payroll).toContain('2026-01-06 16:00 UTC')
+    // the currency is always named: every money figure carries its symbol, the calculation names it
     for (const figure of w.findAll('.lw-figure')) {
-      expect(figure.text()).toMatch(/^(lowest )?USD |^Unknown$|^Not assessed$/)
+      expect(figure.text()).toMatch(/^(lowest )?\$|^Unknown$|^Not assessed$/)
     }
     expect(calc).toContain('in USD')
   })
@@ -183,14 +208,14 @@ describe('money-views fixture', () => {
     serveLending(lendingLf2.instance)
     const w = await open(Lending, '/lending')
     const { expect: want } = record('Lending', 'lf2-before')
-    expect(text(w, 'capacity-value')).toBe(want.capacity)
+    expect(shown(w, 'capacity-value')).toBe(asShown(want.capacity))
     expect(text(w, 'calculation')).toContain(want.calculation)
     expect(text(w, 'facility-terms')).toContain(want.cta)
     const facilities = text(w, 'facilities')
     expect(facilities).toContain('adv-a · revenue_advance')
-    expect(facilities).toContain('USD 10,000.00') // principal
-    expect(facilities).toContain('USD 800.00') // fee
-    expect(facilities).toContain('USD 10,800.00') // owed
+    expect(facilities).toContain('$10,000') // principal
+    expect(facilities).toContain('$800') // fee
+    expect(facilities).toContain('$10,800') // owed
     expect(facilities).toContain('Not assessed') // no revenue observed yet: not zero
     expect(w.get('[data-test="fund"]').attributes('href')).toBe('/decisions?run_id=run-1')
   })
@@ -199,11 +224,11 @@ describe('money-views fixture', () => {
     serve({ '/lending': lendingFreeze.instance, '/overview': overviewFreeze.instance })
     const w = await open(Lending, '/lending')
     const { expect: want } = record('Lending', 'lf2-venue-freeze')
-    expect(text(w, 'capacity-value')).toBe(want.capacity)
-    expect(text(w, 'not-current')).toContain(`Lender venue account · ? ${want.venue}`)
-    expect(text(w, 'not-current')).not.toMatch(/USD 0\.00/)
+    expect(shown(w, 'capacity-value')).toBe(asShown(want.capacity))
+    expect(shown(w, 'not-current')).toContain(`Lender venue account · ? ${want.venue}`)
+    expect(text(w, 'not-current')).not.toMatch(/\$0(?![\d,])/)
     expect(disabled(w, 'fund')).toBe(!want.funding_enabled)
-    expect(text(w, 'fund-why')).toBe(want.reason)
+    expect(tip(w, 'fund-why')).toBe(want.reason)
     expect(text(w, 'authority')).toContain('reduced')
   })
 
@@ -218,8 +243,8 @@ describe('money-views fixture', () => {
     serveLending(lendingStale.instance)
     w = await open(Lending, '/lending')
     expect(text(w, 'authority')).toContain('reduced')
-    expect(text(w, 'not-current')).toContain('Lender operating account · ◷ Stale')
-    expect(text(w, 'not-current')).toContain('Lender venue account · ? Unknown')
+    expect(shown(w, 'not-current')).toContain('Lender operating account · ◷ Stale')
+    expect(shown(w, 'not-current')).toContain('Lender venue account · ? Unknown')
     expect(disabled(w, 'fund')).toBe(true)
   })
 
@@ -243,23 +268,22 @@ describe('a stale account is not current, and it is not unknown', () => {
     expect(partial).toContain('Lender venue account · ? Unknown')
     expect(partial).not.toMatch(/operating · \? Unknown/)
     expect(partial).not.toContain('not observed')
-    // Cash and S include a stale value and say Stale; K_p counts known balances only.
-    expect(partial).toContain('the figures that include it say Stale')
-    expect(partial).toContain('Lender capacity counts known balances only')
-    expect(text(w, 'settled')).toContain('USD 70,000.00 · stale') // its last value, kept
+    // Cash includes a stale value and says Stale, its last value kept
+    expect(shown(w, 'settled')).toContain('$70,000 · stale')
   })
 
   it('Lending marks the stale pool account stale and only the venue unknown', async () => {
     serve({ '/lending': lendingStale.instance, '/overview': overviewStale.instance })
     const w = await open(Lending, '/lending')
-    const shown = text(w, 'not-current')
-    expect(shown).toContain('Lender operating account · ◷ Stale')
-    const asOf = w.get('[data-test="not-current"]').findAll('.lw-time').map((t) => t.text())
-    expect(asOf).toEqual(['as of 2026-01-05 12:00 UTC']) // the stale one only; unknown has no time
-    expect(shown).toContain('Lender venue account · ? Unknown')
-    expect(shown).not.toContain('Lender operating account · ? Unknown')
-    expect(shown).not.toContain('Borrower a operating account') // not the pool's
-    expect(shown).not.toMatch(/not observed/i)
+    const listed = shown(w, 'not-current')
+    expect(listed).toContain('Lender operating account · ◷ Stale')
+    // each account's as of is in its tooltip: the stale one only; unknown has no time
+    const tips = w.get('[data-test="not-current"]').findAll('[role="tooltip"]').map((t) => t.text())
+    expect(tips.filter((t) => /as of/.test(t))).toEqual(['Lender operating account · ◷ Stale, as of 2026-01-05 12:00 UTC (lender/operating)'])
+    expect(listed).toContain('Lender venue account · ? Unknown')
+    expect(listed).not.toContain('Lender operating account · ? Unknown')
+    expect(text(w, 'not-current')).not.toContain('Borrower a operating account') // not the pool's
+    expect(text(w, 'not-current')).not.toMatch(/not observed/i)
     expect(disabled(w, 'fund')).toBe(true)
   })
 
@@ -349,10 +373,10 @@ function lendingWithKp (change) {
 describe('data-states fixture', () => {
   it('zero stays zero', async () => {
     const c = stateCase('zero')
-    expect(metricText({ minor: c.value_minor, currency: 'USD', status: c.status })).toBe(c.expect.text)
+    expect(metricText({ minor: c.value_minor, currency: 'USD', status: c.status })).toBe(asShown(c.expect.text))
     serve({ '/overview': overviewWith({ minor: 0, currency: 'USD', status: 'known' }) })
     const w = await open(Overview, '/overview')
-    expect(text(w, 'settled')).toContain(c.expect.text)
+    expect(shown(w, 'settled')).toBe(`Settled cash${asShown(c.expect.text)}`)
   })
 
   it('unknown is never zero, and an unknown capacity disables funding', async () => {
@@ -361,12 +385,12 @@ describe('data-states fixture', () => {
     expect(metricText(unknown)).toBe(c.expect.text)
     serve({ '/overview': overviewWith(unknown) })
     const w = await open(Overview, '/overview')
-    expect(text(w, 'settled')).toContain(c.expect.text)
-    expect(text(w, 'settled')).not.toContain('USD 0.00')
+    expect(shown(w, 'settled')).toBe(`Settled cash${c.expect.text}`)
+    expect(text(w, 'settled')).not.toMatch(/\$0(?![\d,])/)
 
     serveLending(lendingWithKp(() => unknown))
     const l = await open(Lending, '/lending')
-    expect(text(l, 'capacity-value')).toBe('Unknown')
+    expect(shown(l, 'capacity-value')).toBe('Unknown')
     expect(disabled(l, 'fund')).toBe(!c.expect.approval_enabled)
   })
 
@@ -375,20 +399,22 @@ describe('data-states fixture', () => {
     const stale = { minor: c.value_minor, currency: 'USD', status: c.status, as_of: c.as_of }
     serve({ '/overview': overviewWith(stale) })
     const w = await open(Overview, '/overview')
-    expect(text(w, 'settled')).toContain(c.expect.text)
-    expect(text(w, 'as-of')).toBe('as of 2026-01-04 12:00 UTC')
+    expect(shown(w, 'settled')).toContain(asShown(c.expect.text))
+    expect(tip(w, 'tip-settled')).toContain('Stale as of 2026-01-04 12:00 UTC')
 
     serveLending(lendingWithKp((kp) => ({ ...kp, status: 'stale' })))
     const l = await open(Lending, '/lending')
-    expect(text(l, 'capacity-value')).toBe('USD 42,000.00 · stale')
+    expect(shown(l, 'capacity-value')).toBe('$42,000 · stale')
     expect(disabled(l, 'fund')).toBe(!c.expect.approval_enabled)
   })
 
   it('partial shows the known metrics and names what is missing', async () => {
     serve({ '/overview': overviewFreeze.instance })
     const w = await open(Overview, '/overview')
-    expect(text(w, 'settled')).toContain('USD 70,000.00')
-    expect(text(w, 'lender-capacity')).toContain('USD 27,000.00')
+    expect(shown(w, 'settled')).toContain('$70,000')
+    expect(shown(w, 'spendable')).toContain('$20,000')
+    // (Overview has no lender-capacity figure since mockup 01: the lender's capacity rides its
+    // node in World exposure, drawn only when the API serves a relation, and this fixture has none)
     expect(text(w, 'partial')).toContain('Lender venue account')
   })
 
@@ -399,8 +425,8 @@ describe('data-states fixture', () => {
     body.coverage.headroom = { minor: null, currency: 'USD', status: 'unassessed' }
     serve({ '/overview': body })
     const w = await open(Overview, '/overview')
-    expect(text(w, 'floor-status')).toBe(`–${c.expect.text}`)
-    expect(text(w, 'coverage')).not.toContain('Floor kept')
+    expect(text(w, 'floor-status')).toBe(`– ${c.expect.text}`)
+    expect(text(w, 'coverage')).not.toContain(FLOOR_WORDS.kept)
     expect(w.find('.lw-status--ok').exists()).toBe(c.expect.show_green_feasible)
   })
 
@@ -413,7 +439,7 @@ describe('data-states fixture', () => {
     expect(w.get('main').attributes('aria-busy')).toBe(String(stateCase('loading').expect.aria_busy))
     expect(w.findAll('.lw-skeleton').length).toBeGreaterThan(0)
     expect(w.get('main').text()).not.toMatch(/\d/)
-    expect(text(w, 'mode')).toBe('Bank connection not loaded')
+    expect(text(w, 'mode')).toBe('Provider not loaded')
     expect(w.find('a.lw-button').exists()).toBe(false)
   })
 
@@ -424,12 +450,11 @@ describe('data-states fixture', () => {
     const w = await open(Lending, '/lending')
     expect(w.get('[data-test="fund"]').attributes('href')).toBeDefined()
     fail = true
-    await w.get('[data-test="refresh"]').trigger('click')
-    await flushPromises()
+    await revisit()
     expect(text(w, 'error')).toContain(c.expect.previous_values_label)
-    expect(text(w, 'capacity-value')).toBe('USD 42,000.00') // last loaded, still shown
+    expect(shown(w, 'capacity-value')).toBe('$42,000') // last loaded, still shown
     expect(disabled(w, 'fund')).toBe(!c.expect.approval_enabled)
-    expect(text(w, 'fund-why')).toBe('Last loaded, not current; reload before funding')
+    expect(tip(w, 'fund-why')).toBe('Last loaded, not current; reload before funding')
   })
 
   it('a failed refresh after a context change drops the reloaded notice beside the error', async () => {
@@ -438,12 +463,10 @@ describe('data-states fixture', () => {
     serveLending(() => (fail ? new Error('connection reset') : { ...clone(lendingLf2.instance), mode }))
     const w = await open(Lending, '/lending')
     mode = 'sandbox'
-    await w.get('[data-test="refresh"]').trigger('click')
-    await flushPromises()
+    await revisit()
     expect(w.find('[data-test="context-changed"]').exists()).toBe(true)
     fail = true
-    await w.get('[data-test="refresh"]').trigger('click')
-    await flushPromises()
+    await revisit()
     expect(text(w, 'error')).toContain('Last loaded, not current')
     expect(w.find('[data-test="context-changed"]').exists()).toBe(false)
   })
@@ -505,25 +528,26 @@ describe('data-states fixture', () => {
     const w = await open(Lending, '/lending')
     expect(text(w, 'context-provider')).toBe(dataStates.labels[c.from])
     mode = c.to
-    await w.get('[data-test="refresh"]').trigger('click')
-    await flushPromises()
+    await revisit()
     expect(text(w, 'context-provider')).toBe(c.expect.banner)
     expect(Boolean(text(w, 'context-changed'))).toBe(c.expect.reload_context)
-    expect(text(w, 'context-changed')).toContain(PLAIN[c.to])
+    expect(text(w, 'context-changed')).toContain(c.expect.banner) // the header names the provider (MATCH.md item 3)
   })
 })
 
 describe('formatting and labels', () => {
   it('money is integer minor units with the currency named', () => {
-    expect(formatMoney(7000000, 'USD')).toBe('USD 70,000.00')
-    expect(formatMoney(-1000000, 'USD')).toBe('USD -10,000.00')
-    expect(formatMoney(5, 'USD')).toBe('USD 0.05')
+    expect(formatMoney(7000000, 'USD')).toBe('$70,000')
+    expect(formatMoney(7000050, 'USD')).toBe('$70,000.50')
+    expect(formatMoney(-1000000, 'USD')).toBe('-$10,000')
+    expect(formatMoney(5, 'USD')).toBe('$0.05')
     expect(formatMoney(1234, 'JPY')).toBe('JPY 1,234')
+    expect(formatMoney(1230, 'CHF')).toBe('CHF 12.30')
   })
 
   it('an amount beyond exact integers is refused, never printed rounded or in exponent form', () => {
-    expect(formatMoney(1e21, 'USD')).toBe('USD Unrepresentable amount')
-    expect(formatMoney(2 ** 53 + 2, 'USD')).toBe('USD Unrepresentable amount')
+    expect(formatMoney(1e21, 'USD')).toBe('Unrepresentable amount')
+    expect(formatMoney(2 ** 53 + 2, 'USD')).toBe('Unrepresentable amount')
   })
 
   it('an unparseable time is Unavailable, not a crash', () => {

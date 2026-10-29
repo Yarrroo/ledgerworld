@@ -28,7 +28,10 @@
         <span class="lw-scrubber__num">{{ r }}</span>
       </button>
     </div>
-    <p class="lw-scrubber__value" data-test="cursor">{{ valueText }}</p>
+    <p class="lw-scrubber__value">
+      <Tip v-if="hint" :text="hint"><span data-test="cursor">{{ valueText }}</span></Tip>
+      <span v-else data-test="cursor">{{ valueText }}</span>
+    </p>
   </div>
 </template>
 
@@ -39,13 +42,16 @@
  * showing another round. Keyboard: ←/→ step, Home/End jump.
  */
 import { computed } from 'vue'
+import Tip from './Tip.vue'
 
 const props = defineProps({
   rounds: { type: Array, required: true },
   loaded: { type: Array, default: () => [] },
   modelValue: { type: Number, default: null },
   tHours: { type: Number, default: null },
-  label: { type: String, default: 'Committed round' }
+  label: { type: String, default: 'Committed round' },
+  /** How rounds map to simulated time and the keys, on demand (a tooltip on the cursor's words). */
+  hint: { type: String, default: '' }
 })
 const emit = defineEmits(['update:modelValue'])
 

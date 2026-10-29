@@ -1,25 +1,36 @@
 /**
  * Copy pass 3 (prp/2026-10-29-ux-pass/COPY.md) on the shared shell and the times and accounts every
- * screen shows, at every width of e2e/ux.config.ts: the context bar reads in plain words
- * ("Simulated bank connection · Scripted agents · As of 1 Jan, 00:00 UTC") with the provider mode,
- * model, full time, snapshot and run one click down in its How we know; a time ahead reads
+ * screen shows, at every width of e2e/ux.config.ts: the context bar reads as the mockups
+ * ("Simulated provider · Scripted agents" and "January 1, 2026", MATCH.md item 3) with the provider
+ * mode, model, full time, snapshot and run in its tooltip; a time ahead reads "in 40h" or
  * "in 40 hours", never "t=40 h"; an account reads by name ("Operating account · USD"), its id in
- * How we know. Every data-test hook stays. Read-only.
+ * How we know. Read-only.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
 import { $, folded, open, read } from './copy'
 import { ROUTES, demoRunId, settled, urlOf } from './routes'
 
 const BASELINE = JSON.parse(readFileSync(join(__dirname, '../../contracts/examples/c6_api/valid-overview-demo-baseline.json'), 'utf-8')).instance
 
-/** What the bar must not show on its face: ids, raw mode and model names, the old hour notation. */
-const MECHANICS = /snapshot|Synthetic|Simulated provider|Model |\blocal\b|t=\d/
+/** What the bar must not show on its face: ids, raw model names, full times, the old hour notation. */
+const MECHANICS = /snapshot|Model |\blocal\b|UTC|t=\d/
 
 /** The rendered text of an element: a closed disclosure's body is not part of it. */
 const shown = (page: Page, selector: string) => page.locator(selector).first().evaluate((el) => (el as HTMLElement).innerText)
+
+/** A tooltip on a value: hidden, opened by keyboard focus with `facts`, closed by Escape. */
+async function tipOpens (page: Page, tip: Locator, facts: string[]): Promise<void> {
+  const body = tip.locator('[role="tooltip"]').first()
+  await expect(body).toBeHidden()
+  await tip.focus()
+  await expect(body).toBeVisible()
+  for (const fact of facts) await expect(body).toContainText(fact)
+  await page.keyboard.press('Escape')
+  await expect(body).toBeHidden()
+}
 
 test('the context bar: plain words on every screen, the mechanics in its How we know', async ({ page, baseURL, request }) => {
   const writes = await readOnly(page, baseURL!)
@@ -28,10 +39,8 @@ test('the context bar: plain words on every screen, the mechanics in its How we 
     const snapshot = route.run ? null : (await read(page, route.path)).snapshot_id as string
     await page.goto(urlOf(route, runId))
     await settled(page)
-    await expect($(page, 'mode')).toHaveText('Simulated bank connection')
-    await expect($(page, 'model')).toHaveText('Scripted agents')
-    await expect($(page, 'context-as-of')).toHaveText(/^As of \d{1,2} [A-Z][a-z]{2}, \d\d:\d\d UTC$/)
-    await expect($(page, 'refresh')).toBeVisible()
+    await expect($(page, 'mode')).toHaveText(/^Simulated provider · Scripted agents( · What-if)?$/)
+    await expect($(page, 'context-as-of')).toHaveText(/^[A-Z][a-z]+ \d{1,2}, \d{4}$/)
     const face = await shown(page, '.lw-context__bar')
     expect(face, `${route.path}: the bar shows mechanics: ${face}`).not.toMatch(MECHANICS)
     if (snapshot) expect(face).not.toContain(snapshot)
@@ -39,7 +48,7 @@ test('the context bar: plain words on every screen, the mechanics in its How we 
     const facts = ['Simulated provider', 'scripted', 'UTC · local']
     if (snapshot) facts.push(snapshot)
     if (route.run) facts.push(runId)
-    await folded(page, 'how-context-bar', facts)
+    await tipOpens(page, $(page, 'how-context-bar'), facts)
     await expect($(page, 'source')).not.toBeEmpty()
   }
   expect(writes).toEqual([])
@@ -50,12 +59,13 @@ test('Overview: due in 40 hours, paid from the operating account, a day-and-time
   const own = await read(page, '/overview')
   await page.route('**/api/v1/overview', (route) => route.fulfill({ json: { ...BASELINE, demo: own.demo, scenario: own.scenario } }))
   await open(page, '/overview')
-  await expect($(page, 'context-as-of')).toHaveText('As of 1 Jan, 00:00 UTC')
-  await expect($(page, 'next-due-at')).toHaveText('due in 40 hours')
-  await expect($(page, 'due')).toHaveText(/ · in 40 hours$/)
+  await expect($(page, 'context-as-of')).toHaveText('January 1, 2026')
+  await expect($(page, 'next-due-at')).toHaveText(' · in 40h') // the mockup's timing (MATCH.md item 6)
+  await expect($(page, 'due')).toHaveText(/^due 2026-01-02 16:00 UTC · local /)
   await expect($(page, 'paid-from')).toHaveText('Operating account · USD')
-  await folded(page, 'how-next', ['treasury/operating'])
-  await folded(page, 'how-context-bar', [BASELINE.snapshot_id, '2026-01-01 00:00 UTC'])
+  await expect($(page, 'next-amount')).toBeVisible()
+  await tipOpens(page, $(page, 'next-obligation').locator('.lw-tip', { has: $(page, 'next-amount') }), ['Paid from Operating account · USD'])
+  await tipOpens(page, $(page, 'how-context-bar'), [BASELINE.snapshot_id, '2026-01-01 00:00 UTC'])
   const main = await shown(page, 'main.lw-main')
   expect(main).not.toMatch(/t=\d/)
   expect(main).not.toContain('treasury/operating')

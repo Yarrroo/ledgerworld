@@ -1,45 +1,29 @@
 <template>
-  <ScreenShell v-slot="{ body }" title="Execution" :reading="state" :refresh="refresh">
-    <section class="lw-exec__context" aria-labelledby="context-heading" data-panel="What moved">
-      <h2 id="context-heading" class="lw-visually-hidden">Execution context</h2>
-      <p class="lw-lead" data-test="lead">{{ lead }}</p>
-      <div class="lw-labels" data-test="labels">
-        <span class="lw-tag" data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span>
-      </div>
-      <HowWeKnow test="how-execution">
-        <p class="lw-source" data-test="context">
-          Run {{ body.run_id ?? 'unavailable' }} ·
-          <template v-if="activeId">execution {{ activeId }}</template>
-          <template v-else>no execution is linked to this run</template>
-          · the plan executed is the one the server bound on the observed snapshot, never a branch.
-        </p>
-        <p>The amounts in the sentence above are the provider receipts of the advance (in) and the
-          payout and repayment legs (out); checked against your books means each leg is reconciled
-          to its ledger journal. Provider: {{ LABELS[body.mode] || body.mode }}.</p>
-      </HowWeKnow>
-    </section>
-
-    <section class="lw-tile" aria-labelledby="authority-heading" data-test="authority" data-panel="Approve, then send">
-      <h2 id="authority-heading">Approve, then send</h2>
-      <p class="lw-time">Reading needs no operator access. Approving and executing take it, entered
-        in the review; it stays in this tab's memory and is forgotten on reload.</p>
-      <div class="lw-actions">
+  <ScreenShell title="Execution" headline="From approved plan to proof." :subtitle="subtitle" :lead="lead"
+               :reading="state" :refresh="refresh">
+    <template #action>
+      <Tip>
         <button ref="opener" type="button" class="lw-button" data-test="review-plan"
-                :disabled="!!reviewWhy" aria-describedby="review-why" @click="openReview">Review the plan</button>
-        <button v-if="token" type="button" class="lw-button lw-button--quiet"
-                data-test="forget-token" @click="forgetAccess">Forget access</button>
-        <span id="review-why" class="lw-time" data-test="review-why">{{ reviewWhy || authority }}</span>
-      </div>
-    </section>
-
+                :disabled="!!reviewWhy" aria-describedby="review-why" @click="openReview">Review plan<Arrow /></button>
+        <template #tip>
+          <span id="review-why" data-test="review-why">{{ reviewWhy || authority }}</span>
+          <span data-test="authority"><template v-if="reviewWhy || authority"> · </template>Reading needs no
+            operator access. Approving and executing take it, entered in the review; it stays in this tab's
+            memory and is forgotten on reload.</span>
+        </template>
+      </Tip>
+    </template>
+    <template #default="{ body }">
     <p v-if="flow.blocked" class="lw-alert" role="alert" data-test="blocked">{{ flow.blocked }}</p>
     <p v-if="flow.message" class="lw-note" role="status" data-test="message">{{ flow.message }}</p>
     <p v-for="[run, held] in waiting" :key="run" class="lw-actions">
-      <RouterLink class="lw-button lw-button--quiet" data-test="elsewhere"
-                  :to="{ path: route.path, query: { run_id: run, execution_id: held.unseen === 'execution' ? held.followedId : undefined } }">
-        <template v-if="held.unseen === 'execution'">Read execution {{ held.followedId }} of run {{ run }}</template>
-        <template v-else>Open run {{ run }}: approval outcome unknown</template>
-      </RouterLink>
+      <Tip :text="held.unseen === 'execution' ? `Execution ${held.followedId} of run ${run}` : `Run ${run}`">
+        <RouterLink class="lw-button lw-button--quiet" data-test="elsewhere"
+                    :to="{ path: route.path, query: { run_id: run, execution_id: held.unseen === 'execution' ? held.followedId : undefined } }">
+          <template v-if="held.unseen === 'execution'">Read the execution sent for another run</template>
+          <template v-else>Open the other run: approval outcome unknown</template>
+        </RouterLink>
+      </Tip>
     </p>
 
     <div class="lw-exec">
@@ -47,7 +31,6 @@
                data-panel="What you approved">
         <h2 id="summary-heading">What you approved</h2>
         <template v-if="held">
-          <p class="lw-time">Confirmed in this tab and not executed; kept in this tab's memory only.</p>
           <dl class="lw-terms" data-test="summary-held">
             <dt>Approval</dt>
             <dd class="lw-copyable" data-test="summary-held-approval">
@@ -57,40 +40,58 @@
             </dd>
             <dt>State</dt>
             <dd data-test="summary-held-state">
-              <span :class="['lw-status', `lw-status--${STAGES[stage].tone}`]">
-                <span aria-hidden="true">{{ STAGES[stage].icon }}</span><span>{{ heldState }}</span>
-              </span>
+              <Tip text="Confirmed in this tab and not executed; kept in this tab's memory only.">
+                <span :class="['lw-status', `lw-status--${STAGES[stage].tone}`]">
+                  <span aria-hidden="true">{{ STAGES[stage].icon }}</span><span>{{ heldState }}</span>
+                </span>
+              </Tip>
             </dd>
             <dt>Observed snapshot</dt><dd>{{ held.snapshot_id }}</dd>
             <dt>Provider</dt><dd>{{ LABELS[held.mode] || held.mode }}</dd>
             <dt>Plan hash</dt><dd class="lw-hash" data-test="summary-held-hash">{{ held.plan_hash }}</dd>
             <dt>Expires</dt><dd data-test="summary-held-expires">{{ expires.utc }} · {{ expires.local }}</dd>
           </dl>
-          <p v-if="execution" class="lw-time">The execution linked to this run:</p>
         </template>
         <template v-if="execution">
-          <p data-test="summary-plain">{{ PLANS[policy] ?? 'The selected plan' }}, approved
-            and sent; last checked {{ formatTime(execution.as_of).utc }}.</p>
-          <HowWeKnow test="how-summary">
-            <dl class="lw-terms">
-              <dt>Approval</dt>
-              <dd class="lw-copyable">
-                <span class="lw-hash" data-test="summary-approval">{{ execution.approval_id }}</span>
-                <button type="button" class="lw-copy" data-test="copy-summary-approval"
-                        @click="copy('Approval id', execution.approval_id)">Copy<span class="lw-visually-hidden"> approval id</span></button>
-              </dd>
-              <dt>Policy</dt><dd>{{ policy ?? 'not read' }}</dd>
-              <dt>Observed snapshot</dt><dd>{{ execution.snapshot_id }}</dd>
-              <dt>Provider</dt><dd>{{ LABELS[execution.mode] || execution.mode }}</dd>
-              <dt>Status read</dt><dd data-test="summary-read">{{ formatTime(execution.as_of).utc }}</dd>
-            </dl>
-          </HowWeKnow>
+          <div data-test="summary-plain">
+            <Tip :text="`Approved and sent; last checked ${formatTime(execution.as_of).utc}.`">{{ PLANS[policy] ?? 'The selected plan' }}, approved
+              and sent.</Tip>
+            <HowWeKnow test="how-summary">
+              <dl class="lw-terms">
+                <dt>Approval</dt>
+                <dd class="lw-copyable">
+                  <span class="lw-hash" data-test="summary-approval">{{ execution.approval_id }}</span>
+                  <button type="button" class="lw-copy" data-test="copy-summary-approval"
+                          @click="copy('Approval id', execution.approval_id)">Copy<span class="lw-visually-hidden"> approval id</span></button>
+                </dd>
+                <dt>Policy</dt><dd>{{ policy ?? 'not read' }}</dd>
+                <dt>Observed snapshot</dt><dd>{{ execution.snapshot_id }}</dd>
+                <dt>Provider</dt><dd>{{ LABELS[execution.mode] || execution.mode }}</dd>
+                <dt>Status read</dt><dd data-test="summary-read">{{ formatTime(execution.as_of).utc }}</dd>
+              </dl>
+            </HowWeKnow>
+          </div>
         </template>
         <p v-else-if="!held" class="lw-time">No approval to summarise: the linked execution has not been read.</p>
+        <p v-if="token" class="lw-actions">
+          <button type="button" class="lw-button lw-button--quiet" data-test="forget-token"
+                  @click="forgetAccess">Forget access</button>
+        </p>
       </section>
 
       <section class="lw-exec__legs" aria-labelledby="receipts-heading" data-test="receipts" data-panel="Money moved">
         <h2 id="receipts-heading">Money moved, with receipts</h2>
+        <HowWeKnow test="how-execution">
+          <span class="lw-source" data-test="context">
+            Run {{ body.run_id ?? 'unavailable' }} ·
+            <template v-if="activeId">execution {{ activeId }}</template>
+            <template v-else>no execution is linked to this run</template>
+            · the plan executed is the one the server bound on the observed snapshot, never a branch.
+          </span>
+          <span>The amounts in the page's opening sentence are the provider receipts of the advance (in)
+            and the payout and repayment legs (out); checked against your books means each leg is
+            reconciled to its ledger journal. Provider: {{ LABELS[body.mode] || body.mode }}.</span>
+        </HowWeKnow>
         <p v-if="notFound" class="lw-note" role="status" data-test="not-found">
           <template v-if="followedId === activeId">
             No execution is recorded yet for {{ activeId }}; this does not mean it failed. Reading again.
@@ -110,9 +111,15 @@
           <ol class="lw-legs">
             <li v-for="leg in legs" :key="leg.leg_id" class="lw-tile" :data-test="`leg-${leg.kind}`">
               <div class="lw-tile__label">{{ leg.label || leg.kind }}</div>
-              <div :class="['lw-status', `lw-status--${leg.tone}`]" data-test="leg-status">
-                <span aria-hidden="true">{{ leg.icon }}</span><span>{{ leg.text }}</span>
+              <div class="lw-time">
+                <span data-test="receipt-mode">{{ leg.mode }}</span><template v-if="leg.receipt">
+                  · <Tip :text="`Provider receipt amount, observed ${formatTime(leg.receipt.observed_at).utc}`">{{ receiptMoney(leg.receipt) }}</Tip></template>
               </div>
+              <Tip :text="`Provider state ${leg.state}; journal ${leg.journal_id ?? 'not posted'}. Checked against your books as of the time shown, not final: a later word from the bank can still open an incident.`">
+                <div :class="['lw-status', `lw-status--${leg.tone}`]" data-test="leg-status">
+                  <span aria-hidden="true">{{ leg.icon }}</span><span>{{ leg.text }}</span>
+                </div>
+              </Tip>
               <ol class="lw-steps" :aria-label="`Progress of ${leg.label || leg.kind}`" data-test="steps">
                 <li v-for="step in leg.steps" :key="step.name"
                     :class="{ [`lw-steps__${step.mark}`]: step.mark !== 'todo', 'lw-steps__now': step.now }"
@@ -122,27 +129,21 @@
                     v-if="step.mark === 'done'" class="lw-visually-hidden">, reached</span>
                 </li>
               </ol>
-              <div class="lw-time">
-                <span data-test="receipt-mode">{{ leg.mode }}</span><template v-if="leg.receipt">
-                  · {{ leg.receipt.currency }} {{ leg.receipt.amount }}</template>
-              </div>
               <details v-if="leg.receipt" class="lw-calc" data-test="receipt">
                 <summary>Open receipt</summary>
                 <dl class="lw-calc__body lw-terms">
                   <dt>Provider id</dt><dd>{{ leg.receipt.provider_id }}</dd>
                   <dt>Request id</dt><dd>{{ leg.receipt.request_id }}</dd>
-                  <dt>Status</dt><dd>{{ leg.receipt.status }}</dd>
+                  <dt>Status</dt>
+                  <dd><Tip :text="`Fields kept from the provider: ${leg.receipt.raw_keys.join(', ')}`">{{ leg.receipt.status }}</Tip></dd>
                   <dt>Amount</dt><dd>{{ leg.receipt.currency }} {{ leg.receipt.amount }}</dd>
                   <dt>Journal</dt><dd>{{ leg.journal_id ?? 'not posted' }}</dd>
                   <dt>Observed</dt><dd>{{ formatTime(leg.receipt.observed_at).utc }}</dd>
                   <dt>Provider</dt><dd>{{ LABELS[leg.receipt.mode] || leg.receipt.mode }}</dd>
-                  <dt>Fields kept</dt><dd>{{ leg.receipt.raw_keys.join(', ') }}</dd>
                 </dl>
               </details>
             </li>
           </ol>
-          <p class="lw-time">Checked against your books as of the time shown, not final: a later
-            word from the bank can still open an incident.</p>
         </template>
       </section>
 
@@ -157,10 +158,12 @@
               </dl>
             </li>
           </ul>
-          <p>No reversal or resend is offered here; the operator resolves it with the provider.</p>
+          <HowWeKnow test="how-incident">No reversal or resend is offered here; the operator resolves it with
+            the provider.</HowWeKnow>
         </div>
         <p v-else-if="execution" class="lw-time" data-test="no-incidents">
-          None open as of {{ formatTime(execution.as_of).utc }}.
+          <Tip :text="`None open as of ${formatTime(execution.as_of).utc}; a later word from the bank can still open one.`">No
+            open incidents for this reading.</Tip>
         </p>
         <p v-else class="lw-time">Unavailable until an execution is read.</p>
       </section>
@@ -271,6 +274,7 @@
         </div>
       </div>
     </div>
+    </template>
   </ScreenShell>
 </template>
 
@@ -303,9 +307,11 @@ export function forgetTab () {
 <script setup>
 import { computed, nextTick, onUnmounted, reactive, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
+import Arrow from '../components/Arrow.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
+import Tip from '../components/Tip.vue'
 import {
-  ApiError, LABELS, PLAIN, PLANS, STATES, ScreenShell, decimalMinor, feesAcross, formatMoney, formatTime, getOverview, kindText,
+  ApiError, LABELS, PLANS, STATES, ScreenShell, decimalMinor, feesAcross, formatMoney, formatTime, getOverview, kindText,
   latestOnly, money, noDemoRun, request, useReading
 } from '../api/v1.js'
 
@@ -991,6 +997,22 @@ const lead = computed(() => {
   what = what || `made its ${n === 1 ? 'payment' : 'payments'}`
   return `The plan you approved ${what} — ${n === 2 ? 'both ' : n > 2 ? 'all ' : ''}checked against your books.`
 })
+
+/** The hero's one line: which plan this record is for and how far its legs are checked. */
+const subtitle = computed(() => {
+  const body = execution.value
+  const plan = PLANS[policy.value] ?? 'Approved plan'
+  if (!body) return held.value ? `${plan} · approved, not sent` : 'No execution recorded yet'
+  const n = body.legs.length
+  const checked = body.legs.filter((l) => l.reconciled && l.state === 'settled').length
+  return `${plan} · ${checked} of ${n} legs reconciled`
+})
+
+/** A receipt's amount in the page's money style; as the provider wrote it when it does not read. */
+function receiptMoney (r) {
+  const minor = decimalMinor(r.amount, r.currency)
+  return minor === null ? `${r.currency} ${r.amount}` : formatMoney(minor, r.currency)
+}
 
 // ------------------------------------------------------------------ the dialog's stage
 
