@@ -3,7 +3,7 @@
 // unloaded round or to another run closes the details; a poll that changes nothing keeps them.
 // No request leaves the test: fetch answers GET /runs/<id> from a C6 RunResponse built from the
 // UI design fixture scrubber.json.
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { h } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -129,5 +129,56 @@ describe('graph selection follows the round cursor', () => {
     await flushPromises()
     expect(gets()).toBe(before + 1)
     expect(details(w).text()).toContain('i-r5-lender-2 cites i-r4-borrower-c-1')
+  })
+})
+
+// happy-dom lays nothing out, so every box measures 0. The graph's box measures the way a browser's
+// does: nothing inside a closed disclosure, a real size once it is open.
+describe('the evidence graph draws when its disclosure opens', () => {
+  const SIZE = { clientWidth: 640, clientHeight: 400 }
+  for (const [prop, size] of Object.entries(SIZE)) {
+    Object.defineProperty(HTMLElement.prototype, prop, {
+      configurable: true, get () { return this.closest('details:not([open])') ? 0 : size }
+    })
+  }
+  afterAll(() => { for (const prop of Object.keys(SIZE)) delete HTMLElement.prototype[prop] })
+
+  const svg = (w) => w.get('[data-test="graph"] .graph-svg').element
+  async function reveal (w) {
+    const disclosure = w.get('details.lw-sim__evidence').element
+    disclosure.open = true
+    disclosure.dispatchEvent(new Event('toggle'))
+    await flushPromises()
+  }
+
+  it('first opening draws at the open size, not the closed one', async () => {
+    const { w } = await open(() => run())
+    expect(svg(w).getAttribute('viewBox')).toBe('0 0 0 0') // drawn while closed
+    await reveal(w)
+    expect(svg(w).getAttribute('viewBox')).toBe('0 0 640 400')
+    expect(svg(w).querySelectorAll('circle').length).toBeGreaterThan(0)
+  })
+
+  it('opening keeps the round the cursor selected while closed', async () => {
+    const { w } = await open(() => run())
+    await scrubTo(w, 4)
+    await reveal(w)
+    expect(svg(w).getAttribute('viewBox')).toBe('0 0 640 400')
+    const drawn = [...svg(w).querySelectorAll('circle')].map((c) => c.__data__?.id)
+    expect(drawn).toContain('actor:borrower-c')
+    expect(drawn).not.toContain('actor:lender') // the lender first acts in round 5
+  })
+
+  it('after opening, a poll that changes nothing keeps the drawing and its selection', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const { w, gets } = await open(() => run(ctx.run_id, 'running'))
+    await reveal(w)
+    await pickNode(w, 'actor:lender')
+    const before = gets()
+    await vi.advanceTimersByTimeAsync(4000)
+    await flushPromises()
+    expect(gets()).toBe(before + 1)
+    expect(svg(w).getAttribute('viewBox')).toBe('0 0 640 400')
+    expect(details(w).text()).toContain('actor:lender')
   })
 })
