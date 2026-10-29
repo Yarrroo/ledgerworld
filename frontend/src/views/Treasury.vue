@@ -5,14 +5,19 @@
       measures; the reserve floor is checked on P. Every figure is one account's, in its own currency.
     </p>
 
+    <p v-if="moved" class="lw-note" role="status" data-test="snapshot-moved">
+      The link was made on snapshot {{ moved }}; this is snapshot {{ body.snapshot_id }}.
+    </p>
+
     <section class="lw-tre__accounts" aria-labelledby="accounts-heading" data-panel="Accounts" data-test="accounts">
       <h2 id="accounts-heading">Account</h2>
       <p v-if="!accounts.length" class="lw-note" data-test="no-accounts">
         The API returned no treasury cash account for {{ body.snapshot_id }}: nothing to show.
       </p>
       <div v-else class="lw-tre__choices" role="radiogroup" aria-labelledby="accounts-heading" data-test="account-selector">
-        <label v-for="a in accounts" :key="a.id" class="lw-tre__choice" :class="{ 'is-selected': a.id === account?.id }"
-               :data-test="`account-${a.id}`">
+        <label v-for="a in accounts" :key="a.id" class="lw-tre__choice"
+               :class="{ 'is-selected': a.id === account?.id, 'lw-row--focus': focus === `account:${a.id}` }"
+               :data-test="`account-${a.id}`" :data-focus="`account:${a.id}`" tabindex="-1">
           <input type="radio" name="treasury-account" :value="a.id" :checked="a.id === account?.id"
                  @change="chosen = a.id">
           <span class="lw-tre__choice-id">{{ a.id }}</span>
@@ -81,7 +86,9 @@
                   <th scope="col">When (UTC)</th><th scope="col">Reservation</th><th scope="col">Status</th></tr>
               </thead>
               <tbody>
-                <tr v-for="r in rows" :key="r.key" :class="{ 'is-open': r.key === openRow }" :data-row="r.id">
+                <tr v-for="r in rows" :key="r.key" :data-row="r.id" :data-test="r.obligation ? `obligation-${r.id}` : undefined"
+                    :data-focus="r.obligation ? `obligation:${r.id}` : `flow:${r.id}`" tabindex="-1"
+                    :class="{ 'is-open': r.key === openRow, 'lw-row--focus': focus === (r.obligation ? `obligation:${r.id}` : `flow:${r.id}`) }">
                   <td data-label="Item">
                     <button type="button" class="lw-tre__open" :data-test="`row-${r.id}`" @click="openRow = r.key">
                       {{ r.kind }} · {{ r.id }}{{ r.mandatory ? ' · mandatory' : '' }}
@@ -211,7 +218,8 @@ import CashChart from '../components/CashChart.vue'
 import DetailSheet from '../components/DetailSheet.vue'
 import {
   STATES, ScreenShell, againstFloor, contextKey, formatAmount, formatMoney, formatTime, getOverview,
-  getTreasury, hoursFrom, metricText, money, pendingFlows, projectionTerms, routeExists, useReading
+  getTreasury, hoursFrom, metricText, money, pendingFlows, projectionTerms, routeExists, useFocusTarget,
+  useReading
 } from '../api/v1.js'
 
 const route = useRoute()
@@ -233,6 +241,8 @@ async function load () {
 }
 
 const { state, refresh } = useReading(load)
+// a deep link (Overview's cash, spendable, next obligation) names an account or an obligation row
+const { focus, moved } = useFocusTarget(state)
 
 /** The account's lowest API point P, first reached; null when any point has no value. */
 function lowest (projected) {
@@ -265,8 +275,24 @@ const accounts = computed(() => {
 })
 const currencies = computed(() => new Set(accounts.value.map((a) => a.currency)).size)
 
-// T1: the operating account by default, or the one the URL names; a reload keeps the choice.
-const chosen = ref(typeof route.query.account === 'string' ? route.query.account : null)
+// T1: the operating account by default, or the one the URL names (?account=, or a deep link to
+// an account or to an obligation, which selects the account the obligation is on); a reload
+// keeps the choice.
+function linked () {
+  const q = route.query
+  if (typeof q.account === 'string') return q.account
+  const f = typeof q.focus === 'string' ? q.focus : ''
+  if (f.startsWith('account:')) return f.slice('account:'.length)
+  if (f.startsWith('obligation:')) {
+    const id = f.slice('obligation:'.length)
+    return state.body?.obligations.find((o) => o.obligation_id === id)?.account ?? null
+  }
+  return null
+}
+const chosen = ref(null)
+watch(() => [state.status, route.query.focus, route.query.account], () => {
+  if (state.status === 'loaded' && linked()) chosen.value = linked()
+}, { immediate: true })
 const account = computed(() => {
   const list = accounts.value
   return list.find((a) => a.id === chosen.value) ??
