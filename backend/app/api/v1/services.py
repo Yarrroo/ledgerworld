@@ -11,7 +11,8 @@
 - the demo token, the provider mode, and the clock the observed state is read at: the snapshot's
   `as_of` plus the wall time since the store first served it (the anchor is stored, so a restart
   or a second process never runs the clock back), so a frozen snapshot goes stale and an approval
-  expires as they would on the provider's clock.
+  expires as they would on the provider's clock. A prepared demo's baseline is the exception: the
+  screens read it at its own `as_of`, while approvals still run on this clock.
 
 `Services.from_env()` is the deployed wiring; tests build one directly with fakes.
 """
@@ -144,12 +145,13 @@ class Services:
                 self._gateway = self.make_gateway(self)
             return self._gateway
 
-    def observed(self) -> tuple[LedgerStore, Snapshot, datetime]:
+    def observed(self, demo: dict | None = None) -> tuple[LedgerStore, Snapshot, datetime]:
         """The store, snapshot and time Overview, Treasury and Lending read. With a prepared demo:
         its run's observed snapshot, loaded into a store of its own and read at that snapshot's
         as_of, so the screens show the baseline its plan was decided on, never the ledger the
-        execution moved since or a clock that ran on past it. Otherwise the observed store now."""
-        run_id = self.demo()["run_id"]
+        execution moved since or a clock that ran on past it. Otherwise the observed store now.
+        ``demo`` is a `demo()` the caller already read, so one response reads one context."""
+        run_id = (demo or self.demo())["run_id"]
         if run_id is None:
             return self.store, self.snapshot, self.now()
         with self.lock:

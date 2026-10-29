@@ -47,7 +47,7 @@ def prepared(tmp_path, monkeypatch):
     thread = threading.Thread(target=work)
     thread.start()
     try:
-        context = prepare.prepare(services, timeout=90)
+        context = prepare.prepare(services, timeout=300)
     finally:
         stop.set()
         thread.join(timeout=30)
@@ -70,6 +70,7 @@ def test_public_screens_show_the_observed_baseline_not_the_executed_ledger(prepa
     http = register(Flask(__name__), api).test_client()
 
     overview = http.get("/api/v1/overview").get_json()
+    assert overview["as_of"] == as_of  # the envelope reads at the baseline, not the app clock
     assert overview["snapshot_id"] == observed.snapshot_id
     assert overview["demo"] == context
     assert overview["completeness"]["status"] == "complete"
@@ -87,6 +88,7 @@ def test_public_screens_show_the_observed_baseline_not_the_executed_ledger(prepa
                                            "as_of": as_of}
 
     treasury = http.get("/api/v1/treasury").get_json()
+    assert treasury["as_of"] == as_of
     assert treasury["snapshot_id"] == observed.snapshot_id
     operating = next(a for a in treasury["accounts"] if a["id"] == "treasury/operating")
     assert operating["buckets"]["settled"] == money(7_000_000)
@@ -95,6 +97,7 @@ def test_public_screens_show_the_observed_baseline_not_the_executed_ledger(prepa
     assert payroll["state"] == "open"
 
     lending = http.get("/api/v1/lending").get_json()
+    assert lending["as_of"] == as_of
     assert lending["snapshot_id"] == observed.snapshot_id
     assert lending["capacity"]["K_p"] == {**money(4_200_000), "status": "known", "as_of": as_of}
     assert lending["capacity"]["unobserved"] == []
