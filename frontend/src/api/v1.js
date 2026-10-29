@@ -481,8 +481,9 @@ export const ScreenShell = defineComponent({
       const chosen = pinned && order.find((p) => p.el.id === pinned)
       if (!chosen || chosen.top < 0 || chosen.top >= window.innerHeight) pinned = null
       const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2
-      const bottom = order.find((p) => p.top === order[order.length - 1].top)
-      if (atEnd && window.scrollY > 0) current = pinned ? chosen : bottom
+      if (atEnd && window.scrollY > 0) {
+        current = pinned ? chosen : order.find((p) => p.top === order[order.length - 1].top)
+      }
       active.value = current.el.id
     }
 

@@ -2,8 +2,8 @@
 // drawn rather than where they sit in the markup. The screen's grid places its four panels out of
 // DOM order at two columns (controls; graph beside feed; cash below — feed and cash under the
 // graph once it is expanded) and keeps DOM order on a phone. happy-dom lays nothing out, so each
-// width's rendered geometry is given here: page offsets (y, x) per panel, as measured on the
-// screen at 1440, 834 and 390 px with the demonstration run.
+// width's rendered geometry is given here: page offsets (y, x) per panel, in the shape the screen
+// draws at 1440, 834 and 390 px (e2e/ux/simulation-index.spec.ts checks the real layout).
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { h, nextTick } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
