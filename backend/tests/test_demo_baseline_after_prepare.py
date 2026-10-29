@@ -1,5 +1,5 @@
-"""After the operator prepares the demo, the public screens show the prepared run's observed
-snapshot, fresh at its own as_of; the executed legs show on Execution only."""
+"""After the operator prepares the demo, the public screens show the demo world's observed
+snapshot at h0, fresh at its own as_of; the executed legs show on Execution only."""
 from __future__ import annotations
 
 import threading
@@ -10,7 +10,6 @@ import pytest
 from app.api.v1 import register
 from app.api.v1.services import Services, gateway_from_env
 from app.demo import prepare
-from app.demo.run import observed_snapshot
 from app.finance.store import LedgerStore
 from app.jobs.queue import JobQueue, Worker
 from app.jobs.runner import Runner
@@ -56,7 +55,7 @@ def prepared(tmp_path, monkeypatch):
     api = build()
     api.gateway()
     api.clock = lambda: world.epoch + timedelta(days=3)  # long after the observed as_of
-    return api, context, observed_snapshot(world, context["run_id"])
+    return api, context, world.snapshot
 
 
 def money(minor: int) -> dict:
@@ -65,8 +64,8 @@ def money(minor: int) -> dict:
 
 def test_public_screens_show_the_observed_baseline_not_the_executed_ledger(prepared):
     api, context, observed = prepared
-    as_of = "2026-01-01T12:00:00Z"  # the observed snapshot, t = 12 h
-    assert observed.as_of.isoformat() == "2026-01-01T12:00:00+00:00"
+    as_of = "2026-01-01T00:00:00Z"  # the demo world's observed snapshot, h0
+    assert observed.as_of.isoformat() == "2026-01-01T00:00:00+00:00"
     http = register(Flask(__name__), api).test_client()
 
     overview = http.get("/api/v1/overview").get_json()
@@ -75,8 +74,7 @@ def test_public_screens_show_the_observed_baseline_not_the_executed_ledger(prepa
     assert overview["demo"] == context
     assert overview["completeness"]["status"] == "complete"
     assert overview["cash"] == {**money(7_000_000), "status": "known", "as_of": as_of}
-    assert overview["spendable"]["status"] == "known"
-    assert overview["spendable"]["minor"] >= 0
+    assert overview["spendable"] == {**money(2_000_000), "status": "known", "as_of": as_of}
     assert [(o["obligation_id"], o["amount"], o["due_at"]) for o in
             overview["upcoming_outflows"]] == [
         ("payroll-1", money(5_000_000), "2026-01-02T16:00:00Z")]  # due at h40

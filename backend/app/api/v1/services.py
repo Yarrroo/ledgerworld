@@ -75,7 +75,7 @@ class Services:
     report_key: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     lock: threading.RLock = field(default_factory=threading.RLock)
     _gateway: Gateway | None = None
-    _baseline: tuple[str, LedgerStore, Snapshot] | None = None  # the prepared run's
+    _baseline: tuple[LedgerStore, Snapshot] | None = None  # the h0 baseline a prepared demo shows
 
     def __post_init__(self) -> None:
         if self.beneficiaries is None:
@@ -147,22 +147,20 @@ class Services:
 
     def observed(self, demo: dict | None = None) -> tuple[LedgerStore, Snapshot, datetime]:
         """The store, snapshot and time Overview, Treasury and Lending read. With a prepared demo:
-        its run's observed snapshot, loaded into a store of its own and read at that snapshot's
-        as_of, so the screens show the baseline its plan was decided on, never the ledger the
-        execution moved since or a clock that ran on past it. Otherwise the observed store now.
-        ``demo`` is a `demo()` the caller already read, so one response reads one context."""
-        run_id = (demo or self.demo())["run_id"]
-        if run_id is None:
+        the demo world's observed snapshot at h0 (the snapshot the app was built on), loaded into
+        a store of its own and read at its own as_of, so the screens tell the story from the
+        start: never the ledger the execution moved since, a clock that ran on past it, or the
+        run's later observation (Simulation, Decisions and Execution read the run's own).
+        Otherwise the observed store now. ``demo`` is a `demo()` the caller already read, so one
+        response reads one context."""
+        if (demo or self.demo())["run_id"] is None:
             return self.store, self.snapshot, self.now()
         with self.lock:
-            if self._baseline is None or self._baseline[0] != run_id:
-                from ...demo.run import observed_snapshot  # the snapshot prepare decided on
-
-                snapshot = observed_snapshot(load_world(), run_id)
+            if self._baseline is None:
                 store = LedgerStore("sqlite://")
-                from_snapshot(store, snapshot)
-                self._baseline = (run_id, store, snapshot)
-            _, store, snapshot = self._baseline
+                from_snapshot(store, self.snapshot)
+                self._baseline = (store, self.snapshot)
+            store, snapshot = self._baseline
         return store, snapshot, snapshot.as_of
 
     def authorised(self, header: str | None) -> bool:
