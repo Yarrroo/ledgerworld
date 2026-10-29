@@ -1,5 +1,5 @@
 <template>
-  <ScreenShell v-slot="{ body }" title="Lending" :reading="state" :refresh="refresh">
+  <ScreenShell v-slot="{ body }" title="Lending" :reading="state" :refresh="refresh" :stale="stale">
     <p class="lw-source">
       What lending capacity is usable: the pool's capacity K_p and every part of it, who the pool
       is exposed to, and each facility's terms and observed revenue.
@@ -28,6 +28,9 @@
           <article class="lw-tile" data-test="capacity">
             <div class="lw-tile__label">Pool capacity K_p · {{ body.pool }}</div>
             <div class="lw-figure" data-test="capacity-value">{{ capacityText }}</div>
+            <div :class="['lw-status', `lw-status--${stateOf(capacity.K_p.status).tone}`]" data-test="capacity-status">
+              {{ metricStatus(capacity.K_p) }}
+            </div>
             <ol class="lw-len__bridge" aria-label="Capacity bridge, every part" data-test="parts">
               <li v-for="p in parts" :key="p.key" :data-part="p.key">
                 <span class="lw-len__sign" aria-hidden="true">{{ p.sign }}</span>
@@ -239,7 +242,7 @@ import WorldMap from '../components/WorldMap.vue'
 import { FAMILIES, worldFor } from '../api/world.js'
 import {
   ApiError, ScreenShell, amountText, contextKey, formatTime, freshness, getLending, getOverview,
-  getTreasury, hoursFrom, kindText, metricText, money, routeExists, stateOf, useReading
+  getTreasury, hoursFrom, kindText, metricStatus, metricText, money, routeExists, staleOf, stateOf, useReading
 } from '../api/v1.js'
 
 const router = useRouter()
@@ -294,6 +297,7 @@ const calculation = computed(() => {
 })
 
 const notCurrent = computed(() => capacity.value.unobserved.map(freshness))
+const stale = computed(() => staleOf(state.body?.capacity.unobserved))
 
 /** The pool's cash account ids the world file lists for this snapshot (ids only, no balances). */
 const poolAccounts = computed(() => {

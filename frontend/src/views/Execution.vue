@@ -246,7 +246,7 @@ const token = ref('')
 // An operation whose outcome this tab does not know, kept in the same tab memory as the token:
 // run id -> { blocked, followedId, readBy, unseen }. Leaving the screen and coming back restores
 // the block and resumes reading the execution, so the token never outlives its quarantine. Forget
-// token does not lift it: only a reload does. `unseen` ('execution' or 'approval') marks an outcome
+// access does not lift it: only a reload does. `unseen` ('execution' or 'approval') marks an outcome
 // that answered after its screen moved on: it is linked until its own run's screen shows it.
 const unresolved = reactive(new Map())
 
@@ -266,7 +266,7 @@ export function forgetTab () {
 import { computed, nextTick, onUnmounted, reactive, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
-  ApiError, LABELS, STATES, ScreenShell, formatMoney, formatTime, getOverview, kindText, latestOnly, money,
+  ApiError, LABELS, STATES, ScreenShell, formatMoney, formatTime, getOverview, kindText, latestOnly, money, noDemoRun,
   request, useReading
 } from '../api/v1.js'
 
@@ -355,6 +355,7 @@ const { state, refresh } = useReading(async () => {
   const runId = asked || overview.demo.run_id
   const demo = !asked || asked === overview.demo.run_id
   const executionId = route.query.execution_id || (demo ? overview.demo.execution_id : null) || null
+  if (!runId && !executionId) throw noDemoRun()
   let decisionsError = ''
   let executionError = null
   const { generation } = guard.issue()
@@ -405,7 +406,7 @@ const reads = new AbortController()
 
 /** Why nothing can be approved from this screen right now, or '' when it can. */
 const authority = computed(() => {
-  if (!token.value) return 'Operator authorisation required'
+  if (!token.value) return 'Operator access required'
   return ''
 })
 

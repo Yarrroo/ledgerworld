@@ -9,7 +9,7 @@
   "after_approval_before_execution_required": ["server-returned C3 terms match the reviewed plan", "server-returned plan_hash", "server-returned expires_at in UTC and labelled local time"],
   "no_approval_preview_endpoint": true,
   "cases": [
-    {"id": "public-read", "token_present": false, "expect": {"read_screens_visible": true, "approve_enabled": false, "execute_enabled": false, "reason": "Operator authorisation required"}},
+    {"id": "public-read", "token_present": false, "expect": {"read_screens_visible": true, "approve_enabled": false, "execute_enabled": false, "reason": "Operator access required"}},
     {"id": "review-only", "token_present": true, "action": "Review plan", "expect": {"provider_calls": 0, "approval_post": false, "explicit_confirm_required": true}},
     {"id": "approve-then-execute", "token_present": true, "action": ["Confirm approval", "Execute approved plan"], "expect": {"approval_posts": 1, "execution_posts": 1, "confirmation_is_not_auto_execute": true, "execution_id": "approval_id", "double_click_submits_once": true}},
     {"id": "snapshot-moved", "server_refusal": "snapshot_moved", "expect": {"invalidate_review": true, "execute_enabled": false, "message": "Observed state changed; reload and review a new plan"}},

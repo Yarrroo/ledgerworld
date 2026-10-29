@@ -670,3 +670,37 @@ describe('the real graph view', () => {
     expect(circles(w)).toBe(drawn)
   })
 })
+
+// The nav link names no run: the screen reads the prepared one, names it in the URL, and reads
+// it once; a user who left before the overview answered keeps the URL they chose.
+describe('Simulation opened with no run named', () => {
+  async function bare (overview) {
+    const calls = serve(run(), { '/overview': overview })
+    const r = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/simulation', component: Simulation }, { path: '/overview', component: Stub }]
+    })
+    await r.push('/simulation')
+    await r.isReady()
+    mounted.push(mount(Simulation, { attachTo: document.body, global: { plugins: [r], stubs: { GraphPanel: GraphStub } } }))
+    return { calls, router: r }
+  }
+  const demo = { demo: { run_id: ctx.run_id, execution_id: null } }
+
+  it('reads the prepared run once and names it in the URL', async () => {
+    const { calls, router } = await bare(demo)
+    await flushPromises()
+    await flushPromises()
+    expect(router.currentRoute.value.query.run_id).toBe(ctx.run_id)
+    expect(calls.filter((c) => c.path === `/runs/${ctx.run_id}`)).toHaveLength(1)
+  })
+
+  it('never writes the run into a route the user moved to meanwhile', async () => {
+    let answer
+    const { router } = await bare(() => new Promise((resolve) => { answer = resolve }))
+    await router.push('/overview')
+    answer(demo)
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/overview')
+  })
+})
