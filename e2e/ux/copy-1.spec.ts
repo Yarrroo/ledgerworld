@@ -13,34 +13,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
-import { settled } from './routes'
+import { $, fmt, folded, open, plainHeadings, read, technical, words } from './copy'
 
-const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 const BASELINE = JSON.parse(readFileSync(join(__dirname, '../../contracts/examples/c6_api/valid-overview-demo-baseline.json'), 'utf-8')).instance
-
-interface Money { minor: number | null, currency: string }
-/** "USD 70,000.00", as the screens format integer minor units. */
-const fmt = (m: Money) => `${m.currency} ${(m.minor! / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
-
-/** The words a finance lead should not meet in a heading or a lead sentence (COPY.md rule 2). */
-const JARGON = /\b(snapshot|branch|cohort|checkpoint|intent|provenance|policy)\b/i
-const SYMBOL = /K_p|\((S|P)\)|(^|\s)(P|S)(?=[\s,.;:]|$)/
-
-const technical = (text: string) => JARGON.test(text) || SYMBOL.test(text)
-
-async function read (page: Page, path: string): Promise<any> {
-  const reply = await page.request.get(`/api/v1${path}`)
-  expect(reply.status(), `GET /api/v1${path}`).toBe(200)
-  return reply.json()
-}
-
-async function open (page: Page, path: string): Promise<void> {
-  await page.goto(path)
-  await settled(page)
-}
-
-/** Words in a sentence, an amount ("USD 20,000.00") counting as one and a dash as none. */
-const words = (text: string) => text.replace(/\b[A-Z]{3} (?=[\d-])/g, '').split(/\s+/).filter((w) => /\w/.test(w)).length
 
 /** The lead: one short sentence, the first text of the screen, no jargon. */
 async function leads (page: Page): Promise<string> {
@@ -57,33 +32,6 @@ async function leads (page: Page): Promise<string> {
   })
   expect(first, 'the lead comes before every figure').toBe(true)
   return text
-}
-
-/** Every visible section heading is in plain words. */
-async function plainHeadings (page: Page): Promise<void> {
-  for (const h of await page.locator('main.lw-main section h2').all()) {
-    if (!(await h.isVisible())) continue
-    const text = (await h.textContent())!.trim()
-    expect(technical(text), `a heading uses a technical term: ${text}`).toBe(false)
-  }
-}
-
-/** The screen's How we know disclosures: closed, keyboard-reachable, holding `facts`. */
-async function folded (page: Page, test: string, facts: string[]): Promise<void> {
-  const how = $(page, test)
-  await expect(how).toHaveCount(1)
-  await expect(how).not.toHaveAttribute('open', '')
-  await expect(how.locator('.lw-calc__body')).not.toBeVisible()
-  const summary = how.locator('summary')
-  await expect(summary).toHaveText('How we know')
-  await summary.focus()
-  await expect(summary).toBeFocused()
-  await page.keyboard.press('Enter')
-  await expect(how).toHaveAttribute('open', '')
-  for (const fact of facts) await expect(how.locator('.lw-calc__body')).toContainText(fact)
-  expect((await summary.boundingBox())!.height, 'How we know is shorter than 44 px').toBeGreaterThanOrEqual(44)
-  await page.keyboard.press('Enter')
-  await expect(how).not.toHaveAttribute('open', '')
 }
 
 test('Overview: the covered-until sentence from the baseline, plain strip, mechanics folded', async ({ page, baseURL }) => {

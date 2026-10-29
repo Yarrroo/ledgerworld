@@ -1,16 +1,27 @@
 <template>
   <ScreenShell title="Live simulation" :reading="shellReading" :refresh="reload">
     <div class="lw-live" :class="{ 'is-graph-expanded': graphExpanded }">
-      <section class="lw-sim__context" aria-labelledby="run-heading" data-panel="Run context" data-test="run-context">
+      <section class="lw-sim__context" aria-labelledby="run-heading" data-panel="The what-if" data-test="run-context">
         <h2 id="run-heading" class="lw-visually-hidden">Run and scenario context</h2>
-        <dl>
-          <div><dt>Run</dt><dd data-test="run-id">{{ body?.run_id ?? runId ?? '–' }}</dd></div>
-          <div><dt>Branch</dt><dd>{{ base.branch_id ?? '–' }}</dd></div>
-          <div><dt>Checkpoint</dt><dd>{{ checkpoints }}</dd></div>
-          <div><dt>Scenario</dt><dd data-test="family">{{ family ? family.id : 'not named by this run' }}</dd></div>
-          <div><dt>Provenance</dt><dd>{{ provenance(base.replay) }}</dd></div>
-          <div><dt>Mode</dt><dd>{{ body ? (LABELS[body.mode] || body.mode) : '–' }}</dd></div>
-        </dl>
+        <p class="lw-lead" data-test="lead">{{ lead }}</p>
+        <div class="lw-labels" data-test="labels">
+          <span v-if="body" class="lw-tag" data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span>
+          <span class="lw-tag" data-test="hypothetical">{{ PLAIN.branch }}</span>
+          <span v-if="base.replay" class="lw-tag">Replay</span>
+        </div>
+        <HowWeKnow test="how-run">
+          <dl>
+            <div><dt>Run</dt><dd data-test="run-id">{{ body?.run_id ?? runId ?? '–' }}</dd></div>
+            <div><dt>Branch</dt><dd>{{ base.branch_id ?? '–' }}</dd></div>
+            <div><dt>Checkpoint</dt><dd>{{ checkpoints }}</dd></div>
+            <div><dt>Scenario</dt><dd data-test="family">{{ family ? family.id : 'not named by this run' }}</dd></div>
+            <div><dt>Provenance</dt><dd>{{ provenance(base.replay) }}</dd></div>
+            <div><dt>Mode</dt><dd>{{ body ? (LABELS[body.mode] || body.mode) : '–' }}</dd></div>
+          </dl>
+          <p>The amount in the sentence above is the treasury's pending flow the scenario family delays
+            ({{ family?.params.flow_id ?? 'none named' }}), read from the treasury on this run's snapshot;
+            the delay is the family's delay_h.</p>
+        </HowWeKnow>
         <p v-if="handoff" class="lw-live__note lw-sim__handoff" data-test="handoff">{{ handoff }}</p>
         <button type="button" class="lw-button lw-button--quiet" data-test="settings" @click="settingsOpen = true">
           Scenario settings
@@ -50,7 +61,7 @@
           <button type="button" class="lw-button" data-test="fork" :disabled="Boolean(forkWhy)"
                   :aria-describedby="forkWhy ? 'fork-why' : undefined" :aria-expanded="confirming ? 'true' : 'false'"
                   @click="confirming = true">
-            Fork this checkpoint
+            Try the plans on this shock
           </button>
           <RouterLink v-if="compareTarget" class="lw-button lw-button--quiet" :to="compareTarget"
                       data-test="compare">Compare policies</RouterLink>
@@ -58,16 +69,16 @@
                   :aria-describedby="'compare-why'">Compare policies</button>
         </div>
         <div v-if="confirming && !forkWhy" class="lw-sim__confirm" role="group" aria-label="Confirm the fork" data-test="fork-confirm-panel">
-          <p>Fork {{ base.branch_id }} at committed round {{ display }} into {{ POLICIES.join(', ') }}: one fresh,
-            isolated branch per policy. It creates no approval and moves no money.</p>
+          <p>Try {{ listWords(POLICIES.map((p) => PLANS[p])) }} from round {{ display }}, each in its own
+            fresh what-if. It creates no approval and moves no money.</p>
+          <p class="lw-live__note">Forks {{ base.branch_id }} at committed round {{ display }} into {{ POLICIES.join(', ') }}.</p>
           <div class="lw-live__row">
-            <button type="button" class="lw-button" data-test="fork-confirm" @click="confirmFork">Confirm fork</button>
+            <button type="button" class="lw-button" data-test="fork-confirm" @click="confirmFork">Try the plans</button>
             <button type="button" class="lw-button lw-button--quiet" data-test="fork-cancel" @click="confirming = false">Cancel</button>
           </div>
         </div>
         <p class="lw-live__note" data-test="fork-what">
-          Forks {{ base.branch_id }} at round {{ display ?? '–' }} into one fresh branch per policy;
-          creates no approval.
+          Tries each plan from round {{ display ?? '–' }} in its own what-if; approves nothing.
         </p>
         <p v-if="forkWhy" id="fork-why" class="lw-live__note" data-test="fork-why">{{ forkWhy }}</p>
         <p v-if="!compareTarget" id="compare-why" class="lw-live__note" data-test="compare-why">{{ compareWhy }}</p>
@@ -115,9 +126,16 @@
                 <li v-for="x in actorInfo.actions" :key="x.id">
                   <span>Round {{ x.round }} · {{ x.type }}</span>
                   <span :class="`is-${x.tone}`">{{ x.verdict }}</span>
-                  <span v-if="x.evidence" class="lw-live__note">evidence {{ x.evidence }}</span>
                 </li>
               </ol>
+              <HowWeKnow v-if="actorInfo.actions.length" test="how-actor">
+                <ul class="lw-sim__actions">
+                  <li v-for="x in actorInfo.actions" :key="x.id">
+                    {{ x.id }}<template v-if="x.journal"> · journal {{ x.journal }}</template>
+                    · evidence {{ x.evidence || 'none cited' }}
+                  </li>
+                </ul>
+              </HowWeKnow>
               <p v-else class="lw-live-empty">No action by round {{ display }}</p>
             </article>
             <form class="lw-live__interview" data-test="interview" @submit.prevent="interview">
@@ -137,13 +155,15 @@
                 <span v-if="answer.replay" class="lw-live-tag">Replay</span>
               </p>
               <p>{{ answer.answer }}</p>
-              <p v-if="answer.evidence_ids.length" class="lw-live__note">evidence: {{ answer.evidence_ids.join(', ') }}</p>
+              <HowWeKnow v-if="answer.evidence_ids.length" test="how-answer">
+                <p>evidence: {{ answer.evidence_ids.join(', ') }}</p>
+              </HowWeKnow>
             </article>
           </Teleport>
         </div>
 
         <div class="lw-sim__map">
-          <h2>World map · round {{ display ?? '–' }} <span class="lw-live-tag">Hypothetical</span></h2>
+          <h2>World map · round {{ display ?? '–' }} <span class="lw-live-tag">{{ PLAIN.branch }}</span></h2>
           <WorldMap :nodes="worldMap.nodes" :edges="worldMap.edges" :selected="mapSelected" :focus="actor"
                     label="Actors and their typed relationships at the selected round"
                     :empty="current ? 'No actor to draw' : 'Round not loaded'" @select="pickMap" />
@@ -196,18 +216,19 @@
  * component's memory only — never storage, the URL, the export or a log. An accepted fork is
  * followed until its branches arrive or it fails. No POST is retried.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import LiveGraph from '../components/LiveGraph.vue'
 import Scrubber from '../components/Scrubber.vue'
 import ActionFeed from '../components/ActionFeed.vue'
 import CashPaths from '../components/CashPaths.vue'
 import DetailSheet from '../components/DetailSheet.vue'
+import HowWeKnow from '../components/HowWeKnow.vue'
 import WorldMap from '../components/WorldMap.vue'
 import { FAMILIES, ROUND_HOURS, familyOf, observedBy, worldFor } from '../api/world.js'
 import {
-  LABELS, ScreenShell, formatMoney, getOverview, kindText, noDemoRun, request, routeExists, sourceLabel,
-  useReading
+  LABELS, PLAIN, PLANS, ScreenShell, formatMoney, getOverview, getTreasury, hoursWords, kindText, listWords, money,
+  noDemoRun, request, routeExists, sourceLabel, useReading
 } from '../api/v1.js'
 
 const HORIZON_ROUNDS = 18
@@ -223,6 +244,7 @@ const runId = computed(() => (typeof route.query.run_id === 'string' && route.qu
 // read it, named in the URL by this read (so the run watcher does not read it again), and only
 // while the URL is still the one it was asked from; with none prepared, the shell explains it.
 let adopted = null
+const treasury = shallowRef(null)
 const { state, refresh } = useReading(async () => {
   let run = runId.value
   if (!run) {
@@ -234,7 +256,17 @@ const { state, refresh } = useReading(async () => {
       await router.replace({ query: { ...route.query, run_id: run } }).finally(() => { adopted = null })
     }
   }
-  return request(`/runs/${encodeURIComponent(run)}`)
+  const body = await request(`/runs/${encodeURIComponent(run)}`)
+  // the treasury on the run's snapshot, read once per snapshot (not on every poll) and after the
+  // run, never beside it: the offline app's SQLite refuses a ledger read beside a job-store read
+  // a read that failed is read again on the next load; one that answered for another snapshot is kept
+  const key = `${body.snapshot_id}|${body.run_id}`
+  if (treasury.value?.for !== key || treasury.value.failed) {
+    const t = await getTreasury().catch(() => null)
+    const same = t && t.mode === body.mode && (t.snapshot_id === body.snapshot_id || observedBy(t.snapshot_id, body.run_id))
+    treasury.value = { for: key, failed: !t, body: same ? t : null }
+  }
+  return body
 })
 
 const body = computed(() => state.body)
@@ -309,6 +341,31 @@ const checkpoints = computed(() => {
 })
 const settingsOpen = ref(false)
 
+/** The pending flow the run's scenario family delays, from the treasury on the run's snapshot. */
+const delayed = computed(() => {
+  const id = family.value?.params.flow_id
+  const t = treasury.value?.for === `${body.value?.snapshot_id}|${body.value?.run_id}` ? treasury.value.body : null
+  if (!id || !t) return null
+  return t.accounts.flatMap((a) => a.buckets.pending_in ?? []).find((f) => f.flow_id === id) ?? null
+})
+
+const RIPPLE = 'Watch how it ripples through your partners, round by round.'
+
+/**
+ * The finance lead's question, first (COPY.md, Simulation): the what-if this run plays. The
+ * amount and kind are the treasury's pending flow the family delays; the delay is the family's.
+ */
+const lead = computed(() => {
+  const f = family.value
+  if (!f) return `What happens to your cash in this what-if? ${RIPPLE}`
+  if (f.params.flow_id && Number.isInteger(f.params.delay_h)) {
+    const flow = delayed.value
+    const what = flow ? `${money(flow.amount)} ${kindText(flow.kind)}` : 'expected payment'
+    return `What if your ${what} arrives ${hoursWords(f.params.delay_h)} late? ${RIPPLE}`
+  }
+  return `What if the ${f.id.replace(/-/g, ' ')} shock hits? ${RIPPLE}`
+})
+
 /** What a handoff from Treasury (account, snapshot) or Lending (scenario) carried, said back. */
 const handoff = computed(() => {
   const q = route.query
@@ -372,7 +429,7 @@ const actorInfo = computed(() => {
       const v = verdictOf(verdicts.get(i.intent_id))
       actions.push({
         id: i.intent_id, round: r, type: kindText(i.type), tone: v.tone,
-        verdict: `${v.text}${v.journal ? ` · journal ${v.journal}` : ''}`,
+        verdict: v.text, journal: v.journal,
         evidence: (i.evidence_ids ?? []).join(', ')
       })
     }
@@ -939,6 +996,10 @@ const exportHref = computed(() => {
   border-top: 1px solid var(--lw-rule);
   border-bottom: 1px solid var(--lw-rule);
 }
+
+/* the lead and its labels take the row; How we know and the settings share the next one */
+.lw-sim__context > .lw-lead,
+.lw-sim__context > .lw-labels { flex: 1 0 100%; margin-bottom: 0; }
 
 .lw-sim__context dl {
   display: flex;

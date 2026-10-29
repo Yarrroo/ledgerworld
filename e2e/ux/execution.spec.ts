@@ -281,3 +281,15 @@ test('focus is trapped in the dialog and returned to Review plan', async ({ page
   await expect(dialog(page)).toHaveCount(0)
   await expect($(page, 'review-plan')).toBeFocused()
 })
+
+test('a sent plan the server has not recorded yet never reads as nothing sent', async ({ page }) => {
+  await mock(page, {})
+  await page.route(`**/api/v1/executions/${APPROVAL.approval_id}`, (r) =>
+    r.fulfill({ status: 404, json: { code: 'not_found', message: 'No such execution' } }))
+  await review(page)
+  await $(page, 'confirm').click()
+  await expect(dialog(page)).toHaveAttribute('data-stage', 'approved')
+  await $(page, 'execute').click()
+  await expect($(page, 'not-found')).toContainText('this does not mean it failed')
+  await expect($(page, 'lead')).toHaveText('The plan you sent is not recorded yet; reading again. Do not send it twice.')
+})

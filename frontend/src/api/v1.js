@@ -323,6 +323,39 @@ export function dayText (iso) {
  */
 export const amountWords = (metric) => (metric?.minor == null ? 'an unknown amount' : money(metric))
 
+/** The three plans in the cash owner's words (COPY.md glossary); the policy id stays in How we know. */
+export const PLANS = { 'no-action': 'Do nothing', 'fixed-reserve': 'Keep a fixed buffer', integrated: 'Borrow just enough' }
+/** The same plans as the subject of a sentence: "Borrowing just enough keeps you covered". */
+export const PLANS_DOING = { 'no-action': 'Doing nothing', 'fixed-reserve': 'Keeping a fixed buffer', integrated: 'Borrowing just enough' }
+
+/**
+ * A provider's decimal amount ("10000.00") as integer minor units in ``currency``, by string
+ * arithmetic only (no float); null when it is not a plain decimal with at most the currency's digits.
+ */
+export function decimalMinor (amount, currency) {
+  const exponent = EXPONENT[currency] ?? 2
+  const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(String(amount ?? ''))
+  if (!m || (m[3] ?? '').length > exponent) return null
+  const minor = Number(`${m[2]}${(m[3] ?? '').padEnd(exponent, '0')}`)
+  return Number.isSafeInteger(minor) ? (m[1] ? -minor : minor) : null
+}
+
+/** A plan's funding cost summed over its what-if rows: integer minor units, one currency, or say so. */
+export function feesAcross (rows) {
+  const currency = rows[0].funding_cost.currency
+  if (rows.some((r) => r.funding_cost.currency !== currency)) return 'Mixed currencies; not summed'
+  const total = rows.reduce((sum, r) => sum + r.funding_cost.minor, 0)
+  return `${formatMoney(total, currency)} across ${rows.length} what-if${rows.length === 1 ? '' : 's'}; ` +
+    'the plan\'s own fee is set at review'
+}
+
+/** "240 h" as words for a sentence: "10 days" when it is whole days, else "240 hours". */
+export function hoursWords (h) {
+  if (!Number.isInteger(h) || h < 0) return 'an unknown time'
+  if (h && h % 24 === 0) return h === 24 ? '1 day' : `${h / 24} days`
+  return h === 1 ? '1 hour' : `${h} hours`
+}
+
 /** "payroll", "payroll and rent", "payroll, rent and tax". */
 export function listWords (items) {
   return items.length < 2 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
