@@ -237,7 +237,7 @@ const byTime = (key) => (x, y) => Date.parse(x[key]) - Date.parse(y[key])
 // ---------------------------------------------------------------- the terms of projected cash
 
 /** Obligations P counts: open or missed (a missed obligation is still owed). */
-const OWED = new Set(['open', 'missed'])
+export const OWED = new Set(['open', 'missed'])
 
 /**
  * The terms the API's P[a, t] is made of, for display beside the API's own result. The rule is

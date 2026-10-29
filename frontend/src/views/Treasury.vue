@@ -234,8 +234,8 @@ import CashChart from '../components/CashChart.vue'
 import DetailSheet from '../components/DetailSheet.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
 import {
-  FLOOR_WORDS, STATES, ScreenShell, againstFloor, amountWords, contextKey, dayText, formatAmount, formatMoney, formatTime, getOverview,
-  getTreasury, hoursFrom, kindText, metricStatus, metricText, money, pendingFlows, projectionTerms, routeExists, staleOf,
+  FLOOR_WORDS, OWED, STATES, ScreenShell, againstFloor, amountWords, contextKey, dayText, formatAmount, formatMoney,
+  formatTime, getOverview, getTreasury, hoursFrom, kindText, metricStatus, metricText, money, pendingFlows, projectionTerms, routeExists, staleOf,
   stateOf, useFocusTarget, useReading
 } from '../api/v1.js'
 
@@ -390,9 +390,6 @@ const rows = computed(() => {
 })
 const openRow = ref(null)
 const detail = computed(() => rows.value.find((r) => r.key === openRow.value) ?? null)
-
-/** Obligations still owed: open or missed. */
-const OWED = new Set(['open', 'missed'])
 
 /**
  * The finance lead's answer for the selected account (COPY.md): cash in the bank, what is set
