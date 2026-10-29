@@ -370,7 +370,7 @@ const subtitle = computed(() => {
 const floorTip = computed(() => {
   const a = account.value
   if (!gap.value?.floor) return 'No reserve floor in this currency was read from the treasury.'
-  return `Reserve floor of ${a.id}, from the treasury read as of ${formatTime(state.body.treasury.as_of)}.`
+  return `Reserve floor of ${a.id}, from the treasury read as of ${formatTime(state.body.treasury.as_of).utc}.`
 })
 
 const hoursAt = (asOf, at) => Math.round((Date.parse(at) - Date.parse(asOf)) / 3_600_000)

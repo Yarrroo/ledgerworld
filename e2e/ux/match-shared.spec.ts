@@ -11,9 +11,8 @@
  *   company block (item 3);
  * - tooltips on every screen, and the one tooltip's behaviour: hover, keyboard focus and tap open
  *   it, Escape and a second tap close it, and it never covers the value it explains (item 4);
- * - the word budget: each screen's visible words at 1487 px are measured and written to
- *   UX_OUT/word-counts.json for checks/word_budget.py; Overview, rebuilt to its mockup, is held to
- *   its budget here (item 8; the other screens' rebuilds are their own items and hold theirs).
+ * - the word budget: each screen's visible words at 1487 px are within checks/word_budget.py's
+ *   budget, the mockup's plus 15 %, and are written to UX_OUT/word-counts.json (item 8).
  *
  * Read-only.
  */
@@ -58,7 +57,7 @@ test('the shared page: hero, header, sidebar, no noise, tooltips', async ({ page
     // item 1, 7: the hero
     await expect(page.locator('h1'), where).toHaveCount(1)
     await expect(page.locator('h1'), where).toHaveText(route.headline)
-    await expect(page.locator('[data-test="hero-subtitle"]'), where).not.toBeEmpty()
+    expect((await page.locator('[data-test="hero-subtitle"]').innerText()).trim(), where).not.toBe('')
     const actions = page.locator('[data-test="hero-action"] :is(a, button)')
     const action = ACTION[route.path]
     if (action) {
@@ -74,7 +73,10 @@ test('the shared page: hero, header, sidebar, no noise, tooltips', async ({ page
     expect(await shown(page, '.lw-tag, .lw-labels, .lw-live-tag'), `${where}: chip rows`).toEqual([])
     const controls = await shown(page, 'main a, main button, main summary')
     expect(controls.filter((t) => NOISE.test(t)), `${where}: How we know, Check again or Refresh`).toEqual([])
-    const text = await page.locator('main').innerText()
+    // the header names the snapshot (item 3), whose id may carry the run's; nothing below it names the run
+    // (a closed sheet is not rendered, and innerText would read its text whole: skip it)
+    const text = await page.locator('main > :not([data-test="banner"])').evaluateAll((els) => els
+      .filter((el) => (el as HTMLElement).checkVisibility()).map((el) => (el as HTMLElement).innerText).join('\n'))
     expect(text, `${where}: the run id is on the page`).not.toContain(runId)
     expect(text, `${where}: "Known as of" lines`).not.toMatch(/Known as of/)
 
@@ -119,7 +121,9 @@ test('one tooltip: hover, focus and tap open it; Escape, blur and a second tap c
     await expect(body).toBeHidden()
   }
 
-  // keyboard: focus opens it, the describedby names it, Escape closes it, blur keeps it closed
+  // keyboard: focus opens it, the describedby names it, Escape closes it, blur closes it
+  await page.locator('h1').click() // a tap leaves the trigger focused: start from nothing focused
+  await expect(body).toBeHidden()
   await trigger.focus()
   await expect(body).toBeVisible()
   await expect(trigger).toHaveAttribute('aria-describedby', await body.getAttribute('id') ?? 'none')
@@ -131,12 +135,16 @@ test('one tooltip: hover, focus and tap open it; Escape, blur and a second tap c
   expect(b.x + b.width).toBeLessThanOrEqual(info.project.use.viewport!.width)
   await page.keyboard.press('Escape')
   await expect(body).toBeHidden()
+  await page.locator('h1').click() // blur
+  await expect(body).toBeHidden()
   await trigger.focus()
   await expect(body).toBeVisible()
   await page.locator('h1').click()
   await expect(body).toBeHidden()
 
-  // an (i) on a figure: the detail that was subtext
+  // an (i) beside a figure: the detail that was subtext
+  await page.goto('/treasury')
+  await settled(page)
   const how = page.locator('.lw-how').first()
   await how.locator('button').focus()
   await expect(bubble(how)).toBeVisible()
@@ -162,6 +170,8 @@ test('the word budget at 1487 px', async ({ page, request, baseURL }, info) => {
     writeFileSync(join(out, 'word-counts.json'), JSON.stringify(counts, null, 1))
   }
   info.annotations.push({ type: 'words', description: JSON.stringify(counts) })
-  expect(counts.overview, 'Overview words over its budget').toBeLessThanOrEqual(wordBudget('overview'))
+  for (const [screen, words] of Object.entries(counts)) {
+    expect(words, `${screen}: words over its budget`).toBeLessThanOrEqual(wordBudget(screen))
+  }
   expect(writes).toEqual([])
 })

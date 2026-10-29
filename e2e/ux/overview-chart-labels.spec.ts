@@ -42,7 +42,8 @@ async function clear (page: Page): Promise<void> {
   expect(lineY > label.y && lineY < label.y + label.height,
     `the low-point label (y ${label.y}–${label.y + label.height}) crosses the floor line at y ${lineY}`).toBe(false)
   expect(overlaps(label, floorLabel), 'the low-point label overlaps the floor label').toBe(false)
-  const markers = $(page, 'outlook-point').locator('.lw-outlook__dot')
+  const markers = page.locator('[data-test="outlook-chart"] .lw-outlook__dot')
+  expect(await markers.count(), 'no point markers drawn').toBeGreaterThan(0)
   for (let n = 0; n < await markers.count(); n++) {
     const marker = (await markers.nth(n).boundingBox())!
     expect(overlaps(label, marker), `the low-point label overlaps point marker ${n} at x ${marker.x}`).toBe(false)

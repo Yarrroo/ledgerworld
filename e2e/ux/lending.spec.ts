@@ -8,7 +8,8 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
-import { demoRunId, settled, sideways } from './routes'
+import { crumb, demoRunId, settled, sideways } from './routes'
+import { fmt } from './copy'
 
 const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 const sheet = (page: Page) => $(page, 'lending-detail')
@@ -16,7 +17,7 @@ const sheet = (page: Page) => $(page, 'lending-detail')
 async function open (page: Page): Promise<void> {
   await page.goto('/lending')
   await settled(page)
-  await expect(page.locator('h1')).toHaveText('Lending')
+  await expect(crumb(page)).toHaveText('Lending')
   await expect($(page, 'error')).toHaveCount(0)
 }
 
@@ -43,7 +44,7 @@ test('L1–L2: pool context and a bridge of every part, zeros included', async (
     const metric = api.capacity.parts[key]
     const row = $(page, 'parts').locator(`[data-part="${key}"]`)
     await expect(row, `part ${key}`).toBeVisible()
-    if (metric.minor !== null) await expect(row).toContainText(`${metric.currency} ${figure(metric.minor)}`)
+    if (metric.minor !== null) await expect(row).toContainText(fmt(metric))
   }
   await $(page, 'expand-calculation').locator('summary').click()
   const p = api.capacity.parts
@@ -113,7 +114,7 @@ test('L4–L5: freeze is Unknown not zero; facility detail and repayments', asyn
   const freeze = $(page, 'freeze')
   await expect(freeze).toContainText(api.capacity.authority === 'full' ? 'What-if' : 'Happening now')
   await expect(freeze).toContainText('Unknown')
-  await expect(freeze).not.toContainText(/USD 0\.00/)
+  await expect(freeze).not.toContainText(/(^|[^\d.,])\$0(?![\d,])/)
   const rehearse = $(page, 'rehearse-freeze')
   if (await rehearse.evaluate((el) => el.tagName === 'BUTTON')) {
     await expect(rehearse).toBeDisabled()
@@ -128,7 +129,7 @@ test('L4–L5: freeze is Unknown not zero; facility detail and repayments', asyn
     for (const term of ['Parties', 'Status', 'Principal', 'Fee', 'Owed', 'Outstanding', 'Observed revenue']) {
       await expect(detail.locator(`dt:text-is("${term}")`)).toBeVisible()
     }
-    await expect(detail).toContainText(`${f.principal.currency} ${figure(f.principal.minor)}`)
+    await expect(detail).toContainText(fmt(f.principal))
     await sheet(page).locator('[data-test="repayments"] summary').click()
     await expect(sheet(page).locator('[data-test="repayments"]')).toContainText('never from a forecast')
     await expect(sheet(page)).toContainText('not proof of disbursement')
@@ -154,6 +155,6 @@ test('L6: Compare funding plans opens Decisions for the prepared run', async ({ 
   await expect(page).toHaveURL(/\/decisions\?/)
   expect(new URL(page.url()).searchParams.get('run_id')).toBe(runId)
   await settled(page)
-  await expect(page.locator('h1')).toHaveText('Decisions')
+  await expect(crumb(page)).toHaveText('Decisions')
   expect(writes).toEqual([])
 })

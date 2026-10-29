@@ -1,8 +1,9 @@
 /**
  * Copy pass 1 (prp/2026-10-29-ux-pass/COPY.md) on Overview, Treasury and Lending, at every width
  * of e2e/ux.config.ts: each screen leads with one plain sentence built from the API's own
- * figures, its visible headings use the cash owner's words, the mechanics (ids, formulas, raw
- * statuses) sit in a How we know disclosure that is closed by default and opens from the keyboard,
+ * figures (now the hero subtitle's tooltip, prp/2026-10-29-ux-pass/MATCH.md item 1), its visible
+ * headings use the cash owner's words, the mechanics (ids, formulas, raw statuses) sit in tooltips
+ * or a How we know (i) that is closed by default and opens from the keyboard (MATCH.md items 2, 4),
  * and the honesty labels stay visible. Read-only.
  *
  * The exact sentences come from the recorded baseline contracts/examples/c6_api/
@@ -11,22 +12,23 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
-import { $, fmt, folded, open, plainHeadings, read, technical, words } from './copy'
+import { $, fmt, folded, lead, open, plainHeadings, read, technical, words } from './copy'
 
 const BASELINE = JSON.parse(readFileSync(join(__dirname, '../../contracts/examples/c6_api/valid-overview-demo-baseline.json'), 'utf-8')).instance
 
-/** The lead: one short sentence, the first text of the screen, no jargon. */
-async function leads (page: Page): Promise<string> {
-  const lead = $(page, 'lead')
-  await expect(lead).toBeVisible()
-  const text = (await lead.textContent())!.trim()
-  expect(words(text), `the lead is longer than 25 words: ${text}`).toBeLessThanOrEqual(25)
+/** The lead: one short sentence in the hero, before the screen's figures, no jargon. */
+async function leads (page: Page, max = 25): Promise<string> {
+  await expect(lead(page)).not.toBeEmpty()
+  const text = (await lead(page).textContent())!.trim()
+  // a stale reading's "last seen" sentence rides after the lead, as its own sentence
+  const core = text.replace(/ ?Some figures were last seen [^.]*\.$/, '')
+  expect(words(core), `the lead is longer than ${max} words: ${text}`).toBeLessThanOrEqual(max)
   expect(technical(text), `the lead uses a technical term: ${text}`).toBe(false)
   // nothing but the title and the shell's context comes before it
   const first = await page.evaluate(() => {
-    const main = document.querySelector('main.lw-main [data-test="lead"]')
+    const main = document.querySelector('main.lw-main [data-test="hero-lead"]')
     const strip = document.querySelector('main.lw-main .lw-figure')
     return Boolean(main && (!strip || main.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING))
   })
@@ -34,33 +36,45 @@ async function leads (page: Page): Promise<string> {
   return text
 }
 
+/** Detail on demand: a tooltip, hidden until asked for, holding `facts`. */
+async function tipped (tip: Locator, facts: string[]): Promise<void> {
+  const body = tip.locator('[role="tooltip"]').first()
+  await expect(body).toBeHidden()
+  for (const fact of facts) await expect(body).toContainText(fact)
+}
+
 test('Overview: the covered-until sentence from the baseline, plain strip, mechanics folded', async ({ page, baseURL }) => {
   const writes = await readOnly(page, baseURL!)
   const own = await read(page, '/overview')
   await page.route('**/api/v1/overview', (route) => route.fulfill({ json: { ...BASELINE, demo: own.demo, scenario: own.scenario } }))
   await open(page, '/overview')
-  expect(await leads(page)).toBe("You're covered until payroll on 2 Jan: USD 20,000.00 free now, and your lowest point " +
-    'ahead is USD 40,000.00 — USD 10,000.00 above your USD 30,000.00 safety minimum.')
-  for (const [key, label] of [['settled', 'Cash in the bank'], ['spendable', 'Free to spend now'], ['coverage', 'Room above your minimum']]) {
-    await expect($(page, key).locator('.lw-tile__label')).toHaveText(label)
+  expect(await leads(page)).toBe("You're covered until payroll on 2 Jan: $20,000 free now, and your lowest point " +
+    'ahead is $40,000 — $10,000 above your $30,000 safety minimum.')
+  // the mockup's strip labels (MATCH.md 01)
+  for (const [key, label] of [['settled', 'Settled cash'], ['spendable', 'Spendable now'], ['coverage', 'Reserve headroom']]) {
+    await expect($(page, key).locator('.lw-ov-metric__label')).toHaveText(label)
   }
-  await expect($(page, 'coverage')).toContainText('lowest point ahead USD 40,000.00 · safety minimum USD 30,000.00')
+  await expect($(page, 'coverage')).toContainText('lowest point ahead $40,000 · safety minimum $30,000')
   await expect($(page, 'floor-status')).toHaveText(/Above your safety minimum/)
-  await expect($(page, 'lender-capacity')).toContainText('What the lender can still lend')
+  await expect($(page, 'relations')).toContainText('Can lend $42,000')
   await plainHeadings(page)
 
-  // the ids are one click down, not on the page
-  await expect($(page, 'context-snapshot')).not.toBeVisible()
-  await folded(page, 'how-context', [BASELINE.snapshot_id, 'reserve floor', 'spendable S'])
-  await folded(page, 'how-next', ['payroll-1', 'reserved · payroll-hold'])
-  await folded(page, 'how-outlook', [BASELINE.snapshot_id, 'projected cash P'])
-  await folded(page, 'how-exposure', ['K_p'])
+  // the ids and formulas are in tooltips, not on the page
+  await tipped($(page, 'how-context-bar'), [BASELINE.snapshot_id])
+  await tipped($(page, 'tip-coverage'), ['reserve floor'])
+  await tipped($(page, 'tip-spendable'), ['Settled − reserved − pledged'])
+  await tipped($(page, 'next-obligation').locator('.lw-tip', { hasText: 'Yes' }), ['Held by reservation payroll-hold'])
+  await expect($(page, 'open-treasury')).toHaveAttribute('href', /focus=obligation(%3A|:)payroll-1/)
+  await expect($(page, 'outlook-point').first()).toHaveAttribute('aria-label', /projected cash/)
+  await tipped($(page, 'relations').locator('.lw-tip', { hasText: 'Can lend' }), ['What it can still lend you'])
+  const face = await page.locator('main.lw-main').innerText()
+  expect(face).not.toContain('payroll-hold')
+  expect(face).not.toContain('K_p')
 
   // honesty in plain words, visible
-  await expect($(page, 'plain-mode')).toHaveText('Simulated bank connection')
-  await expect($(page, 'plain-mode')).toBeVisible()
-  await expect($(page, 'labels')).toContainText('Scripted agents')
-  await expect($(page, 'hypothetical')).toHaveText('What-if')
+  await expect($(page, 'mode')).toHaveText(/^Simulated provider · Scripted agents/)
+  await expect($(page, 'mode')).toBeVisible()
+  await expect($(page, 'hypothetical')).toHaveText('Hypothetical')
   await expect($(page, 'hypothetical')).toBeVisible()
   // the judge path's button keeps its name
   await expect(page.locator('a[data-test="open-simulation"]')).toHaveText('Open simulation')
@@ -76,7 +90,7 @@ test('Overview: a broken floor leads with the day and the shortfall', async ({ p
   }
   await page.route('**/api/v1/overview', (route) => route.fulfill({ json: { ...BASELINE, coverage } }))
   await open(page, '/overview')
-  expect(await leads(page)).toBe('Heads up: on 2 Jan you dip USD 5,000.00 below your USD 30,000.00 safety minimum.')
+  expect(await leads(page)).toBe('Heads up: on 2 Jan you dip $5,000 below your $30,000 safety minimum.')
   await expect($(page, 'floor-status')).toHaveText(/Below your safety minimum/)
   expect(writes).toEqual([])
 })
@@ -117,11 +131,11 @@ test('Treasury: in the bank, set aside, free to spend, from the selected account
   await expect(page.locator('#spend-heading')).toHaveText('Free to spend now')
   await expect($(page, 'bucket-settled').locator('summary')).toContainText('Cash in the bank')
   await expect($(page, 'bucket-reserved').locator('summary')).toContainText('Set aside')
-  await expect($(page, 'floor').locator('.lw-tile__label')).toHaveText('Lowest point ahead · not spendable now')
+  await expect($(page, 'floor').locator('.lw-tile__label')).toHaveText('Lowest point ahead')
   await plainHeadings(page)
   await folded(page, 'how-treasury', [body.snapshot_id, 'spendable S', 'reserve floor'])
   await folded(page, 'how-spendable', [account.id, `authority ${account.authority}`])
-  await folded(page, 'how-handoff', [body.snapshot_id])
+  await tipped($(page, 'rehearse-tip'), [body.snapshot_id]) // the hand-off to Simulation names its snapshot
   // the hooks the older checks and the judge path read are all still there
   for (const hook of ['spendable', 'spend-calc', 'buckets', 'obligations', 'coverage', 'floor-status', 'timeline', 'rehearse']) {
     await expect($(page, hook)).toHaveCount(1)
@@ -136,7 +150,7 @@ test('Lending: what the lender can still lend, then how; K_p one click down', as
   const text = await leads(page)
   const kp = body.capacity.K_p
   if (kp.minor === null) expect(text).toMatch(/unknown/)
-  else expect(text).toMatch(new RegExp(`^Your lender can still lend you up to ${fmt(kp).replace(/[.]/g, '\\.')}`))
+  else expect(text).toMatch(new RegExp(`^Your lender can still lend you up to ${fmt(kp).replace(/[$.]/g, '\\$&')}`))
   await expect(page.locator('#capacity-heading')).toHaveText('What the lender can still lend')
   await expect($(page, 'parts').locator('[data-part="K_p"]')).toContainText('Left to lend')
   await expect($(page, 'parts').locator('[data-part="settled_known"]')).toContainText('Cash the lender holds')
@@ -162,11 +176,11 @@ test('Overview: a shortfall is never free money, stale figures say when they wer
   await serveOverview(page, (b) => ({ ...b, spendable: { ...b.spendable, minor: -1_000_000 } }))
   await open(page, '/overview')
   let text = await leads(page)
-  expect(text).toContain('nothing free now (USD 10,000.00 short)')
-  expect(text).not.toMatch(/-[\d,]+\.\d\d|−/)
+  expect(text).toContain('nothing free now ($10,000 short)')
+  expect(text).not.toMatch(/-\$|-\d|−/)
   await page.unroute('**/api/v1/overview')
 
-  // every figure stale: no tag inside the sentence, one last-seen line after it
+  // every figure stale: no tag inside the sentence, one last-seen sentence after it
   const at = '2026-01-01T00:00:00Z'
   await serveOverview(page, (b) => {
     const stale = (m: any) => ({ ...m, status: 'stale', as_of: at })
@@ -176,15 +190,15 @@ test('Overview: a shortfall is never free money, stale figures say when they wer
   await open(page, '/overview')
   text = await leads(page)
   expect(text).not.toContain('stale')
-  await expect($(page, 'lead-stale')).toHaveText('Some figures were last seen 2026-01-01 00:00 UTC.')
+  expect(text).toMatch(/\. Some figures were last seen 2026-01-01 00:00 UTC\.$/)
   await page.unroute('**/api/v1/overview')
 
   // a stale breach: the shortfall in words, the last-seen line beside it
   await serveOverview(page, (b) => ({ ...b, coverage: { ...b.coverage,
     headroom: { ...b.coverage.headroom, minor: -500_000, status: 'stale', as_of: at } } }))
   await open(page, '/overview')
-  expect(await leads(page)).toBe('Heads up: on 2 Jan you dip USD 5,000.00 below your USD 30,000.00 safety minimum.')
-  await expect($(page, 'lead-stale')).toBeVisible()
+  expect(await leads(page)).toBe('Heads up: on 2 Jan you dip $5,000 below your $30,000 safety minimum. ' +
+    'Some figures were last seen 2026-01-01 00:00 UTC.')
   await page.unroute('**/api/v1/overview')
 
   // nothing known: a sentence that starts like one
@@ -196,7 +210,7 @@ test('Overview: a shortfall is never free money, stale figures say when they wer
   text = await leads(page)
   expect(text).toMatch(/^[A-Z]/)
   expect(text).toContain('an unknown amount free now')
-  await expect($(page, 'lead-stale')).toHaveCount(0)
+  expect(text).not.toContain('last seen')
   expect(writes).toEqual([])
 })
 
@@ -222,9 +236,9 @@ test('Treasury: a shortfall is not free to spend; every reservation names what i
   await page.route('**/api/v1/treasury', (route) => route.fulfill({ json: changed }))
   await open(page, '/treasury')
   const text = await leads(page)
-  expect(text).toContain(`${currency} 70,000.00 is set aside for payroll, rent and supplier payment`)
-  expect(text).toMatch(new RegExp(`so nothing is free to spend: you are ${currency} 10,000\\.00 short\\.$`))
-  expect(text).not.toMatch(/-[\d,]+\.\d\d/)
+  expect(text).toContain(`${fmt({ currency, minor: 7_000_000 })} is set aside for payroll, rent and supplier payment`)
+  expect(text).toMatch(new RegExp(`so nothing is free to spend: you are ${fmt({ currency, minor: 1_000_000 }).replace(/[$.]/g, '\\$&')} short\\.$`))
+  expect(text).not.toMatch(/-\$|-\d/)
   expect(writes).toEqual([])
 })
 

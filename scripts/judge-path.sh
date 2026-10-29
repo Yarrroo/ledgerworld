@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The judge path (goal g4): a cold browser walks Overview -> Live simulation -> Decisions ->
+# The judge path (goal g4): a cold browser walks Overview -> Simulation -> Decisions ->
 # Execution in four clicks and opens a reconciled receipt, under the limit.
 #
 #   bash scripts/judge-path.sh URL [--max-seconds 60]

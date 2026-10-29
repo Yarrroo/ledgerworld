@@ -69,6 +69,12 @@ function treasury (floor = usd(3000000)) {
 }
 
 const text = (w, test) => w.get(`[data-test="${test}"]`).text().replace(/\s+/g, ' ')
+/** What a reader sees without opening a tooltip: the text less every tooltip bubble. */
+function seen (w, test) {
+  const el = w.get(`[data-test="${test}"]`).element.cloneNode(true)
+  el.querySelectorAll('[role="tooltip"]').forEach((t) => t.remove())
+  return el.textContent.replace(/\s+/g, ' ').trim()
+}
 
 describe('Decisions reads minima and shortfalls only as the API supports them', () => {
   it('a policy whose scenarios are partly unknown has an Unknown minimum, never one scenario\'s', async () => {
@@ -80,9 +86,9 @@ describe('Decisions reads minima and shortfalls only as the API supports them', 
       '/treasury': treasury()
     })
     const w = await open(Decisions, '/decisions?run_id=run-1')
-    expect(text(w, 'gap-summary')).toContain('Minimum cash Unknown')
+    expect(seen(w, 'gap-summary')).toContain('Lowest point Unknown')
     expect(text(w, 'gap-summary')).not.toContain('the floor holds')
-    expect(text(w, 'gap-summary')).not.toContain('50,000.00')
+    expect(text(w, 'gap-summary')).not.toContain('$50,000')
   })
 
   it('a shortfall is shown only on scenarios whose floor the API says broke', async () => {
@@ -92,7 +98,7 @@ describe('Decisions reads minima and shortfalls only as the API supports them', 
       '/treasury': treasury()
     })
     const w = await open(Decisions, '/decisions?run_id=run-1')
-    expect(w.get('[data-test="policy-no-action"]').text()).toContain('Largest shortNone')
+    expect(w.get('[data-test="policy-no-action"]').text()).toContain('Largest shortfallNone')
   })
 
   it('a floor in another currency is never compared with a minimum', async () => {
@@ -101,8 +107,8 @@ describe('Decisions reads minima and shortfalls only as the API supports them', 
       '/treasury': treasury({ minor: 3000000, currency: 'EUR', status: 'known', as_of: null })
     })
     const w = await open(Decisions, '/decisions?run_id=run-1')
-    expect(w.get('[data-test="policy-no-action"]').text()).toContain('Largest shortNot assessed')
-    expect(text(w, 'gap-summary')).not.toContain('short')
+    expect(w.get('[data-test="policy-no-action"]').text()).toContain('Largest shortfallNot assessed')
+    expect(seen(w, 'gap-summary')).not.toContain('short')
   })
 })
 
@@ -170,7 +176,7 @@ describe('the observed snapshot of a prepared run is that run\'s world', () => {
       '/treasury': observed
     })
     const w = await open(Decisions, '/decisions?run_id=run-1')
-    expect(text(w, 'gap-summary')).toContain('short USD 10,000.00')
+    expect(seen(w, 'gap-summary')).toContain('$10,000 short')
     const at = w.findAll('[data-test="timing"] li').map((li) => li.attributes('data-at'))
     expect(at).toEqual(['12', '40', '252'])
   })

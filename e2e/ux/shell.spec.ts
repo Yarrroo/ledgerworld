@@ -2,12 +2,14 @@
  * The shared shell in motion (prp/2026-10-29-ux-shell/design.md), at every width of
  * e2e/ux.config.ts: the logo and six labelled links with an active state that follows the route
  * (208 px sidebar, 72 px icon rail with names, 48 px header with a modal menu drawer), the
- * breadcrumb and context bar, the ivory palette with self-hosted Source Serif 4 and Inter, and the
- * panel index that marks the panel in view while the page scrolls. Read-only.
+ * breadcrumb and context bar, and the ivory palette with self-hosted Source Serif 4 and Inter.
+ * The screen's name is the breadcrumb's current item; the h1 is the page hero's headline
+ * (prp/2026-10-29-ux-pass/MATCH.md, items 1 and 3). The panel index this spec once covered was
+ * removed by design (MATCH.md item 2). Read-only.
  */
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
-import { ROUTES, demoRunId, settled, urlOf } from './routes'
+import { ROUTES, crumb, demoRunId, settled, urlOf } from './routes'
 
 const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 const nav = (page: Page) => page.locator('nav.lw-nav')
@@ -69,7 +71,8 @@ test('navigation: six labelled links, the active one follows the route', async (
     await navLink(page, name).click()
     await expect(page).toHaveURL(new RegExp(`/${name.toLowerCase()}$`))
     await settled(page)
-    await expect(page.locator('h1')).toHaveText(name)
+    await expect(crumb(page)).toHaveText(name)
+    await expect(page.locator('h1')).toHaveText(ROUTES.find((r) => r.title === name)!.headline)
     if (layout === 'drawer') await expect(nav(page)).toBeHidden()
     await showNav(page, layout)
     await expect(navLink(page, name)).toHaveAttribute('aria-current', 'page')
@@ -116,7 +119,7 @@ test('drawer: modal while open, closed by any link, and by leaving the phone wid
   expect(writes).toEqual([])
 })
 
-test('context: breadcrumb, mode, model, as of and snapshot on every screen', async ({ page, baseURL, request }) => {
+test('context: breadcrumb, provider and agents, date, snapshot line; the mechanics in a tooltip', async ({ page, baseURL, request }, info) => {
   const writes = await readOnly(page, baseURL!)
   const runId = await demoRunId(request)
   for (const route of ROUTES) {
@@ -125,14 +128,32 @@ test('context: breadcrumb, mode, model, as of and snapshot on every screen', asy
     const crumbs = $(page, 'breadcrumb')
     await expect(crumbs).toBeVisible()
     await expect(crumbs.getByRole('link', { name: 'LedgerWorld' })).toBeVisible()
-    await expect(crumbs).toContainText(route.title)
-    await expect(crumbs.locator('[aria-current="page"]')).toHaveText(route.run ? `Run ${runId}` : route.title)
-    await expect($(page, 'mode')).toHaveText('Simulated bank connection')
-    await expect($(page, 'model')).toHaveText('Scripted agents')
-    await expect($(page, 'context-as-of')).toHaveText(/^As of \d{1,2} [A-Z][a-z]{2}, \d\d:\d\d UTC$/)
-    await expect($(page, 'source')).not.toBeEmpty() // in the bar's How we know
-    await expect($(page, 'refresh')).toBeVisible()
+    await expect(crumb(page)).toHaveText(route.title)
+    await expect($(page, 'mode'), route.path).toHaveText(/^Simulated provider · Scripted agents/)
+    await expect($(page, 'context-as-of')).toHaveText(/^[A-Z][a-z]+ \d{1,2}, \d{4}$/)
+    await expect($(page, 'context-line')).toHaveText(/^Snapshot \S+ · /)
+    // the bar's tooltip holds what the chips once said: provider, as of, figures, snapshot, run
+    const tip = $(page, 'how-context-bar')
+    const facts = tip.locator('[role="tooltip"]')
+    await expect(facts).toBeHidden()
+    await expect($(page, 'source')).not.toBeEmpty()
+    await expect($(page, 'context-provider')).not.toBeEmpty()
+    if (route.run) await expect($(page, 'context-run')).toHaveText(runId)
+    await tip.focus()
+    await expect(facts).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(facts).toBeHidden()
+    // no Refresh in the header: a screen reads again when the tab comes back into view
+    await expect($(page, 'refresh')).toHaveCount(0)
   }
+  // back on the tab, the screen reads its endpoint again, quietly
+  const route = ROUTES[1]
+  await page.goto(urlOf(route, runId))
+  await settled(page)
+  const again = page.waitForRequest((r) => r.method() === 'GET' && new URL(r.url()).pathname === `/api/v1${route.path}`)
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
+  await again
+  await settled(page)
   expect(writes).toEqual([])
 })
 
@@ -163,54 +184,4 @@ test('visual system: ivory surface, Source Serif 4 headings, Inter text, no font
   expect(look.loaded.some((f) => f.includes('Source Serif 4'))).toBe(true)
   expect(look.loaded.some((f) => f.includes('Inter'))).toBe(true)
   expect(elsewhere, 'a request left the app origin (font CDN?)').toEqual([])
-})
-
-test('panel index: the panel in view is marked while scrolling, and a chosen one stays marked', async ({ page, baseURL, request }) => {
-  const writes = await readOnly(page, baseURL!)
-  await page.goto('/treasury')
-  await settled(page)
-  const index = $(page, 'panel-index')
-  await expect(index).toBeVisible()
-  const links = index.locator('[data-test="panel-link"]')
-  const count = await links.count()
-  expect(count, 'Treasury lists its panels').toBeGreaterThanOrEqual(2)
-  const current = index.locator('[aria-current="true"]')
-  await expect(current).toHaveCount(1)
-  await expect(current).toHaveText(await links.first().innerText())
-
-  // scrolling to the end marks the last panel; back to the top marks the first again
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
-  await expect(current).toHaveText(await links.last().innerText())
-  await page.evaluate(() => window.scrollTo(0, 0))
-  await expect(current).toHaveText(await links.first().innerText())
-
-  // a chosen panel scrolls to just under the sticky header, or as far as the page goes, and
-  // stays marked once the scroll has stopped, even where the page's end comes first
-  for (const n of [count - 2, 0]) {
-    const link = links.nth(n)
-    const id = (await link.getAttribute('href'))!.slice(1)
-    await link.click()
-    await expect.poll(() => page.evaluate(() => new Promise<number>((resolve) => {
-      const y = window.scrollY
-      setTimeout(() => resolve(Math.abs(window.scrollY - y)), 250)
-    }))).toBe(0)
-    await expect(link).toHaveAttribute('aria-current', 'true')
-    expect(await page.evaluate((id) => {
-      const top = document.getElementById(id)!.getBoundingClientRect().top
-      const under = document.querySelector('.lw-panels')!.getBoundingClientRect().bottom
-      return Math.abs(top - under) <= 24 || window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2
-    }, id)).toBe(true)
-    await expect(index).toBeInViewport()
-  }
-  await expect(page).toHaveURL(/\/treasury$/)
-
-  // every screen marks at least two panels
-  const runId = await demoRunId(request)
-  for (const route of ROUTES) {
-    await page.goto(urlOf(route, runId))
-    await settled(page)
-    await expect(links.first(), `${route.path} has no panel index`).toBeVisible()
-    expect(await links.count(), `${route.path} panels`).toBeGreaterThanOrEqual(2)
-  }
-  expect(writes).toEqual([])
 })

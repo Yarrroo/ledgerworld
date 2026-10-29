@@ -10,7 +10,7 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
-import { demoRunId, settled, sideways } from './routes'
+import { crumb, demoRunId, settled, sideways } from './routes'
 
 const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 const isPhone = (width: number) => width < 768
@@ -18,7 +18,7 @@ const isPhone = (width: number) => width < 768
 async function open (page: Page, runId: string): Promise<void> {
   await page.goto(`/simulation?run_id=${runId}`)
   await settled(page)
-  await expect(page.locator('h1')).toHaveText('Live simulation')
+  await expect(crumb(page)).toHaveText('Simulation')
   await expect($(page, 'error')).toHaveCount(0)
   await expect($(page, 'scrubber-slider')).toHaveAttribute('aria-valuenow', /^\d+$/)
 }
@@ -179,7 +179,7 @@ test('S6: fork asks first and names its checkpoint and policies; Compare opens D
   await $(page, 'forget').click()
   await expect($(page, 'token')).toHaveValue('')
   await expect(fork).toBeDisabled()
-  await expect($(page, 'fork-why')).toHaveText('Enter operator access to fork')
+  await expect($(page, 'fork-why')).toHaveText(/^Enter operator access to fork\.?$/)
 
   await page.locator('a[data-test="compare"]').click()
   await expect(page).toHaveURL(/\/decisions\?/)

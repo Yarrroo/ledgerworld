@@ -289,6 +289,7 @@ const capacityText = computed(() => {
 
 /** The finance lead's answer (COPY.md): the API's K_p, then how it is worked out. */
 const lead = computed(() => {
+  if (!state.body) return ''
   const kp = capacity.value.K_p
   if (kp.minor === null) return 'What your lender can still lend is unknown right now; here is what we can see.'
   if (kp.minor <= 0) return 'Your lender cannot lend you anything right now; here is how that number is worked out.'

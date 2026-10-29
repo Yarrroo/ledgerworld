@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { settled, sideways } from './routes'
+import { lead } from './copy'
 
 const read = (path: string) => JSON.parse(readFileSync(join(__dirname, '../../', path), 'utf-8')).instance
 const OVERVIEW = read('contracts/examples/c6_api/valid-overview-lf1.json')
@@ -291,5 +292,6 @@ test('a sent plan the server has not recorded yet never reads as nothing sent', 
   await expect(dialog(page)).toHaveAttribute('data-stage', 'approved')
   await $(page, 'execute').click()
   await expect($(page, 'not-found')).toContainText('this does not mean it failed')
-  await expect($(page, 'lead')).toHaveText('The plan you sent is not recorded yet; reading again. Do not send it twice.')
+  // the lead sentence is the hero subtitle's tooltip (MATCH.md item 1)
+  await expect(lead(page)).toHaveText('The plan you sent is not recorded yet; reading again. Do not send it twice.')
 })

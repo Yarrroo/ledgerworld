@@ -4,7 +4,7 @@
  */
 import { expect, test } from '@playwright/test'
 import { readOnly } from '../guard'
-import { ROUTES, demoRunId, settled, sideways, urlOf } from './routes'
+import { ROUTES, crumb, demoRunId, settled, sideways, urlOf } from './routes'
 
 test('the six routes open on the prepared run', async ({ page, request, baseURL }) => {
   const writes = await readOnly(page, baseURL!)
@@ -13,9 +13,10 @@ test('the six routes open on the prepared run', async ({ page, request, baseURL 
   for (const route of ROUTES) {
     const response = await page.goto(urlOf(route, runId))
     expect(response?.status(), route.path).toBe(200)
-    await expect(page.locator('h1'), route.path).toHaveText(route.title)
+    await expect(crumb(page), route.path).toHaveText(route.title)
+    await expect(page.locator('h1'), route.path).toHaveText(route.headline)
     await settled(page)
-    await expect(page.locator('[data-test="mode"]').first()).toHaveText(/Simulated bank connection/)
+    await expect(page.locator('[data-test="mode"]').first(), route.path).toHaveText(/^Simulated provider · Scripted agents/)
     await expect(page.locator('[data-test="error"]'), `${route.path} shows a load error`).toHaveCount(0)
     expect(await sideways(page), `${route.path} scrolls sideways`).toBeLessThanOrEqual(0)
   }

@@ -194,7 +194,7 @@
           <CashChart :points="account.projected" :as-of="body.as_of" :floor="account.floor" :selected="pointT"
                      :label="`Projected cash of the ${accountName(account.id).toLowerCase()} against your safety minimum`" @select="pointT = $event" />
           <p class="lw-tre__point" role="status" aria-live="polite" data-test="point-calculation">
-            <template v-if="point">
+            <template v-if="point && pointT">
               <strong>{{ hoursFrom(body.as_of, point.t) }} · {{ formatTime(point.t).utc }}:</strong>
               {{ pointCalc.line }}<template v-if="pointCalc.excluded"> · {{ pointCalc.excluded }}</template>
             </template>

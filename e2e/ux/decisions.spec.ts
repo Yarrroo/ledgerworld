@@ -9,7 +9,8 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
-import { demoRunId, settled, sideways } from './routes'
+import { crumb, demoRunId, settled, sideways } from './routes'
+import { fmt } from './copy'
 
 const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 const NAMES: Record<string, string> = { 'no-action': 'Do nothing', 'fixed-reserve': 'Keep a fixed buffer', integrated: 'Borrow just enough' }
@@ -17,7 +18,7 @@ const NAMES: Record<string, string> = { 'no-action': 'Do nothing', 'fixed-reserv
 async function open (page: Page, runId: string): Promise<void> {
   await page.goto(`/decisions?run_id=${runId}`)
   await settled(page)
-  await expect(page.locator('h1')).toHaveText('Decisions')
+  await expect(crumb(page)).toHaveText('Decisions')
   await expect($(page, 'error')).toHaveCount(0)
 }
 
@@ -35,7 +36,7 @@ test('D1–D2: cohort context, the gap and its timing', async ({ page, baseURL, 
   const none = api.results.find((r: { policy: string }) => r.policy === 'no-action')
   const summary = $(page, 'gap-summary')
   await expect(summary).toContainText('Lowest point')
-  await expect(summary).toContainText(`${none.min_cash.currency} ${(none.min_cash.minor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`)
+  await expect(summary).toContainText(fmt(none.min_cash))
   if (!none.floor_kept) await expect(summary).toContainText('short')
   if (none.obligations_unmet === 0) await expect(summary).toContainText('Every obligation met')
 
@@ -113,7 +114,7 @@ test('D4–D5: scenario details drawer; review hands off to Execution', async ({
     await review.click()
     await expect(page).toHaveURL(/\/execution\?/)
     await settled(page)
-    await expect(page.locator('h1')).toHaveText('Execution')
+    await expect(crumb(page)).toHaveText('Execution')
   } else {
     await expect(page.locator('[data-test="review-plan"]')).toHaveCount(0)
   }

@@ -572,7 +572,7 @@ export function longDate (iso) {
 export function currencyOf (body) {
   const seen = new Set()
   const find = (v, depth) => {
-    if (!v || typeof v !== 'object' || depth > 4 || seen.has(v)) return ''
+    if (!v || typeof v !== 'object' || depth > 6 || seen.has(v)) return ''
     seen.add(v)
     if (typeof v.currency === 'string') return v.currency
     for (const child of Array.isArray(v) ? v : Object.values(v)) {
@@ -651,6 +651,12 @@ export const ScreenShell = defineComponent({
     }
 
     watch(() => route.fullPath, () => closeMenu(false))
+    // the company block: the screen's own answer when it names the company, else /overview's,
+    // asked once the screen has its answer so the two reads never run side by side
+    watch(() => props.reading.status, (status) => {
+      if (status !== 'loaded' || party.value || props.reading.body?.company) return
+      companySource().then((c) => { party.value = c })
+    }, { immediate: true })
     watch(menu, async (open) => {
       if (!open) return
       await nextTick()
@@ -660,7 +666,6 @@ export const ScreenShell = defineComponent({
 
     onMounted(() => {
       modelSource().then((m) => { model.value = m })
-      companySource().then((c) => { party.value = c })
       phone = window.matchMedia?.(PHONE)
       phone?.addEventListener?.('change', onPhone)
       window.addEventListener('keydown', onKey)

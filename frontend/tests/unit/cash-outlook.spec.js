@@ -1,4 +1,5 @@
-// The cash outlook keeps its tip only while the point it belongs to is still drawn.
+// The cash outlook keeps its tip only while the point it belongs to is still drawn. Each point is
+// a control in the shared tooltip (Tip): hover, focus or tap opens its bubble.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 
@@ -10,16 +11,25 @@ const props = (points) => ({ points, floor: body.coverage.floor, lowAt: body.cov
 
 afterEach(() => vi.unstubAllGlobals())
 
+/** The tip bubbles that are showing: a hidden bubble stays in the DOM until asked for. */
+const shown = (w) => w.findAll('[role="tooltip"]').filter((t) => t.attributes('hidden') === undefined)
+const tipText = (w) => {
+  const open = shown(w)
+  expect(open).toHaveLength(1)
+  return open[0].get('[data-test="outlook-tip"]').text()
+}
+
 describe('CashOutlook', () => {
   it('drops the tip of a point a refresh no longer serves', async () => {
     const w = mount(CashOutlook, {
       props: props(body.outlook)
     })
-    await w.findAll('[data-test="outlook-point"]')[4].trigger('pointerenter', { pointerType: 'mouse' })
-    expect(w.find('[data-test="outlook-tip"]').text()).toContain('in 3 days')
+    await w.findAll('.lw-outlook__pt')[4].trigger('mouseenter')
+    expect(tipText(w)).toContain('in 3 days')
     await w.setProps({ points: body.outlook.slice(0, 2) })
     expect(w.findAll('[data-test="outlook-point"]')).toHaveLength(2)
-    expect(w.find('[data-test="outlook-tip"]').exists()).toBe(false)
+    expect(w.findAll('[data-test="outlook-tip"]')).toHaveLength(2)
+    expect(shown(w)).toHaveLength(0)
   })
   it('keeps a negative P inside the plot, above the hour labels', async () => {
     const points = body.outlook.map((p, n) => n === 2 ? { ...p, value: { ...p.value, minor: -500000 } } : p)
@@ -40,13 +50,14 @@ describe('CashOutlook', () => {
     const w = mount(CashOutlook, { props: props(body.outlook) })
     const point = w.findAll('[data-test="outlook-point"]')[1]
     await point.trigger('click')
-    await point.trigger('pointerleave', { pointerType: 'touch' })
-    expect(w.find('[data-test="outlook-tip"]').text()).toContain('in 12 hours')
+    await w.findAll('.lw-outlook__pt')[1].trigger('mouseleave')
+    expect(tipText(w)).toContain('in 12 hours')
   })
-  it('shows the tip to a hovering pen as to a mouse', async () => {
+  it('shows the tip to a hovering pointer, whatever kind it is', async () => {
     const w = mount(CashOutlook, { props: props(body.outlook) })
-    await w.findAll('[data-test="outlook-point"]')[2].trigger('pointerenter', { pointerType: 'pen' })
-    expect(w.find('[data-test="outlook-tip"]').text()).toContain('in 40 hours')
+    expect(shown(w)).toHaveLength(0)
+    await w.findAll('.lw-outlook__pt')[2].trigger('mouseenter')
+    expect(tipText(w)).toContain('in 40 hours')
   })
 
   it('stops watching a frame that is gone', async () => {
@@ -66,10 +77,15 @@ describe('CashOutlook', () => {
   it('puts the baseline\'s low-point label just above its point, not out past the floor line', async () => {
     // below the point crosses the floor; above and right meets the h48 point; above and left is clear
     const w = mount(CashOutlook, { props: props(body.outlook) })
-    const dot = w.get('.is-low .lw-outlook__dot')
-    const label = w.get('[data-test="outlook-low-label"]')
-    expect(Number(label.attributes('y'))).toBe(Number(dot.attributes('cy')) - 14)
-    expect(label.attributes('text-anchor')).toBe('end')
+    const lowest = w.findAll('.lw-outlook__dot').filter((d) => d.attributes('r') === '6')
+    expect(lowest).toHaveLength(1)
+    const cy = Number(lowest[0].attributes('cy'))
+    const box = w.get('[data-test="outlook-low-label"] rect')
+    const top = Number(box.attributes('y'))
+    expect(top).toBeGreaterThanOrEqual(0)
+    expect(top + Number(box.attributes('height'))).toBeLessThan(cy) // wholly above the point
+    const floorY = Number(w.get('[data-test="outlook-floor"]').attributes('y1'))
+    expect(top + Number(box.attributes('height'))).toBeLessThan(floorY) // never across the floor line
   })
 
   it('labels the y axis with representable amounts when every P is zero', async () => {
@@ -77,6 +93,6 @@ describe('CashOutlook', () => {
     const w = mount(CashOutlook, { props: { ...props(zero), floor: null } })
     const ticks = w.findAll('.lw-outlook__axis g text').map((t) => t.text())
     expect(ticks.length).toBeGreaterThan(1)
-    for (const t of ticks) expect(t).toMatch(/^-?[\d,]+(\.\d+)?$/) // never 'Unrepresentable amount'
+    for (const t of ticks) expect(t).toMatch(/^-?\$[\d,]+(\.\d+)?$/) // never 'Unrepresentable amount'
   })
 })

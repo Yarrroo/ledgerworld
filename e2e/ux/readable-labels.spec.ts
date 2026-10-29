@@ -2,7 +2,8 @@
  * Labels a reader can read, at every width of e2e/ux.config.ts, on the prepared demonstration
  * run: the Simulation map's edge captions overlap no node box, no other caption and no edge of
  * the map, and a node shows its actor's name (never its id) inside its box; the actor list and
- * the cash-path rows lead with names and policies, ids second, a name never broken mid-word;
+ * the cash-path rows lead with names and policies, ids in their tooltip (MATCH.md item 2, 4), a
+ * name never broken mid-word;
  * Treasury prints flow and obligation kinds as words, never a raw `snake_case` kind. Read-only.
  */
 import { expect, test, type Page } from '@playwright/test'
@@ -58,7 +59,7 @@ test('the map: captions clear the nodes, each other and the frame; nodes show na
   expect(writes).toEqual([])
 })
 
-test('the actor list and the cash paths lead with names, ids second', async ({ page, baseURL, request }) => {
+test('the actor list and the cash paths lead with names, ids in their tooltip', async ({ page, baseURL, request }) => {
   const writes = await readOnly(page, baseURL!)
   const runId = await demoRunId(request)
   const run = await (await request.get(`/api/v1/runs/${runId}`)).json()
@@ -68,10 +69,13 @@ test('the actor list and the cash paths lead with names, ids second', async ({ p
   expect(actors.length).toBeGreaterThan(0)
   for (const button of actors) {
     const id = (await button.getAttribute('data-actor'))!
-    const [first, ...rest] = (await button.innerText()).split('\n').map((l) => l.trim()).filter(Boolean)
+    const [first] = (await button.innerText()).split('\n').map((l) => l.trim()).filter(Boolean)
     const named = (await page.locator(`[data-test="map-node"][data-node="${id}"]`).getAttribute('aria-label')) ?? id
     expect(first, `actor ${id} does not lead with its name`).toBe(named.split(',')[0])
-    expect(rest.join(' '), `actor ${id}'s id is not shown second`).toContain(id)
+    // the id is the button's tooltip, the one that names it
+    const tip = page.locator(`[id="${await button.getAttribute('aria-describedby')}"]`)
+    await expect(tip, `actor ${id}'s id is not in its tooltip`).toHaveAttribute('role', 'tooltip')
+    await expect(tip, `actor ${id}'s id is not in its tooltip`).toContainText(id)
   }
 
   for (const branch of run.branches) {
@@ -82,7 +86,7 @@ test('the actor list and the cash paths lead with names, ids second', async ({ p
     if (branch.policy) expect(lead).toBe(PLANS[branch.policy] ?? branch.policy) // the plan's plain name
     // a name on one line: never broken mid-word
     expect(await name.evaluate((el) => el.getClientRects().length), `"${lead}" wraps`).toBe(1)
-    await expect(row.locator('.lw-cash__account')).toContainText(branch.branch_id)
+    await expect(row.locator('.lw-cash__value [role="tooltip"]')).toContainText(branch.branch_id)
   }
   expect(writes).toEqual([])
 })

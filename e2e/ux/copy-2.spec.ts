@@ -2,9 +2,10 @@
  * Copy pass 2 (prp/2026-10-29-ux-pass/COPY.md) on Simulation, Decisions and Execution, at every
  * width of e2e/ux.config.ts: each screen leads with one plain sentence built from the API's own
  * figures (the what-if, the plan that keeps you covered and its fee, what moved and was checked
- * against your books), the plans carry their plain names, the buttons are plain verbs, the run,
- * round, evidence and approval ids sit in a How we know disclosure that is closed by default and
- * opens from the keyboard, and the What-if and simulated-bank labels stay visible. Read-only.
+ * against your books; now the hero subtitle's tooltip, prp/2026-10-29-ux-pass/MATCH.md item 1),
+ * the plans carry their plain names, the buttons are plain verbs, the run, round, evidence and
+ * approval ids sit in a How we know (i) that is closed by default and opens from the keyboard
+ * (MATCH.md items 2, 4), and the header's simulated-provider and what-if labels stay visible. Read-only.
  *
  * The judge path's controls keep their names (Compare policies, View execution, Open receipt:
  * prp/2026-10-20-ledgerworld/design/modules/ui/fixtures/judge-path.json).
@@ -13,7 +14,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
-import { $, PLANS, fmt, folded, open, plainHeadings, read, technical, words } from './copy'
+import { $, PLANS, fmt, folded, lead, open, plainHeadings, read, technical, words } from './copy'
 import { demoRunId, settled } from './routes'
 
 const FAMILY = (id: string) => JSON.parse(readFileSync(join(__dirname, `../../scenarios/families/${id}.json`), 'utf-8'))
@@ -29,16 +30,14 @@ const firstDue = (obligations: any[], account: string, asOf: string) => obligati
   .map((o) => o.due_at).sort((a, b) => Date.parse(a) - Date.parse(b))[0]
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 
-/** The lead: short, plain, visible, before the screen's figures and panels. */
+/** The lead: short, plain, in the hero, before the screen's figures and panels. */
 async function leads (page: Page): Promise<string> {
-  const lead = $(page, 'lead')
-  await expect(lead).toBeVisible()
-  await expect(lead).not.toBeEmpty()
-  const text = (await lead.textContent())!.trim()
+  await expect(lead(page)).not.toBeEmpty()
+  const text = (await lead(page).textContent())!.trim()
   expect(words(text), `the lead is longer than 25 words: ${text}`).toBeLessThanOrEqual(25)
   expect(technical(text), `the lead uses a technical term: ${text}`).toBe(false)
   const first = await page.evaluate(() => {
-    const lead = document.querySelector('main.lw-main [data-test="lead"]')
+    const lead = document.querySelector('main.lw-main [data-test="hero-lead"]')
     const sections = [...document.querySelectorAll('main.lw-main section')].filter((s) => !s.contains(lead))
     return sections.every((s) => lead!.compareDocumentPosition(s) & Node.DOCUMENT_POSITION_FOLLOWING)
   })
@@ -46,15 +45,16 @@ async function leads (page: Page): Promise<string> {
   return text
 }
 
-/** The honesty labels, visible in plain words. */
+/** The honesty labels, visible in the header (MATCH.md item 3). */
 async function honest (page: Page, whatIf: boolean): Promise<void> {
-  await expect($(page, 'plain-mode')).toHaveText(/^(Simulated bank connection|Sandbox bank)$/)
-  await expect($(page, 'plain-mode')).toBeVisible()
-  if (whatIf) {
-    await expect($(page, 'hypothetical')).toHaveText('What-if')
-    await expect($(page, 'hypothetical')).toBeVisible()
-  }
+  await expect($(page, 'mode')).toHaveText(/^(Simulated provider|Sandbox)\b.* · Scripted agents/)
+  await expect($(page, 'mode')).toBeVisible()
+  // a what-if says so in words on the page (the header on Simulation, the plans' rows on Decisions)
+  if (whatIf) expect(await page.locator('main.lw-main').innerText()).toMatch(/what-if/i)
 }
+
+/** Read the screen again the way the shell does now: the tab becomes visible again. */
+const reread = (page: Page) => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')))
 
 test('Simulation: the what-if from the treasury and the family, ids one click down', async ({ page, baseURL, request }) => {
   const writes = await readOnly(page, baseURL!)
@@ -81,7 +81,6 @@ test('Simulation: the what-if from the treasury and the family, ids one click do
   await expect($(page, 'fork')).toHaveText('Try the plans on this shock')
   await expect($(page, 'fork-what')).toContainText('in its own what-if; approves nothing')
   await expect($(page, 'compare')).toHaveText('Compare policies') // the judge path's name
-  await expect($(page, 'graph').locator('.lw-live-tag')).toHaveText('What-if')
   for (const hook of ['run-context', 'controls', 'phase', 'play', 'scrubber-slider', 'cursor', 'inspector', 'graph', 'settings']) {
     await expect($(page, hook)).toHaveCount(1)
   }
@@ -107,7 +106,7 @@ test('Decisions: what doing nothing costs, the plan that keeps you covered and i
     const fees = api.results.filter((r: any) => r.policy === api.selected).map((r: any) => r.funding_cost)
     const top = fees.reduce((a: any, b: any) => (b.minor > a.minor ? b : a))
     const fee = top.minor === 0 ? 'no fee' : fees.length > 1 ? `a fee of up to ${fmt(top)}` : `a ${fmt(top)} fee`
-    expect(text).toMatch(new RegExp(`${DOING[api.selected]} keeps you covered for ${fee.replace(/[.]/g, '\\.')}\\.$`))
+    expect(text).toMatch(new RegExp(`${DOING[api.selected]} keeps you covered for ${fee.replace(/[$.]/g, '\\$&')}\\.$`))
   }
   for (const [policy, name] of Object.entries(PLANS)) {
     await expect($(page, `policy-${policy}`).locator('.lw-dec__name')).toHaveText(name)
@@ -122,7 +121,7 @@ test('Decisions: what doing nothing costs, the plan that keeps you covered and i
   await folded(page, `how-${chosen.policy}`, [chosen.branch_id, `Policy ${chosen.policy}`])
   await expect($(page, 'timing').locator('summary')).toHaveText('When the money moves')
   await expect($(page, 'compare-details')).toHaveText('Compare the what-ifs in detail')
-  if (api.status === 'selected') await expect(page.locator('a[data-test="review-plan"]')).toHaveText('Review the plan')
+  if (api.status === 'selected') await expect(page.locator('a[data-test="review-plan"]')).toHaveText('Review current plan')
   await expect(page.locator('a[data-test="view-execution"]')).toHaveText('View execution') // the judge path's name
   for (const hook of ['gap', 'gap-summary', 'policies', 'timing', 'compare-details', 'open-simulation', 'scenario', 'weight', 'cost']) {
     expect(await $(page, hook).count(), hook).toBeGreaterThan(0)
@@ -145,7 +144,7 @@ test('Decisions: a comparison still running, or with no plan that holds, says so
   expect(writes).toEqual([])
 })
 
-/** "USD 10,000.00" from a provider receipt's decimal amount. */
+/** "$10,000" from a provider receipt's decimal amount. */
 const receiptMoney = (r: any) => fmt({ minor: Math.round(Number(r.amount) * 100), currency: r.currency })
 
 test('Execution: what moved in and out, checked against your books; ids one click down', async ({ page, baseURL }) => {
@@ -154,7 +153,7 @@ test('Execution: what moved in and out, checked against your books; ids one clic
   const execution = await read(page, `/executions/${overview.demo.execution_id}`)
   await open(page, '/execution')
   // a read the offline app answers 500 (two reads at once on its SQLite file) is read again in 5 s
-  await expect($(page, 'lead')).toHaveText(/^The plan you approved /, { timeout: 15_000 })
+  await expect(lead(page)).toHaveText(/^The plan you approved /, { timeout: 15_000 })
   const text = await leads(page)
   const sum = (kinds: string[]) => execution.legs.filter((l: any) => kinds.includes(l.kind) && l.receipt).map((l: any) => receiptMoney(l.receipt))
   const [inn, out] = [sum(['advance']), sum(['payout', 'repayment'])]
@@ -165,23 +164,23 @@ test('Execution: what moved in and out, checked against your books; ids one clic
   }
   await honest(page, false)
   await plainHeadings(page)
-  await expect(page.locator('#authority-heading')).toHaveText('Approve, then send')
   await expect(page.locator('#summary-heading')).toHaveText('What you approved')
   await expect(page.locator('#receipts-heading')).toHaveText('Money moved, with receipts')
   await expect($(page, 'context')).not.toBeVisible()
   await folded(page, 'how-execution', [`execution ${overview.demo.execution_id}`, `Run ${overview.demo.run_id}`])
   await folded(page, 'how-summary', [execution.approval_id, execution.snapshot_id])
-  await expect($(page, 'review-plan')).toHaveText('Review the plan')
+  await expect($(page, 'review-plan')).toHaveText('Review plan')
   await expect($(page, 'receipt').first().locator('summary')).toHaveText('Open receipt') // the judge path's name
   for (const hook of ['authority', 'summary', 'receipts', 'review-why', 'summary-read', 'summary-approval']) {
     await expect($(page, hook)).toHaveCount(1)
   }
 
   // the review speaks plan names and plain verbs, and opening it sends nothing; a decision read
-  // the offline app answered 500 (two reads at once on its SQLite file) is read again by Refresh
+  // the offline app answered 500 (two reads at once on its SQLite file) is read again, as the
+  // shell does when the tab is shown again
   await expect(async () => {
     if (await $(page, 'review-plan').isDisabled()) {
-      await $(page, 'refresh').click()
+      await reread(page)
       await settled(page)
     }
     await expect($(page, 'review-plan')).toBeEnabled({ timeout: 1_000 })
@@ -217,10 +216,10 @@ test('Simulation: a treasury read that failed is read again, and the amount come
     ? route.fulfill({ status: 500, json: { code: 'internal', message: 'busy' } })
     : route.continue()))
   await open(page, `/simulation?run_id=${runId}`)
-  await expect($(page, 'lead')).toContainText('What if your expected payment arrives')
-  await $(page, 'refresh').click()
+  await expect(lead(page)).toContainText('What if your expected payment arrives')
+  await reread(page)
   await settled(page)
-  await expect($(page, 'lead')).toHaveText(/^What if your [A-Z]{3} [\d,]+\.\d\d \w/)
+  await expect(lead(page)).toHaveText(/^What if your \$[\d,]+(\.\d\d)? \w/)
   expect(writes).toEqual([])
 })
 
