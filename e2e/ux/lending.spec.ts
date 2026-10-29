@@ -1,10 +1,11 @@
 /**
- * Lending in motion (prp/2026-10-29-ux-pass/HANDOFF.md L1–L6), at every width of
- * e2e/ux.config.ts: the pool's context; the capacity bridge listing every part, zeros included,
- * with its calculation and account evidence; the exposure map with the appendix's canonical edges
- * (the pool to Borrower B via line-b, never a Treasury–Borrower B credit) where a node or an edge
- * opens its details; the freeze scenario as a labelled hypothetical; facility detail and
- * repayments; Compare funding plans opening Decisions for the prepared run. Read-only.
+ * Lending in motion (prp/2026-10-29-ux-pass/HANDOFF.md L1–L6, laid out as mockup 03), at every
+ * width of e2e/ux.config.ts: the pool and its authority one (i) down; the bridge and the breakdown
+ * listing every part, zeros included, with the calculation and the account evidence in tooltips;
+ * the exposure map with the appendix's canonical edges (the pool to Borrower B via line-b, never a
+ * Treasury–Borrower B credit), each node and edge explained by its tooltip; the freeze scenario as
+ * a labelled hypothetical; the facility terms and the repayment schedule; Compare funding plans
+ * opening Decisions for the prepared run. Read-only.
  */
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
@@ -12,7 +13,6 @@ import { crumb, demoRunId, settled, sideways } from './routes'
 import { fmt } from './copy'
 
 const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
-const sheet = (page: Page) => $(page, 'lending-detail')
 
 async function open (page: Page): Promise<void> {
   await page.goto('/lending')
@@ -27,86 +27,92 @@ const figure = (minor: number) => {
   return `${minor < 0 ? '-' : ''}${whole}.${digits.slice(-2)}`
 }
 
-test('L1–L2: pool context and a bridge of every part, zeros included', async ({ page, baseURL, request }) => {
+test('L1–L2: pool context and every part, zeros included', async ({ page, baseURL, request }) => {
   const writes = await readOnly(page, baseURL!)
   const api = await (await request.get('/api/v1/lending')).json()
   await open(page)
 
-  const context = $(page, 'pool-context')
-  await expect(context).toContainText(api.pool)
-  await expect(context).toContainText(api.snapshot_id)
-  await expect(context).toContainText(api.capacity.K_p.currency)
+  await expect($(page, 'pool')).toBeVisible()
+  const how = $(page, 'how-lending')
+  await how.locator('.lw-how__icon').focus()
+  const facts = how.locator('[role="tooltip"]')
+  await expect(facts).toBeVisible()
+  await expect(facts).toContainText(api.snapshot_id)
+  await expect(facts).toContainText(api.capacity.K_p.currency)
   await expect($(page, 'authority')).toContainText(api.capacity.authority)
+  await page.keyboard.press('Escape')
 
-  const parts = $(page, 'parts').locator('li')
-  await expect(parts).toHaveCount(6)
+  // the breakdown lists every part; the bridge every part that takes something away
+  const rows = $(page, 'breakdown').locator('tbody tr')
+  await expect(rows).toHaveCount(6)
   for (const key of ['settled_known', 'committed_undrawn', 'pledged', 'obligations_due', 'floor']) {
     const metric = api.capacity.parts[key]
-    const row = $(page, 'parts').locator(`[data-part="${key}"]`)
+    const row = $(page, 'breakdown').locator(`[data-row="${key}"]`)
     await expect(row, `part ${key}`).toBeVisible()
     if (metric.minor !== null) await expect(row).toContainText(fmt(metric))
+    if (metric.minor !== 0) await expect($(page, 'parts').locator(`[data-part="${key}"]`)).toBeVisible()
   }
-  await $(page, 'expand-calculation').locator('summary').click()
+  const total = $(page, 'expand-calculation')
+  await total.focus()
   const p = api.capacity.parts
   const line = [p.settled_known, p.committed_undrawn, p.pledged, p.obligations_due, p.floor]
     .map((m: { minor: number }) => figure(m.minor)).join(' - ')
+  await expect($(page, 'calculation')).toBeVisible()
   await expect($(page, 'calculation')).toContainText(`${line} = ${figure(api.capacity.K_p.minor)}`)
-  await $(page, 'evidence').locator('summary').click()
+  await page.keyboard.press('Escape')
+  const settledTerm = $(page, 'parts').locator('[data-part="settled_known"] .lw-tip')
+  await settledTerm.focus()
+  await expect($(page, 'evidence')).toBeVisible()
   await expect($(page, 'evidence')).toContainText('Not counted')
   await expect($(page, 'evidence')).toContainText('not itemised')
+  await page.keyboard.press('Escape')
   expect(await sideways(page), 'Lending scrolls sideways').toBeLessThanOrEqual(0)
   expect(writes).toEqual([])
 })
 
-test('L3: canonical edges; a node and an edge open their details', async ({ page, baseURL, request }) => {
+test('L3: canonical edges; a node and an edge explain themselves', async ({ page, baseURL, request }) => {
   const writes = await readOnly(page, baseURL!)
   const api = await (await request.get('/api/v1/lending')).json()
   await open(page)
 
   for (const f of api.facilities) {
-    const edge = page.locator(`[data-test="map-edge"][data-edge="facility:${f.facility_id}"]`)
-    await expect(edge, `facility ${f.facility_id} is not drawn`).toHaveCount(1)
-    await expect(edge).toHaveAttribute('aria-label', /^financial edge/)
+    await expect($(page, 'relations').locator(`[data-edge="facility:${f.facility_id}"]`), `facility ${f.facility_id} is not drawn`).toHaveCount(1)
+    await expect(page.locator(`[data-test="map-edge"][data-edge="facility:${f.facility_id}"]`)).toHaveCount(1)
   }
   // line-b runs from the pool to Borrower B; nothing links the treasury to Borrower B
   const lineB = api.facilities.find((f: { facility_id: string }) => f.facility_id === 'line-b')
   if (lineB) {
     expect(lineB.borrower).toBe('borrower-b')
-    await expect($(page, 'relations').locator('[data-edge="facility:line-b"]')).toContainText(/→ Bellfield Kitchens|→ borrower-b/)
+    await expect($(page, 'relations').locator('[data-edge="facility:line-b"]')).toContainText(/Pool → (Bellfield Kitchens|borrower-b)/)
   }
-  for (const text of await $(page, 'relations').locator('li').allInnerTexts()) {
-    expect(text, 'a Treasury–Borrower B relationship is drawn').not.toMatch(/Northwind Parts treasury → Bellfield|Bellfield Kitchens → Northwind Parts treasury/)
+  for (const text of await $(page, 'relations').locator('li').allTextContents()) {
+    expect(text, 'a Treasury–Borrower B relationship is drawn').not.toMatch(/Treasury → Bellfield|Bellfield Kitchens → Treasury/)
   }
 
-  // a node, by keyboard
+  // a node, by keyboard: its tooltip names what it is
   const pool = page.locator(`[data-test="map-node"][data-node="${api.pool}"]`)
   await pool.focus()
-  await page.keyboard.press('Enter')
-  await expect(sheet(page)).toBeVisible()
-  await expect(sheet(page).locator('[data-test="node-detail"]')).toContainText('Relationships')
+  await expect(pool.locator(':scope > [role="tooltip"]')).toBeVisible()
+  await expect(pool.locator(':scope > [role="tooltip"]')).toContainText('lender pool')
   await page.keyboard.press('Escape')
-  await expect(sheet(page)).toBeHidden()
-  await expect(pool).toBeFocused()
+  await expect(pool.locator(':scope > [role="tooltip"]')).toBeHidden()
 
-  // an edge, by pointer: a facility edge opens the facility
+  // an edge, by keyboard: the facility it stands for
   const first = api.facilities[0]
   if (first) {
-    await page.locator(`[data-test="map-edge"][data-edge="facility:${first.facility_id}"] line`).last().click({ force: true })
-    await expect(sheet(page).locator('[data-test="facility-detail"]')).toContainText(first.facility_id)
-    await $(page, 'sheet-close').click()
-    await expect(sheet(page)).toBeHidden()
+    const wide = await page.locator(`[data-test="map-edge"][data-edge="facility:${first.facility_id}"]`).isVisible()
+    const edge = wide
+      ? page.locator(`[data-test="map-edge"][data-edge="facility:${first.facility_id}"]`)
+      : $(page, 'relations').locator(`[data-edge="facility:${first.facility_id}"] .lw-tip`)
+    await edge.focus()
+    await expect(edge.locator(':scope > [role="tooltip"]')).toContainText(first.facility_id)
+    await page.keyboard.press('Escape')
   }
-  // the text list reaches every edge too
-  const relation = $(page, 'relations').locator('button').last()
-  await relation.click()
-  await expect(sheet(page)).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(relation).toBeFocused()
   expect(await sideways(page), 'Lending scrolls sideways').toBeLessThanOrEqual(0)
   expect(writes).toEqual([])
 })
 
-test('L4–L5: freeze is Unknown not zero; facility detail and repayments', async ({ page, baseURL, request }) => {
+test('L4–L5: freeze is Unknown not zero; facility terms and repayments', async ({ page, baseURL, request }) => {
   const writes = await readOnly(page, baseURL!)
   const api = await (await request.get('/api/v1/lending')).json()
   await open(page)
@@ -122,20 +128,19 @@ test('L4–L5: freeze is Unknown not zero; facility detail and repayments', asyn
   }
 
   for (const f of api.facilities) {
-    const opener = $(page, `facility-${f.facility_id}`)
-    expect((await opener.boundingBox())!.height).toBeGreaterThanOrEqual(43.5)
-    await opener.click()
-    const detail = sheet(page).locator('[data-test="facility-detail"]')
-    for (const term of ['Parties', 'Status', 'Principal', 'Fee', 'Owed', 'Outstanding', 'Observed revenue']) {
-      await expect(detail.locator(`dt:text-is("${term}")`)).toBeVisible()
-    }
-    await expect(detail).toContainText(fmt(f.principal))
-    await sheet(page).locator('[data-test="repayments"] summary').click()
-    await expect(sheet(page).locator('[data-test="repayments"]')).toContainText('never from a forecast')
-    await expect(sheet(page)).toContainText('not proof of disbursement')
-    await page.keyboard.press('Escape')
-    await expect(opener).toBeFocused()
+    const row = $(page, 'facilities').locator(`tr[data-facility="${f.facility_id}"]`)
+    await expect(row).toContainText(fmt(f.principal))
+    await expect(row).toContainText(fmt(f.fee))
+    await expect(row).toContainText(fmt(f.owed))
   }
+  const schedule = $(page, 'view-repayments')
+  expect((await schedule.boundingBox())!.height).toBeGreaterThanOrEqual(43.5)
+  await schedule.click()
+  await expect($(page, 'repayments')).toContainText('never from a forecast')
+  for (const f of api.facilities) await expect($(page, 'repayments')).toContainText(f.facility_id)
+  await expect($(page, 'facility-terms')).toContainText('not proof of disbursement')
+  await schedule.click()
+  await expect($(page, 'repayments')).toHaveCount(0)
   expect(writes).toEqual([])
 })
 

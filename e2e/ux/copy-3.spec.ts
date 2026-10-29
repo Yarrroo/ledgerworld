@@ -77,12 +77,13 @@ test('Treasury: accounts by name, times in words, the id one click down', async 
   const body = await read(page, '/treasury')
   const account = body.accounts.find((a: any) => a.id.endsWith('/operating')) ?? body.accounts[0]
   await open(page, '/treasury')
-  const choice = $(page, `account-${account.id}`)
-  await expect(choice.locator('.lw-tre__choice-id')).toHaveText('Operating account')
-  await expect(choice).toContainText(account.currency)
-  await expect($(page, 'spendable').locator('.lw-tile__label')).toHaveText(`Operating account · ${account.currency}`)
-  for (const point of await $(page, 'timeline-point').all()) {
-    await expect(point).toHaveText(/^(now|in \d+ (hours?|days?)|\d+ (hours?|days?) ago)$/)
+  // the account by name (a selector only when there are several); its currency and id in the tooltips
+  await expect($(page, 'buckets').locator('h2')).toHaveText('Operating account')
+  await expect($(page, 'tip-spendable').locator('[role="tooltip"]')).toContainText(`Operating account · ${account.currency}`)
+  // timing as the mockup's h40, the words in its tooltip
+  for (const cell of await $(page, 'obligations').locator('td[data-label="Timing"] .lw-tip').all()) {
+    await expect(cell).toContainText(/^h\d+/)
+    await expect(cell.locator('[role="tooltip"]')).toContainText(/^(now|in \d+ (hours?|days?)|\d+ (hours?|days?) ago) · /)
   }
   await folded(page, 'how-spendable', [account.id])
   const main = await shown(page, 'main.lw-main')

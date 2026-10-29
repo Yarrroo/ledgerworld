@@ -210,7 +210,7 @@ describe('money-views fixture', () => {
     const { expect: want } = record('Lending', 'lf2-before')
     expect(shown(w, 'capacity-value')).toBe(asShown(want.capacity))
     expect(text(w, 'calculation')).toContain(want.calculation)
-    expect(text(w, 'facility-terms')).toContain(want.cta)
+    expect(text(w, 'view-repayments')).toBe('View repayment schedule')
     const facilities = text(w, 'facilities')
     expect(facilities).toContain('adv-a · revenue_advance')
     expect(facilities).toContain('$10,000') // principal

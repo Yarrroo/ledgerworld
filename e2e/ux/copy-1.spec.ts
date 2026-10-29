@@ -152,9 +152,9 @@ test('Lending: what the lender can still lend, then how; K_p one click down', as
   const kp = body.capacity.K_p
   if (kp.minor === null) expect(text).toMatch(/unknown/)
   else expect(text).toMatch(new RegExp(`^Your lender can still lend you up to ${fmt(kp).replace(/[$.]/g, '\\$&')}`))
-  await expect(page.locator('#capacity-heading')).toHaveText('What the lender can still lend')
-  await expect($(page, 'parts').locator('[data-part="K_p"]')).toContainText('Left to lend')
-  await expect($(page, 'parts').locator('[data-part="settled_known"]')).toContainText('Cash the lender holds')
+  await expect(page.locator('#capacity-heading')).toHaveText('Available pool capacity')
+  await expect($(page, 'parts').locator('[data-part="K_p"]')).toContainText('Available capacity')
+  await expect($(page, 'parts').locator('[data-part="settled_known"]')).toContainText('Settled known')
   await plainHeadings(page)
   await expect($(page, 'authority')).not.toBeVisible()
   await folded(page, 'how-lending', [body.snapshot_id, 'K_p', `Balance authority ${body.capacity.authority}`])
