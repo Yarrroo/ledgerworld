@@ -37,6 +37,28 @@
       <section class="lw-exec__terms" aria-labelledby="summary-heading" data-test="summary"
                data-panel="Approval summary">
         <h2 id="summary-heading">Approval summary</h2>
+        <template v-if="held">
+          <p class="lw-time">Confirmed in this tab and not executed; kept in this tab's memory only.</p>
+          <dl class="lw-terms" data-test="summary-held">
+            <dt>Approval</dt>
+            <dd class="lw-copyable" data-test="summary-held-approval">
+              <span class="lw-hash">{{ held.approval_id }}</span>
+              <button type="button" class="lw-copy" data-test="copy-held-approval"
+                      @click="copy('Approval id', held.approval_id)">Copy<span class="lw-visually-hidden"> approval id</span></button>
+            </dd>
+            <dt>State</dt>
+            <dd data-test="summary-held-state">
+              <span :class="['lw-status', `lw-status--${STAGES[stage].tone}`]">
+                <span aria-hidden="true">{{ STAGES[stage].icon }}</span><span>{{ heldState }}</span>
+              </span>
+            </dd>
+            <dt>Observed snapshot</dt><dd>{{ held.snapshot_id }}</dd>
+            <dt>Provider</dt><dd>{{ LABELS[held.mode] || held.mode }}</dd>
+            <dt>Plan hash</dt><dd class="lw-hash" data-test="summary-held-hash">{{ held.plan_hash }}</dd>
+            <dt>Expires</dt><dd data-test="summary-held-expires">{{ expires.utc }} · {{ expires.local }}</dd>
+          </dl>
+          <p v-if="execution" class="lw-time">The execution linked to this run:</p>
+        </template>
         <dl v-if="execution" class="lw-terms">
           <dt>Approval</dt>
           <dd class="lw-copyable">
@@ -48,7 +70,7 @@
           <dt>Provider</dt><dd>{{ LABELS[execution.mode] || execution.mode }}</dd>
           <dt>Status read</dt><dd data-test="summary-read">{{ formatTime(execution.as_of).utc }}</dd>
         </dl>
-        <p v-else class="lw-time">No approval to summarise: the linked execution has not been read.</p>
+        <p v-else-if="!held" class="lw-time">No approval to summarise: the linked execution has not been read.</p>
       </section>
 
       <section class="lw-exec__legs" aria-labelledby="receipts-heading" data-test="receipts" data-panel="Leg tracker">
@@ -390,7 +412,7 @@ const scenarioCost = computed(() => {
 // ------------------------------------------------------------------ approve, then execute
 
 const flow = reactive({
-  open: false, approval: null, serverAt: 0, receivedAt: 0, submitting: false, executed: false,
+  open: false, approval: null, run: null, serverAt: 0, receivedAt: 0, submitting: false, executed: false,
   invalid: '', blocked: '', message: ''
 })
 const opener = shallowRef(null)
@@ -448,6 +470,8 @@ const expires = computed(() => formatTime(flow.approval?.expires_at))
 const staleWhy = computed(() => {
   const a = flow.approval
   if (!a) return ''
+  // a refresh can name another prepared run under the same address
+  if (flow.run !== state.body?.run_id) return 'Bound for another run; review again'
   if (a.mode !== state.body?.mode) return 'The bound provider mode differs from this screen; review again'
   if ((decisions.value?.results ?? []).some((r) => r.branch_id === a.snapshot_id)) {
     return 'Bound to a hypothetical branch, not the observed state; review again'
@@ -465,6 +489,15 @@ const executeWhy = computed(() => {
   if (staleWhy.value) return staleWhy.value
   if (flow.submitting) return 'Sending'
   return ''
+})
+
+/** The approval this tab confirmed for the run on screen and has not executed, or null. */
+const held = computed(() =>
+  flow.approval && !flow.executed && flow.run === state.body?.run_id ? flow.approval : null)
+/** What the held approval can do now, with the reason when it cannot be executed. */
+const heldState = computed(() => {
+  const why = flow.invalid || flow.blocked || staleWhy.value
+  return why ? `${STAGES[stage.value].word}: ${why}` : 'Approved, not executed; executable until it expires'
 })
 
 /**
@@ -548,6 +581,7 @@ async function confirmApproval () {
       return
     }
     flow.approval = approval
+    flow.run = runId
     flow.serverAt = Date.parse(answer.as_of)
     flow.receivedAt = Date.now()
     now.value = flow.receivedAt
