@@ -140,3 +140,20 @@ test('phone: gap, timing, grouped rows stacked, review; no carousel', async ({ p
   for (const b of boxes) expect(b.right).toBeLessThanOrEqual(info.project.use.viewport!.width)
   expect(await sideways(page)).toBeLessThanOrEqual(0)
 })
+
+test('a comparison with a replayed result says Replay in the header, outside every tooltip', async ({ page, baseURL, request }, info) => {
+  const writes = await readOnly(page, baseURL!)
+  const runId = await demoRunId(request)
+  const api = await (await request.get(`/api/v1/decisions/${runId}`)).json()
+  // one replayed branch among fresh ones; the comparison's body itself carries no replay
+  const results = api.results.map((r: { replay: boolean }, i: number) => ({ ...r, replay: i === 0 }))
+  await page.route(`**/api/v1/decisions/${runId}`, (route) => route.fulfill({ json: { ...api, results } }))
+  await open(page, runId)
+  await expect($(page, 'context-line')).toBeVisible()
+  await expect($(page, 'context-line')).toHaveText(/ · Replay$/)
+  await expect($(page, 'mode')).toBeVisible()
+  await expect($(page, 'mode')).toContainText('Replay')
+  expect(await sideways(page), 'Decisions scrolls sideways').toBeLessThanOrEqual(0)
+  await page.locator('[data-test="banner"]').screenshot({ path: info.outputPath('replay-header.png') })
+  expect(writes).toEqual([])
+})
