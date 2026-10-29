@@ -248,7 +248,7 @@ test('an approval closed unexecuted is summarised with its terms, then as expire
 })
 
 for (const step of ['reconciled', 'incident'] as const) {
-  test(`a failed Read status after ${step} is said in the dialog, the stage kept`, async ({ page }) => {
+  test(`a failed Check the status after ${step} is said in the dialog, the stage kept`, async ({ page }) => {
     const posts = await mock(page, { executions: [executionAt(step)] })
     await review(page)
     await $(page, 'confirm').click()
@@ -260,7 +260,7 @@ for (const step of ['reconciled', 'incident'] as const) {
       r.fulfill({ status: 403, json: { error: { code: 'forbidden', detail: 'not allowed' } } }))
     await $(page, 'read-status').click()
     await expect($(page, 'stage-status')).toContainText(
-      `Could not read the status of execution ${APPROVAL.approval_id}: not allowed. Read status to try again.`)
+      `Could not read the status of execution ${APPROVAL.approval_id}: not allowed. Check the status to try again.`)
     await expect($(page, 'stage-status')).toContainText(kept)
     await expect(dialog(page)).toHaveAttribute('data-stage', step)
     await footed(page)
@@ -294,4 +294,28 @@ test('a sent plan the server has not recorded yet never reads as nothing sent', 
   await expect($(page, 'not-found')).toContainText('this does not mean it failed')
   // the lead sentence is the hero subtitle's tooltip (MATCH.md item 1)
   await expect(lead(page)).toHaveText('The plan you sent is not recorded yet; reading again. Do not send it twice.')
+})
+
+// board item 167: the header has no Refresh button and Check the status is only in the review of
+// an execution this tab sent; a linked execution whose read is refused names the way that works
+test('a linked execution whose read is refused says to reload the page, and a reload reads it', async ({ page }) => {
+  await mock(page, {})
+  await page.route('**/api/v1/overview', (r) =>
+    r.fulfill({ json: { ...clone(OVERVIEW), mode: 'fake', demo: { run_id: 'run-1', execution_id: APPROVAL.approval_id } } }))
+  let refused = true
+  await page.route(`**/api/v1/executions/${APPROVAL.approval_id}`, (r) => refused
+    ? r.fulfill({ status: 403, json: { error: { code: 'forbidden', detail: 'not allowed' } } })
+    : r.fulfill({ json: executionAt('reconciled') }))
+  await page.goto('/execution')
+  await settled(page)
+  await expect($(page, 'poll-error')).toContainText('not allowed')
+  await expect(lead(page)).toHaveText('We could not read what the plan you sent moved yet; reload the page to try again.')
+  await expect(page.getByRole('button', { name: /^Refresh$/ })).toHaveCount(0)
+  expect(await sideways(page)).toBeLessThanOrEqual(0)
+  await page.screenshot({ path: test.info().outputPath('read-refused-lead.png') })
+  refused = false
+  await page.reload()
+  await settled(page)
+  await expect($(page, 'poll-error')).toHaveCount(0)
+  await expect(lead(page)).not.toContainText('could not read')
 })
