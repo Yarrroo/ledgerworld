@@ -65,7 +65,7 @@
                 <p>Counted: settled known {{ metricText(capacity.parts.settled_known) }}, as of
                   {{ formatTime(capacity.parts.settled_known.as_of || body.as_of).utc }}.</p>
                 <p v-if="poolAccounts.length">The pool's cash accounts on {{ body.snapshot_id }}: {{ poolAccounts.join(', ') }}.</p>
-                <p v-if="notCurrent.length">Not counted: {{ notCurrent.map((f) => f.text).join('; ') }}.</p>
+                <p v-if="notCurrent.length">Not counted: {{ notCurrent.map((f) => `${f.text} (${f.id})`).join('; ') }}.</p>
                 <p v-else>Not counted: none; every pool cash account was observed.</p>
                 <p>Balances per account are not itemised by GET /api/v1/lending; this screen shows no figure it was not given.</p>
               </div>
@@ -75,7 +75,7 @@
             <div class="lw-tile__label">Couldn't read, so not counted</div>
             <template v-for="f in notCurrent" :key="f.id">
               <div class="lw-figure lw-figure--small">
-                {{ f.id }} ·
+                {{ f.name }} ·
                 <span :class="['lw-status', `lw-status--${f.tone}`]">
                   <span aria-hidden="true">{{ f.icon }}</span> {{ f.word }}
                 </span>
@@ -247,7 +247,7 @@ import HowWeKnow from '../components/HowWeKnow.vue'
 import WorldMap from '../components/WorldMap.vue'
 import { FAMILIES, worldFor } from '../api/world.js'
 import {
-  ApiError, ScreenShell, amountText, amountWords, contextKey, formatTime, freshness, getLending, getOverview,
+  ApiError, ScreenShell, accountName, amountText, amountWords, contextKey, formatTime, freshness, getLending, getOverview,
   getTreasury, hoursFrom, kindText, lastSeen, metricStatus, metricText, money, routeExists, staleOf, stateOf, useReading
 } from '../api/v1.js'
 
@@ -351,7 +351,7 @@ const map = computed(() => {
     let note = ''
     if (e.account) {
       const unobserved = notCurrent.value.find((f) => f.id === e.account)
-      label = `${e.account} · ${unobserved ? `${unobserved.icon} ${unobserved.word}` : 'counted in K_p'}`
+      label = `${accountName(e.account, { owner: true })} · ${unobserved ? `${unobserved.icon} ${unobserved.word}` : 'counted in K_p'}`
       note = 'Its balance is not itemised by the lending read; an unknown balance is excluded, never zero.'
     }
     const flow = e.flow && body.treasury?.accounts.flatMap((a) => a.buckets.pending_in).find((x) => x.flow_id === e.flow)

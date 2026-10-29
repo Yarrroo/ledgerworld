@@ -15,7 +15,7 @@ test('the six routes open on the prepared run', async ({ page, request, baseURL 
     expect(response?.status(), route.path).toBe(200)
     await expect(page.locator('h1'), route.path).toHaveText(route.title)
     await settled(page)
-    await expect(page.locator('[data-test="mode"]').first()).toHaveText(/Simulated provider/)
+    await expect(page.locator('[data-test="mode"]').first()).toHaveText(/Simulated bank connection/)
     await expect(page.locator('[data-test="error"]'), `${route.path} shows a load error`).toHaveCount(0)
     expect(await sideways(page), `${route.path} scrolls sideways`).toBeLessThanOrEqual(0)
   }

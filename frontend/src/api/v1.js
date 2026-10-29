@@ -17,6 +17,7 @@ import {
   computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, shallowReactive, shallowRef, watch
 } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import HowWeKnow from '../components/HowWeKnow.vue'
 import { logoMark } from '../components/logo.js'
 import '@fontsource-variable/inter'
 import '@fontsource-variable/source-serif-4'
@@ -177,15 +178,35 @@ export function metricStatus (metric) {
 
 /** A not-current account (completeness.accounts, Lending's capacity.unobserved) with its own
  * reason: a stale one was
- * observed and carries its as_of; an unknown one was not and carries none. ``text`` reads
- * "lender/venue · ? Unknown" or "lender/operating · ◷ Stale, as of 2026-01-05 12:00 UTC". */
+ * observed and carries its as_of; an unknown one was not and carries none. ``name`` is the
+ * account in words, its owner first (`accountName()`); ``text`` reads "Lender venue account · ?
+ * Unknown" or "Lender operating account · ◷ Stale, as of 2026-01-05 12:00 UTC". */
 export function freshness (account) {
   const s = stateOf(account.status)
   const at = account.status === 'stale' && account.as_of ? formatTime(account.as_of).utc : null
+  const name = accountName(account.account_id, { owner: true })
   return {
-    ...s, id: account.account_id, at,
-    text: `${account.account_id} · ${s.icon} ${s.word}${at ? `, as of ${at}` : ''}`
+    ...s, id: account.account_id, name, at,
+    text: `${name} · ${s.icon} ${s.word}${at ? `, as of ${at}` : ''}`
   }
+}
+
+const capital = (word) => word.charAt(0).toUpperCase() + word.slice(1)
+
+/**
+ * An account in the cash owner's words, from its id "<owner>/<kind>" (prp/2026-10-29-ux-pass/
+ * COPY.md): "treasury/operating" reads "Operating account", with ``currency`` "Operating account ·
+ * USD", and with ``owner`` (an account of any party) "Treasury operating account". The id itself
+ * belongs in the panel's How we know.
+ */
+export function accountName (id, { currency, owner = false } = {}) {
+  const text = String(id ?? '')
+  const cut = text.indexOf('/')
+  if (cut < 0) return text ? `${capital(text.replace(/[-_]+/g, ' '))} account${currency ? ` · ${currency}` : ''}` : 'An unnamed account'
+  const who = text.slice(0, cut).replace(/[-_]+/g, ' ')
+  const kind = text.slice(cut + 1).replace(/[-_/]+/g, ' ')
+  const name = owner ? `${capital(who)} ${kind} account` : `${capital(kind)} account`
+  return currency ? `${name} · ${currency}` : name
 }
 
 /** The stale ones of not-current accounts, as `freshness()` reads them: the shell's stale band. */
@@ -226,10 +247,22 @@ export function formatTime (iso) {
   return { utc, local: `local ${LOCAL.format(d)}` }
 }
 
-/** "t=40 h": whole hours from the response's as_of (simulated hours on a frozen snapshot). */
+/** "1 Jan, 00:00 UTC": an instant for the context bar; the full date and local time go in How we know. */
+export function asOfText (iso) {
+  const d = iso ? new Date(iso) : null
+  if (!d || Number.isNaN(d.getTime())) return 'Unavailable'
+  return `${dayText(iso)}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
+}
+
+/**
+ * "in 40 hours", "in 2 days", "now" or "3 hours ago": the time from the response's as_of to
+ * ``at`` in whole hours (simulated hours on a frozen snapshot), in words (`hoursWords()`).
+ */
 export function hoursFrom (asOf, at) {
   const hours = Math.round((Date.parse(at) - Date.parse(asOf)) / 3_600_000)
-  return Number.isNaN(hours) ? 't unavailable' : `t=${hours} h`
+  if (Number.isNaN(hours)) return 'at an unknown time'
+  if (hours === 0) return 'now'
+  return hours > 0 ? `in ${hoursWords(hours)}` : `${hoursWords(-hours)} ago`
 }
 
 const byTime = (key) => (x, y) => Date.parse(x[key]) - Date.parse(y[key])
@@ -269,7 +302,7 @@ export function projectionTerms (account, t, obligations, asOf) {
   const result = account.projected.find((p) => p.t === t)?.value
   return {
     line: `${terms.join(' ')} = ${result ? amountText(result) : 'Unavailable'}`,
-    excluded: excluded.length ? `excluded at ${hoursFrom(asOf, t)}: ${excluded.join(', ')}` : ''
+    excluded: excluded.length ? `not yet counted ${hoursFrom(asOf, t)}: ${excluded.join(', ')}` : ''
   }
 }
 
@@ -300,7 +333,9 @@ export const PLAIN = {
   fake: 'Simulated bank connection',
   sandbox: 'Sandbox bank',
   scripted: 'Scripted agents',
-  branch: 'What-if'
+  live: 'Live AI agents',
+  branch: 'What-if',
+  replay: 'Replay'
 }
 
 export const FLOOR_WORDS = {
@@ -505,7 +540,10 @@ const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home
  * bar (mode, model, as of, snapshot, Refresh; kept in view while scrolling), the title, the panel
  * index, the reading's error and context notices, and the screen itself, rendered only once there
  * is a body. The mode label is shown only from a loaded answer: nothing inherits an authoritative
- * badge from an earlier render.
+ * badge from an earlier render. The bar speaks the cash owner's words (prp/2026-10-29-ux-pass/
+ * COPY.md): "Simulated bank connection · Scripted agents · As of 1 Jan, 00:00 UTC", a What-if or
+ * Replay tag when the figures are one; the provider mode, model, full time, snapshot and run sit
+ * in its How we know.
  *
  * The handoff's loading, empty and failure states, the same on every screen: before the first
  * answer, skeleton tiles where the figures go and one polite "Loading"; a reading refused because
@@ -757,7 +795,7 @@ export const ScreenShell = defineComponent({
       const body = absent ? null : props.reading.body
       const busy = status === 'loading'
       const time = formatTime(body?.as_of)
-      const mode = body ? (LABELS[body.mode] || body.mode) : 'Provider mode not loaded'
+      const mode = body ? (PLAIN[body.mode] || LABELS[body.mode] || body.mode) : 'Bank connection not loaded'
       const brand = (attrs) => home({ class: 'lw-brand', 'aria-label': 'LedgerWorld, Overview', ...attrs },
         [logoMark(), h('span', 'LedgerWorld')])
 
@@ -796,10 +834,18 @@ export const ScreenShell = defineComponent({
         crumbs,
         h('div', { class: 'lw-context__bar' }, [
           h('span', { class: 'lw-context__mode', 'data-test': 'mode' }, mode),
-          model.value && h('span', { class: 'lw-context__item', 'data-test': 'model' }, ['Model ', h('b', model.value)]),
-          body && h('span', { class: 'lw-context__item', 'data-test': 'context-as-of' },
-            ['As of ', h('b', time.utc), ` · ${time.local}`]),
-          body && h('span', { class: 'lw-context__item', 'data-test': 'source' }, sourceLabel(body)),
+          model.value && h('span', { class: 'lw-context__item', 'data-test': 'model' }, PLAIN[model.value] || `Agents on ${model.value}`),
+          body && h('span', { class: 'lw-context__item', 'data-test': 'context-as-of' }, ['As of ', h('b', asOfText(body.as_of))]),
+          body && (body.branch_id || body.replay) && h('span', { class: 'lw-tag', 'data-test': 'context-what-if' },
+            body.branch_id ? PLAIN.branch : PLAIN.replay),
+          body && h(HowWeKnow, { test: 'how-context-bar' }, () => h('dl', { class: 'lw-context__facts' }, [
+            h('div', [h('dt', 'Provider'), h('dd', { 'data-test': 'context-provider' }, LABELS[body.mode] || body.mode)]),
+            h('div', [h('dt', 'Model'), h('dd', model.value || 'Not reported')]),
+            h('div', [h('dt', 'As of'), h('dd', `${time.utc} · ${time.local}`)]),
+            h('div', [h('dt', 'Figures'), h('dd', { 'data-test': 'source' }, sourceLabel(body))]),
+            h('div', [h('dt', 'Snapshot'), h('dd', { 'data-test': 'context-bar-snapshot' }, body.snapshot_id ?? 'Not named by the API')]),
+            run && h('div', [h('dt', 'Run'), h('dd', run)])
+          ])),
           h('button', {
             type: 'button', class: 'lw-button lw-button--quiet', 'data-test': 'refresh',
             disabled: busy, onClick: () => props.refresh()
@@ -827,7 +873,7 @@ export const ScreenShell = defineComponent({
         class: 'lw-band lw-band--stale', role: 'status', 'data-test': 'stale-band'
       }, [
         h('strong', `${STATES.stale.icon} ${STATES.stale.word}: `),
-        `last observed values for ${props.stale.map((f) => `${f.id}${f.at ? `, as of ${f.at}` : ''}`).join('; ')}. ` +
+        `last observed values for ${props.stale.map((f) => `${f.name}${f.at ? `, as of ${f.at}` : ''}`).join('; ')}. ` +
         'Refresh the evidence before acting on them; they are not current authority.'
       ])
       const notices = [
@@ -837,8 +883,8 @@ export const ScreenShell = defineComponent({
         ]),
         stale,
         contextChanged && body && h('p', { class: 'lw-note', role: 'status', 'data-test': 'context-changed' },
-          `The provider mode or snapshot changed; every figure below was reloaded for ` +
-          `${LABELS[body.mode] || body.mode}, ${sourceLabel(body)}.`)
+          `The bank connection or the data behind this page changed; every figure below was reloaded ` +
+          `for ${mode}${body.branch_id ? `, ${PLAIN.branch}` : ''}. How we know, above, names the source.`)
       ]
       const skeleton = () => h('article', { class: 'lw-tile' }, [
         h('span', { class: 'lw-skeleton lw-skeleton--label' }),

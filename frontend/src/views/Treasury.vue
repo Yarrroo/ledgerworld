@@ -24,7 +24,7 @@
                :data-test="`account-${a.id}`" :data-focus="`account:${a.id}`" tabindex="-1">
           <input type="radio" name="treasury-account" :value="a.id" :checked="a.id === account?.id"
                  @change="chosen = a.id">
-          <span class="lw-tre__choice-id">{{ a.id }}</span>
+          <span class="lw-tre__choice-id">{{ accountName(a.id) }}</span>
           <span class="lw-time">{{ a.currency }} · {{ a.observability === 'known' ? 'observed' : 'balance not observable' }}
             · as of {{ formatTime(a.as_of).utc }}</span>
         </label>
@@ -39,7 +39,7 @@
       <section class="lw-tre__answer" aria-labelledby="spend-heading" data-panel="Free to spend">
         <h2 id="spend-heading">Free to spend now</h2>
         <article class="lw-tile" data-test="spendable">
-          <div class="lw-tile__label">{{ account.id }} · {{ account.currency }}</div>
+          <div class="lw-tile__label">{{ accountName(account.id, { currency: account.currency }) }}</div>
           <div class="lw-figure">{{ metricText(account.spendable) }}</div>
           <div :class="['lw-status', `lw-status--${stateOf(account.spendable.status).tone}`]" data-test="spendable-status">
             {{ metricStatus(account.spendable) }}
@@ -78,7 +78,7 @@
                 </summary>
                 <dl class="lw-tre__inputs" data-test="bucket-inputs">
                   <dt>Input</dt><dd>{{ b.input }}</dd>
-                  <dt>Account</dt><dd>{{ account.id }} ({{ account.currency }})</dd>
+                  <dt>Account</dt><dd>{{ accountName(account.id, { currency: account.currency }) }} · {{ account.id }}</dd>
                   <dt>Source</dt><dd>ledger bucket, GET /api/v1/treasury</dd>
                   <dt>Source time</dt><dd>{{ formatTime(account.as_of).utc }}</dd>
                   <template v-if="b.note"><dt>Note</dt><dd>{{ b.note }}</dd></template>
@@ -111,14 +111,14 @@
                   <td data-label="Set aside">{{ r.reservation || 'not set aside' }}</td>
                   <td data-label="Status">{{ r.status }}</td>
                 </tr>
-                <tr v-if="!rows.length"><td colspan="6">No obligation or pending flow on {{ account.id }}</td></tr>
+                <tr v-if="!rows.length"><td colspan="6">No bill or money coming in on the {{ accountName(account.id).toLowerCase() }}</td></tr>
               </tbody>
             </table>
           </div>
           <p class="lw-time">A row opens its details; it pays nothing.</p>
           <HowWeKnow test="how-rows">
             <p>Ledger obligations and pending flows of {{ account.id }}; set aside is the reservation id.
-              t is whole hours from the snapshot's as of; deadlines are simulated time.</p>
+              "In 40 hours" counts whole hours from the snapshot's as of; deadlines are simulated time.</p>
           </HowWeKnow>
         </section>
       </div>
@@ -146,7 +146,7 @@
             <details v-if="account.low" class="lw-calc">
               <summary>How the lowest point is worked out</summary>
               <div class="lw-calc__body" data-test="calculation">
-                <p>P({{ hoursFrom(body.as_of, account.low.t) }}) in {{ account.currency }}, terms from the API:</p>
+                <p>P {{ hoursFrom(body.as_of, account.low.t) }}, in {{ account.currency }}, terms from the API:</p>
                 <p>{{ account.calc.line }}</p>
                 <p v-if="account.calc.excluded">{{ account.calc.excluded }}</p>
                 <p>P counts settled cash, arrivals and outflows due by t, and every obligation due by
@@ -156,7 +156,7 @@
           </article>
 
           <CashChart :points="account.projected" :as-of="body.as_of" :floor="account.floor" :selected="pointT"
-                     :label="`Projected cash P of ${account.id} against its reserve floor`" @select="pointT = $event" />
+                     :label="`Projected cash of the ${accountName(account.id).toLowerCase()} against your safety minimum`" @select="pointT = $event" />
           <p class="lw-tre__point" role="status" aria-live="polite" data-test="point-calculation">
             <template v-if="point">
               <strong>{{ hoursFrom(body.as_of, point.t) }} · {{ formatTime(point.t).utc }}:</strong>
@@ -164,10 +164,10 @@
             </template>
           </p>
 
-          <div class="lw-table-wrap" tabindex="0" role="region" :aria-label="`Projected cash, ${account.id}`">
+          <div class="lw-table-wrap" tabindex="0" role="region" :aria-label="`Projected cash, ${accountName(account.id, { currency: account.currency })}`">
             <table class="lw-table" data-test="timeline">
               <caption class="lw-visually-hidden">Projected cash at each flow or deadline, against the reserve floor; the chart draws these points</caption>
-              <thead><tr><th scope="col">t</th><th scope="col">UTC</th><th scope="col">Cash</th><th scope="col">Against your safety minimum</th></tr></thead>
+              <thead><tr><th scope="col">When</th><th scope="col">UTC</th><th scope="col">Cash</th><th scope="col">Against your safety minimum</th></tr></thead>
               <tbody>
                 <tr v-for="p in account.points" :key="p.t" :class="{ 'lw-row--floor': p.lowest, 'is-selected': p.t === pointT }">
                   <td>
@@ -211,7 +211,7 @@
           <dt>{{ detail.obligation ? 'Deadline' : 'Expected' }}</dt>
           <dd>{{ formatTime(detail.at).utc }} · {{ formatTime(detail.at).local }} · {{ hoursFrom(body?.as_of, detail.at) }}</dd>
           <dt>Reservation</dt><dd>{{ detail.reservation || 'not reserved' }}</dd>
-          <dt>Account</dt><dd>{{ account?.id }}</dd>
+          <dt>Account</dt><dd>{{ account ? accountName(account.id, { currency: account.currency }) : '' }}</dd>
           <dt>Source</dt><dd>{{ detail.source }}</dd>
           <dt>Current state</dt><dd data-test="row-state">{{ detail.status }}</dd>
         </dl>
@@ -235,7 +235,7 @@ import CashChart from '../components/CashChart.vue'
 import DetailSheet from '../components/DetailSheet.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
 import {
-  FLOOR_WORDS, OWED, STATES, ScreenShell, againstFloor, amountWords, contextKey, dayText, formatAmount, formatMoney,
+  FLOOR_WORDS, OWED, STATES, ScreenShell, accountName, againstFloor, amountWords, contextKey, dayText, formatAmount, formatMoney,
   formatTime, getOverview, getTreasury, hoursFrom, kindText, lastSeen, listWords, metricStatus, metricText, money,
   pendingFlows, projectionTerms, routeExists, staleOf, stateOf, useFocusTarget, useReading
 } from '../api/v1.js'

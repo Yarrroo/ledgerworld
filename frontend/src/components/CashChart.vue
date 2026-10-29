@@ -10,7 +10,7 @@
       </text>
       <polyline class="lw-chart__line" :points="plot.line" fill="none" />
       <text v-for="p in plot.dots" :key="`x-${p.t}`" class="lw-chart__tick" :x="p.x" :y="HEIGHT - 8"
-            text-anchor="middle">{{ p.hours }}</text>
+            text-anchor="middle">{{ p.tick }}</text>
       <g v-for="p in plot.dots" :key="p.t" class="lw-chart__dot" tabindex="0" role="button"
          :class="{ 'is-low': p.lowest, 'is-selected': p.t === selected, [`is-${p.tone}`]: p.lowest }"
          :aria-label="p.aria" :aria-pressed="p.t === selected ? 'true' : 'false'" :data-t="p.t"
@@ -90,10 +90,10 @@ const plot = computed(() => {
       t: p.t,
       x: sx(p.h),
       y: sy(p.value.minor),
-      hours,
+      tick: Math.round(p.h) === 0 ? 'now' : `${Math.round(p.h)} h`, // short on the axis; the label says it in words
       lowest,
       tone: state === 'breached' ? 'bad' : state === 'kept' ? 'ok' : 'muted',
-      aria: `${hours}, ${formatTime(p.t).utc}: P ${metricText(p.value)}${lowest ? ', the minimum' : ''}`
+      aria: `${hours}, ${formatTime(p.t).utc}: projected cash ${metricText(p.value)}${lowest ? ', the minimum' : ''}`
     }
   })
   return {

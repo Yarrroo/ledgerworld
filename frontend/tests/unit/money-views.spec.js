@@ -11,7 +11,7 @@ import Overview from '../../src/views/Overview.vue'
 import Treasury from '../../src/views/Treasury.vue'
 import Lending from '../../src/views/Lending.vue'
 import {
-  contextKey, formatMoney, formatTime, freshness, latestOnly, metricText, useReading
+  PLAIN, contextKey, formatMoney, formatTime, freshness, latestOnly, metricText, useReading
 } from '../../src/api/v1.js'
 
 import moneyViews from '../../../prp/2026-10-20-ledgerworld/design/modules/ui/fixtures/money-views.json'
@@ -120,10 +120,10 @@ describe('money-views fixture', () => {
     expect(w.get('[data-test="open-simulation"]').attributes('href')).toBe('/simulation?run_id=run-1')
     expect(text(w, 'due')).toContain('2026-01-06 16:00 UTC')
     expect(text(w, 'due')).toContain('local ')
-    expect(text(w, 'due')).toContain('t=40 h')
+    expect(text(w, 'due')).toContain('in 40 hours')
     expect(text(w, 'next-obligation')).toContain('USD 50,000.00')
     // source and mode stay on the banner
-    expect(text(w, 'mode')).toBe(dataStates.labels.fake)
+    expect(text(w, 'context-provider')).toBe(dataStates.labels.fake)
     expect(text(w, 'source')).toBe(`${moneyViews.context.source_label} lf1`)
   })
 
@@ -159,10 +159,10 @@ describe('money-views fixture', () => {
     expect(text(w, 'shortfall')).toBe(want.shortfall)
     const calc = text(w, 'calculation')
     expect(calc).toContain(want.calculation.split(';')[0])
-    // the delayed receipt and the t=48 withdrawal are named as excluded at t=40
-    expect(calc).toContain('excluded at t=40 h')
-    expect(calc).toMatch(/exchange withdrawal wd-1 in \(expected t=48 h\)/)
-    expect(calc).toMatch(/receivable rcv-1 in \(expected t=252 h\)/)
+    // the delayed receipt and the withdrawal 48 hours out are named as not yet counted 40 hours out
+    expect(calc).toContain('not yet counted in 40 hours')
+    expect(calc).toMatch(/exchange withdrawal wd-1 in \(expected in 2 days\)/)
+    expect(calc).toMatch(/receivable rcv-1 in \(expected in 252 hours\)/)
     // S and P are separate measures
     expect(text(w, 'spendable')).toContain('USD 20,000.00')
     expect(text(w, 'timeline')).toContain('✕ below floor, short USD 10,000.00')
@@ -171,7 +171,7 @@ describe('money-views fixture', () => {
     expect(obligations).toContain('payroll · payroll-1')
     expect(obligations).toContain('USD 50,000.00')
     expect(obligations).toContain('res-payroll-1')
-    expect(obligations).toContain('2026-01-06 16:00 UTC (t=40 h)')
+    expect(obligations).toContain('2026-01-06 16:00 UTC (in 40 hours)')
     // the currency is always named: every money figure carries it, the calculation names it
     for (const figure of w.findAll('.lw-figure')) {
       expect(figure.text()).toMatch(/^(lowest )?USD |^Unknown$|^Not assessed$/)
@@ -200,7 +200,7 @@ describe('money-views fixture', () => {
     const w = await open(Lending, '/lending')
     const { expect: want } = record('Lending', 'lf2-venue-freeze')
     expect(text(w, 'capacity-value')).toBe(want.capacity)
-    expect(text(w, 'not-current')).toContain(`lender/venue · ? ${want.venue}`)
+    expect(text(w, 'not-current')).toContain(`Lender venue account · ? ${want.venue}`)
     expect(text(w, 'not-current')).not.toMatch(/USD 0\.00/)
     expect(disabled(w, 'fund')).toBe(!want.funding_enabled)
     expect(text(w, 'fund-why')).toBe(want.reason)
@@ -218,8 +218,8 @@ describe('money-views fixture', () => {
     serveLending(lendingStale.instance)
     w = await open(Lending, '/lending')
     expect(text(w, 'authority')).toContain('reduced')
-    expect(text(w, 'not-current')).toContain('lender/operating · ◷ Stale')
-    expect(text(w, 'not-current')).toContain('lender/venue · ? Unknown')
+    expect(text(w, 'not-current')).toContain('Lender operating account · ◷ Stale')
+    expect(text(w, 'not-current')).toContain('Lender venue account · ? Unknown')
     expect(disabled(w, 'fund')).toBe(true)
   })
 
@@ -238,9 +238,9 @@ describe('a stale account is not current, and it is not unknown', () => {
     serve({ '/overview': overviewStale.instance })
     const w = await open(Overview, '/overview')
     const partial = text(w, 'partial')
-    expect(partial).toContain('borrower-a/operating · ◷ Stale, as of 2026-01-05 12:00 UTC')
-    expect(partial).toContain('lender/operating · ◷ Stale, as of 2026-01-05 12:00 UTC')
-    expect(partial).toContain('lender/venue · ? Unknown')
+    expect(partial).toContain('Borrower a operating account · ◷ Stale, as of 2026-01-05 12:00 UTC')
+    expect(partial).toContain('Lender operating account · ◷ Stale, as of 2026-01-05 12:00 UTC')
+    expect(partial).toContain('Lender venue account · ? Unknown')
     expect(partial).not.toMatch(/operating · \? Unknown/)
     expect(partial).not.toContain('not observed')
     // Cash and S include a stale value and say Stale; K_p counts known balances only.
@@ -253,12 +253,12 @@ describe('a stale account is not current, and it is not unknown', () => {
     serve({ '/lending': lendingStale.instance, '/overview': overviewStale.instance })
     const w = await open(Lending, '/lending')
     const shown = text(w, 'not-current')
-    expect(shown).toContain('lender/operating · ◷ Stale')
+    expect(shown).toContain('Lender operating account · ◷ Stale')
     const asOf = w.get('[data-test="not-current"]').findAll('.lw-time').map((t) => t.text())
     expect(asOf).toEqual(['as of 2026-01-05 12:00 UTC']) // the stale one only; unknown has no time
-    expect(shown).toContain('lender/venue · ? Unknown')
-    expect(shown).not.toContain('lender/operating · ? Unknown')
-    expect(shown).not.toContain('borrower-a/operating') // not the pool's
+    expect(shown).toContain('Lender venue account · ? Unknown')
+    expect(shown).not.toContain('Lender operating account · ? Unknown')
+    expect(shown).not.toContain('Borrower a operating account') // not the pool's
     expect(shown).not.toMatch(/not observed/i)
     expect(disabled(w, 'fund')).toBe(true)
   })
@@ -266,7 +266,7 @@ describe('a stale account is not current, and it is not unknown', () => {
   it('only a stale account shows a time, whatever the response carries', () => {
     const at = '2026-01-05T12:00:00Z'
     expect(freshness({ account_id: 'lender/venue', status: 'unknown', as_of: at }).text)
-      .toBe('lender/venue · ? Unknown')
+      .toBe('Lender venue account · ? Unknown')
     expect(freshness({ account_id: 'lender/operating', status: 'stale', as_of: at }).at)
       .toBe('2026-01-05 12:00 UTC')
   })
@@ -309,7 +309,7 @@ describe('Treasury shows the terms the ledger counts in P', () => {
       })
     })
     const w = await open(Treasury, '/treasury')
-    expect(text(w, 'calculation')).toContain('tax tax-1 due (t=60 h)')
+    expect(text(w, 'calculation')).toContain('tax tax-1 due (in 60 hours)')
   })
 
   it('a floor metric with no minor at all reads Unknown, never Floor breached', async () => {
@@ -389,7 +389,7 @@ describe('data-states fixture', () => {
     const w = await open(Overview, '/overview')
     expect(text(w, 'settled')).toContain('USD 70,000.00')
     expect(text(w, 'lender-capacity')).toContain('USD 27,000.00')
-    expect(text(w, 'partial')).toContain('lender/venue')
+    expect(text(w, 'partial')).toContain('Lender venue account')
   })
 
   it('unassessed reads Not assessed and never a green floor', async () => {
@@ -413,7 +413,7 @@ describe('data-states fixture', () => {
     expect(w.get('main').attributes('aria-busy')).toBe(String(stateCase('loading').expect.aria_busy))
     expect(w.findAll('.lw-skeleton').length).toBeGreaterThan(0)
     expect(w.get('main').text()).not.toMatch(/\d/)
-    expect(text(w, 'mode')).toBe('Provider mode not loaded')
+    expect(text(w, 'mode')).toBe('Bank connection not loaded')
     expect(w.find('a.lw-button').exists()).toBe(false)
   })
 
@@ -503,13 +503,13 @@ describe('data-states fixture', () => {
     let mode = c.from
     serveLending(() => ({ ...clone(lendingLf2.instance), mode }))
     const w = await open(Lending, '/lending')
-    expect(text(w, 'mode')).toBe(dataStates.labels[c.from])
+    expect(text(w, 'context-provider')).toBe(dataStates.labels[c.from])
     mode = c.to
     await w.get('[data-test="refresh"]').trigger('click')
     await flushPromises()
-    expect(text(w, 'mode')).toBe(c.expect.banner)
+    expect(text(w, 'context-provider')).toBe(c.expect.banner)
     expect(Boolean(text(w, 'context-changed'))).toBe(c.expect.reload_context)
-    expect(text(w, 'context-changed')).toContain(c.expect.banner)
+    expect(text(w, 'context-changed')).toContain(PLAIN[c.to])
   })
 })
 

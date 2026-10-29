@@ -127,10 +127,10 @@ test('context: breadcrumb, mode, model, as of and snapshot on every screen', asy
     await expect(crumbs.getByRole('link', { name: 'LedgerWorld' })).toBeVisible()
     await expect(crumbs).toContainText(route.title)
     await expect(crumbs.locator('[aria-current="page"]')).toHaveText(route.run ? `Run ${runId}` : route.title)
-    await expect($(page, 'mode')).toHaveText('Simulated provider')
-    await expect($(page, 'model')).toContainText('scripted')
-    await expect($(page, 'context-as-of')).toHaveText(/^As of \d{4}-\d\d-\d\d \d\d:\d\d UTC · /)
-    await expect($(page, 'source')).not.toBeEmpty()
+    await expect($(page, 'mode')).toHaveText('Simulated bank connection')
+    await expect($(page, 'model')).toHaveText('Scripted agents')
+    await expect($(page, 'context-as-of')).toHaveText(/^As of \d{1,2} [A-Z][a-z]{2}, \d\d:\d\d UTC$/)
+    await expect($(page, 'source')).not.toBeEmpty() // in the bar's How we know
     await expect($(page, 'refresh')).toBeVisible()
   }
   expect(writes).toEqual([])

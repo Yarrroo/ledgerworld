@@ -9,7 +9,7 @@
         <div class="lw-cash__who">
           <span class="lw-cash__branch">{{ row.name }}</span>
           <span v-if="row.replay" class="lw-live-tag" data-test="cash-replay">Replay</span>
-          <span class="lw-cash__account">{{ row.branch_id }} · {{ row.account_id }} · {{ PLAIN.branch }}</span>
+          <span class="lw-cash__account">{{ row.branch_id }} · {{ accountName(row.account_id, { owner: true }) }} · {{ PLAIN.branch }}</span>
         </div>
         <div class="lw-cash__value" data-test="cash-value">{{ row.text }}</div>
         <svg v-if="row.line" class="lw-cash__spark" viewBox="0 0 100 24" preserveAspectRatio="none"
@@ -29,7 +29,7 @@
  * The small line is drawn from known points up to the round, nothing after it.
  */
 import { computed } from 'vue'
-import { PLAIN, PLANS, metricText } from '../api/v1.js'
+import { PLAIN, PLANS, accountName, metricText } from '../api/v1.js'
 
 const props = defineProps({
   round: { type: Number, default: null },

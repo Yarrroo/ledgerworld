@@ -225,6 +225,37 @@
   padding: 2px var(--lw-space-2);
 }
 
+/* the bar's How we know: closed it sits in the row; open, its facts take a row of their own */
+.lw-context__bar .lw-how {
+  margin-top: 0;
+}
+
+.lw-context__bar .lw-how[open] {
+  flex-basis: 100%;
+}
+
+.lw-context__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lw-space-1) var(--lw-space-6);
+  margin: 0 0 var(--lw-space-2);
+}
+
+.lw-context__facts div {
+  display: flex;
+  gap: var(--lw-space-2);
+  min-width: 0;
+}
+
+.lw-context__facts dt {
+  color: var(--lw-ink-muted);
+}
+
+.lw-context__facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 /* the panel index: one link per panel; the one in view is marked */
 .lw-panels {
   position: sticky;

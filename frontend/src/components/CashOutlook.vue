@@ -35,7 +35,7 @@
         <div v-if="tip" class="lw-outlook__tip" aria-hidden="true" data-test="outlook-tip"
              :style="tipStyle">
           <strong>{{ tip.money }}</strong>
-          <span>{{ tip.h }} simulated · {{ tip.utc }}</span>
+          <span>{{ tip.h }}, simulated time · {{ tip.utc }}</span>
           <span>{{ tip.event }}</span>
         </div>
       </div>
@@ -53,7 +53,7 @@
         <table class="lw-table">
           <caption class="lw-visually-hidden">Projected cash P at each point the API serves, against the reserve floor</caption>
           <thead>
-            <tr><th scope="col">t</th><th scope="col">UTC</th><th scope="col">P</th>
+            <tr><th scope="col">When</th><th scope="col">UTC</th><th scope="col">P</th>
               <th scope="col">What moves it</th><th scope="col">Against the floor</th></tr>
           </thead>
           <tbody>
