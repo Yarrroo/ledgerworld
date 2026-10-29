@@ -70,7 +70,7 @@ class Clock {
 async function hold (clock, until, step) {
   const steps = Math.max(1, Math.ceil(until - clock.now()))
   for (let i = 1; i <= steps && clock.now() < until; i++) {
-    await clock.within(step(i / steps), 1000)
+    await clock.within(step(i / steps), Math.min(1000, (until - clock.now()) * 1000))
     await clock.sleep(Math.max(0, Math.min(1000, (until - clock.now()) * 1000)))
   }
 }

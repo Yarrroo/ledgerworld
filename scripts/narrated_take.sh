@@ -18,8 +18,10 @@
 # Every beat ends at its planned time, counted from the take's start (e2e/clock.js); a stall
 # shortens the beat it hit. Prints the MP4's path, size and sha256 and a per-beat table, then fails
 # the take (exit 1) when the MP4 runs past 4:40 or a beat left its screen more than 2 s after its
-# planned end (scripts/voiceover.py gate). --keep DIR copies the MP4, its SRT and beats.json there,
-# from a failed take too, so they outlive the run's scratch; the mktemp directory is kept as well.
+# planned end (scripts/voiceover.py gate). --keep DIR (new or empty) copies the MP4, its SRT and
+# beats.json there, so they outlive the run's scratch; a take that failed the gate is kept under a
+# `not-held` name, and one that stopped before the mux keeps its beats.json. The mktemp directory
+# is kept as well.
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 e2e="$root/e2e"
@@ -44,22 +46,21 @@ if ((!dry)) && [[ -n "${LEDGERWORLD_DEMO_TOKEN:-}" && ! "$url" =~ ^(https://|htt
   usage
 fi
 
-if ((!dry)) && [[ -n "$keep" ]]; then
+if [[ -n "$keep" ]]; then
+  ((!dry)) || { echo "narrated-take: a dry run makes no take to --keep" >&2; usage; }
   mkdir -p "$keep" && keep="$(cd "$keep" && pwd)" || { echo "narrated-take: cannot write to $keep" >&2; exit 2; }
+  # one take per directory: an earlier take's files beside this one's would read as one take
+  [[ -z "$(ls -A "$keep")" ]] || { echo "narrated-take: --keep $keep is not empty; give a new or empty directory" >&2; exit 2; }
 fi
 
 out="$(mktemp -d "${TMPDIR:-/tmp}/narrated-take.XXXXXX")"
 take="$out/ledgerworld-narrated-take.mp4"
-# the take's files that exist, copied where they outlive the scratch directory
-keep_take() {
-  [[ -n "$keep" ]] || return 0
-  local file
-  for file in "$take" "${take%.mp4}.srt" "$out/beats.json"; do
-    [[ -f "$file" ]] && cp "$file" "$keep/"
-  done
-  echo "kept: $keep" >&2
+# a take that stopped before its MP4 keeps its beats.json, the record of how far it got
+fail() {
+  [[ -n "$keep" && -f "$out/beats.json" ]] && cp "$out/beats.json" "$keep/" && echo "kept: $keep/beats.json" >&2
+  echo "narrated-take: $1; output kept in $out" >&2
+  exit 1
 }
-fail() { keep_take; echo "narrated-take: $1; output kept in $out" >&2; exit 1; }
 # every child but the take's own spec runs without the token
 voiceover() { (cd "$root" && env -u LEDGERWORLD_DEMO_TOKEN uv run "$@"); }
 
@@ -112,12 +113,10 @@ video="$(find "$out/artifacts" -name '*.webm' 2>/dev/null | head -n 1)"
 
 voiceover "${ffmpeg[@]}" python scripts/voiceover.py mux --video "$video" --voice "$out/voice/voice.json" \
   --beats "$out/beats.json" --out "$take" || fail "the mux failed"
-keep_take
-shown="$take"
-[[ -n "$keep" ]] && shown="$keep/$(basename "$take")"
-echo "take: $shown"
+echo "take: $take"
 echo "size: $(stat -c %s "$take") bytes"
 echo "sha256: $(sha256sum "$take" | cut -d' ' -f1)"
-echo "subtitles: ${shown%.mp4}.srt (each line where its voice plays in the MP4)"
+echo "subtitles: ${take%.mp4}.srt (each line where its voice plays in the MP4)"
 voiceover "${ffmpeg[@]}" python scripts/voiceover.py gate --voice "$out/voice/voice.json" --beats "$out/beats.json" \
-  --video "$take" || { echo "narrated-take: the take is not the one to upload; output kept in $out" >&2; exit 1; }
+  --video "$take" ${keep:+--keep "$keep"} \
+  || { echo "narrated-take: the take is not the one to upload; output kept in $out" >&2; exit 1; }

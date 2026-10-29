@@ -50,6 +50,9 @@ if (unknown.length) throw new Error(`the plan has no beat ${unknown.join(', ')}:
 const SCENARIO = {"family": "delayed_receipt", "seed": 7, "params": {}}
 const ROUNDS = 5
 const QUESTION = 'What did you observe in this round, and why did you act as you did?'
+// an operator write goes out only with this much of its beat left, so its answer is seen in time:
+// a write cut short by the beat's end could land on the server while the take calls it refused
+const WRITE_ROOM_S = 10
 
 const mmss = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
 
@@ -61,6 +64,11 @@ const now = (): number => clock.now()
 /** A read or an operator write to the API; a write is logged without its headers. */
 async function call (method: 'GET' | 'POST', path: string, data?: object, timeout = 30_000): Promise<Answer> {
   let answer: Answer
+  if (method === 'POST' && clock.left() < WRITE_ROOM_S) {
+    const detail = `${Math.max(0, clock.left()).toFixed(1)} s of the beat left`
+    actions.push({ method, path, status: 'not sent', at: now(), detail })
+    return { status: 'not sent', body: { error: { code: 'not_sent', detail } } }
+  }
   try {
     const r = await api.fetch(`/api/v1${path}`, {
       method, data, timeout: clock.budget(timeout), failOnStatusCode: false,
@@ -253,7 +261,7 @@ test('narrated take: opening card, seven timed beats, off-screen operator action
     head.textContent = title
     card.append(head, ...lines.map((text) => Object.assign(document.createElement('p'), { textContent: text })))
   }, CARD)
-  // the prepared run is read while the card shows, so the reads never lengthen the take
+  // the prepared run is read while the card shows; only reads that outlast the card lengthen it
   const reads = (async () => {
     const overview = await call('GET', '/overview')
     const runId: string | null = overview.body?.demo?.run_id ?? null

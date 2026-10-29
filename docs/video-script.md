@@ -33,7 +33,10 @@ If no human take exists, `bash scripts/narrated_take.sh "$LEDGERWORLD_URL"` reco
 take: a 3-second card naming the voice as synthetic, the same beats voiced with each Voice line,
 and, with `LEDGERWORLD_DEMO_TOKEN` set, the fresh fork, an approval request and the interview sent
 off-screen, their answers on the caption. It stops unless the check above prints `GO`, never
-executes, and leaves one MP4 and its SRT in a temporary directory; uploading it is a separate step.
+executes, and leaves one MP4 and its SRT in a temporary directory (`--keep DIR` copies them and
+`beats.json` somewhere lasting); uploading it is a separate step. Every beat ends at its planned
+time even when a screen stalls, and the take fails if the MP4 runs past 4:40 or a beat ends more
+than 2 s late.
 
 ## 00:00-00:15 State
 

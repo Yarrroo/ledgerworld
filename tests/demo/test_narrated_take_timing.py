@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -140,6 +141,43 @@ def test_a_36_s_screen_load_is_cut_at_its_beats_end() -> None:
     assert gate(list(records.values())) == []
 
 
+HOLD_DRIVER = r"""
+const { Clock, hold } = require(process.argv[1])
+let t = 0
+const timers = []
+const sleep = (ms) => new Promise((resolve) => timers.push({ at: t + Math.max(0, ms), resolve }))
+const clock = new Clock(() => t, sleep)
+async function main () {
+  clock.start()
+  clock.deadline = 95  // the beat ends far later than the hold
+  let done = false
+  // each scroll answers in 0.7 s; the one after 11 s stalls for 36 s
+  const step = async () => { await sleep(clock.now() > 11 ? 36_000 : 700) }
+  hold(clock, 12, step).then(() => { done = true })
+  while (!done) {
+    await new Promise((resolve) => setImmediate(resolve))
+    if (done) break
+    timers.sort((a, b) => a.at - b.at)
+    const next = timers.shift()
+    t = Math.max(t, next.at)
+    next.resolve()
+  }
+  process.stdout.write(JSON.stringify(clock.now()))
+}
+main()
+"""
+
+
+@needs_node
+def test_a_hold_short_of_its_beats_end_stops_at_its_own_end() -> None:
+    # Fork holds 12 s on the prepared comparison before its operator writes: a stall there is cut
+    # at the hold's end, not the beat's
+    done = subprocess.run([NODE, "-e", HOLD_DRIVER, str(ROOT / "e2e" / "clock.js")],
+                          capture_output=True, text=True, timeout=60, check=False)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout) == pytest.approx(12.0, abs=0.01)
+
+
 def test_the_gate_holds_the_mp4_to_4_40() -> None:
     records = [{"beat": line["beat"], "left": line["end"]} for line in voiceover.lines()]
     assert gate(records, 279.0) == [] and gate(records, 280.0) == []
@@ -169,12 +207,44 @@ def test_gate_cli_checks_the_plan_on_a_dry_run(tmp_path: Path) -> None:
         voiceover.main(["gate", "--voice", str(tmp_path / "voice.json")])  # neither --video nor --dry-run
 
 
+def _take_files(tmp: Path) -> tuple[Path, Path]:
+    take = tmp / "scratch" / "ledgerworld-narrated-take.mp4"
+    take.parent.mkdir()
+    take.write_bytes(b"mp4")
+    take.with_suffix(".srt").write_text("1\n", encoding="utf-8")
+    beats = take.parent / "beats.json"
+    beats.write_text(json.dumps({"offset": 3.0, "beats": [
+        {"beat": line["beat"], "began": line["start"], "left": line["end"]} for line in voiceover.lines()]}),
+        encoding="utf-8")
+    return take, beats
+
+
+@pytest.mark.parametrize(("seconds", "names"), [
+    (279.0, ["beats.json", "ledgerworld-narrated-take.mp4", "ledgerworld-narrated-take.srt"]),
+    # a take past 4:40 is kept, never under the name an upload would use
+    (289.04, ["beats.json", "ledgerworld-narrated-take.not-held.mp4", "ledgerworld-narrated-take.not-held.srt"]),
+])
+def test_gate_keeps_the_take_under_a_name_that_says_whether_it_held(tmp_path: Path, monkeypatch,
+                                                                   seconds: float, names: list[str]) -> None:
+    assert voiceover.main(["voice", "--out", str(tmp_path / "voice"), "--dry-run"]) == 0
+    take, beats = _take_files(tmp_path)
+    kept = tmp_path / "kept"
+    kept.mkdir()
+    monkeypatch.setattr(voiceover, "media_seconds", lambda path: seconds)
+    status = voiceover.main(["gate", "--voice", str(tmp_path / "voice" / "voice.json"), "--beats", str(beats),
+                             "--video", str(take), "--keep", str(kept)])
+    assert status == (0 if seconds <= voiceover.MAX_TAKE_S else 1)
+    assert sorted(p.name for p in kept.iterdir()) == names
+    with pytest.raises(SystemExit):  # --keep needs the take itself
+        voiceover.main(["gate", "--dry-run", "--voice", str(tmp_path / "voice" / "voice.json"), "--keep", str(kept)])
+
+
 def test_the_spec_runs_its_beats_on_the_deadline_clock() -> None:
     spec = (ROOT / "e2e" / "narrated-take.spec.ts").read_text(encoding="utf-8")
-    assert "runBeats(clock, BEATS" in spec and "holdUntil(clock" in spec
-    # nothing in a beat waits on the browser's own clock or a fixed 30 s past its end
+    assert re.search(r"from '\./clock'", spec) and "runBeats(clock, BEATS" in spec
+    # nothing in a beat waits on the browser's own clock, a fixed grace or a fixed timeout
     assert "waitForTimeout" not in spec and "GRACE_S" not in spec
-    assert "timeout: 30_000" not in spec
+    assert not re.search(r"timeout:\s*[\d_]+", spec)
 
 
 def test_keep_needs_a_directory() -> None:
@@ -182,3 +252,18 @@ def test_keep_needs_a_directory() -> None:
         done = subprocess.run(["bash", str(ROOT / "scripts" / "narrated_take.sh"), *args],
                               capture_output=True, text=True, timeout=30, check=False)
         assert done.returncode == 2 and "--keep DIR" in done.stderr
+
+
+def _run(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", str(ROOT / "scripts" / "narrated_take.sh"), *args],
+                          capture_output=True, text=True, timeout=30, check=False)
+
+
+def test_keep_refuses_a_dry_run_and_a_directory_holding_another_take(tmp_path: Path) -> None:
+    done = _run("--dry-run", "--keep", str(tmp_path / "new"))
+    assert done.returncode == 2 and "dry run makes no take" in done.stderr
+    assert not (tmp_path / "new").exists()
+    (tmp_path / "used").mkdir()
+    (tmp_path / "used" / "ledgerworld-narrated-take.mp4").write_bytes(b"an earlier take")
+    done = _run("https://demo.example.test", "--keep", str(tmp_path / "used"))
+    assert done.returncode == 2 and "is not empty" in done.stderr

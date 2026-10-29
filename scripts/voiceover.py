@@ -9,8 +9,9 @@
         (--dry-run: print the command only; without --beats: the planned starts)
     uv run python scripts/voiceover.py summary --voice VOICE --beats BEATS
     uv run --with imageio-ffmpeg==0.7.0 python scripts/voiceover.py gate \
-        --voice VOICE --beats BEATS --video MP4      fail a take past 4:40 or a beat 2 s late
-        (--dry-run: the plan itself, without a take)
+        --voice VOICE --beats BEATS --video MP4 [--keep DIR]   fail a take past 4:40 or a
+        beat 2 s late; --keep copies the MP4, SRT and beats.json into DIR, under a name that says
+        `not-held` when the gate failed (--dry-run: the plan itself, without a take)
 
 The Voice lines, beats and windows are scripts/walkthrough_plan.py's (the first paragraph of each
 **Voice:**); this file reads them, it does not restate them. A clip longer than its beat's window
@@ -25,6 +26,7 @@ import asyncio
 import json
 import math
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -266,6 +268,19 @@ def gate(voice_doc: dict, beats_doc: dict, seconds: float) -> list[str]:
     return problems
 
 
+def keep(take: Path, beats: Path, into: Path, held: bool) -> list[Path]:
+    """Copy the MP4, its SRT and beats.json into `into`. A take that failed the gate keeps a name
+    that says so, never the name an upload would use."""
+    stem = take.stem if held else f"{take.stem}.not-held"
+    kept = []
+    for source, name in ((take, f"{stem}.mp4"), (take.with_suffix(".srt"), f"{stem}.srt"),
+                         (beats, beats.name)):
+        if source.is_file():
+            shutil.copy2(source, into / name)
+            kept.append(into / name)
+    return kept
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     verbs = parser.add_subparsers(dest="verb", required=True)
@@ -287,9 +302,12 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--beats", type=Path, help="the take's beats.json; omitted, the planned starts")
     g.add_argument("--video", type=Path, help="the MP4 whose length is checked")
     g.add_argument("--dry-run", action="store_true", help="check the length the plan would give")
+    g.add_argument("--keep", type=Path, help="copy the MP4, SRT and beats.json into this directory")
     args = parser.parse_args(argv)
     if args.verb == "gate" and not (args.video or args.dry_run):
         parser.error("gate needs --video MP4 or --dry-run")
+    if args.verb == "gate" and args.keep and not (args.video and args.beats):
+        parser.error("gate --keep needs the take: --video MP4 and --beats BEATS")
     try:
         if args.verb == "voice":
             return voice(args.out, args.dry_run)
@@ -307,6 +325,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"voiceover: {problem}", file=sys.stderr)
             print(f"gate: {mmss(seconds)} long, {'held' if not problems else 'NOT held'} "
                   f"(limit {mmss(MAX_TAKE_S)}, a beat at most {MAX_LATE_S:.0f} s late)", file=sys.stderr)
+            if args.keep:
+                for path in keep(args.video, args.beats, args.keep, not problems):
+                    print(f"kept: {path}", file=sys.stderr)
             return 1 if problems else 0
         print(summary(json.loads(args.voice.read_text(encoding="utf-8")),
                       json.loads(args.beats.read_text(encoding="utf-8"))))
