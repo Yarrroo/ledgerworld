@@ -55,7 +55,7 @@
               </span>
               <div>
                 <div class="lw-ov-next__kind">{{ capital(kindText(next.kind)) }}</div>
-                <Tip :text="`Paid from ${next.account ? accountName(next.account, { currency: next.amount.currency }) : 'an account the API does not name'}`">
+                <Tip :text="`Paid from ${next.account ? `${accountName(next.account, { currency: next.amount.currency })} (${next.account})` : 'an account the API does not name'} · obligation ${next.obligation_id}`">
                   <div class="lw-figure" data-test="next-amount">{{ money(next.amount) }}</div>
                 </Tip>
                 <dl class="lw-ov-next__facts">

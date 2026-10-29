@@ -198,14 +198,52 @@ const notes = computed(() => {
   })
 })
 
-/** The lowest point's box: above the point, inside the plot. */
+const meets = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+/** A box around a stretch of the step line or a point marker, `pad` px out each way. */
+const around = (x1, y1, x2, y2, pad) =>
+  ({ left: Math.min(x1, x2) - pad, right: Math.max(x1, x2) + pad, top: Math.min(y1, y2) - pad, bottom: Math.max(y1, y2) + pad })
+
+/** What the lowest point's box must not touch: the step line (each flat and each drop), the
+ * other point markers, the floor line and its label. */
+const marks = computed(() => {
+  const pts = valued.value
+  const out = [
+    ...pts.slice(1).flatMap((p, n) => [
+      around(pts[n].px, pts[n].py, p.px, pts[n].py, 3),
+      around(p.px, pts[n].py, p.px, p.py, 3)
+    ]),
+    ...drawn.value.filter((p) => !p.low).map((p) => around(p.px, p.py, p.px, p.py, 7))
+  ]
+  const fy = floorY.value
+  if (fy !== null) {
+    const right = width.value - M.value.right
+    out.push(around(M.value.left, fy, right, fy, 3))
+    out.push({ left: right - 130, right, top: fy - 22, bottom: fy - 2 }) // "Reserve floor $30,000"
+  }
+  return out
+})
+
+/**
+ * The lowest point's box: beside the point, up-left first (clear of the drop into it, which runs
+ * straight up from the point), then up-right, then below either side, then further up; the first
+ * that stays in the plot and touches nothing in `marks`; up-left when none does.
+ */
 const lowBox = computed(() => {
   const p = low.value
   if (!p) return { x: 0, y: 0, w: 0 }
   const w = Math.max(110, (short(p.value.minor).length + 6) * 7.4)
-  const xx = Math.min(Math.max(p.px - w / 2, M.value.left + 4), width.value - M.value.right - w)
-  const top = p.py - 58
-  return { x: xx, y: top < 4 ? p.py + 16 : top, w }
+  const H = 40
+  const sides = [p.px - 12 - w, p.px + 12]
+  const tops = [p.py - 52, p.py + 12, p.py - 96, p.py - 140]
+  const plot = { left: M.value.left + 2, right: width.value - M.value.right, top: 0, bottom: height.value - M.value.bottom }
+  const candidates = tops.flatMap((top) => sides.map((x) => ({ x, y: top })))
+  const fits = (c) => {
+    const box = { left: c.x, right: c.x + w, top: c.y, bottom: c.y + H }
+    return box.left >= plot.left && box.right <= plot.right && box.top >= plot.top && box.bottom <= plot.bottom &&
+      marks.value.every((m) => !meets(box, m))
+  }
+  const pick = candidates.find(fits) ?? candidates.find((c) => c.x >= plot.left && c.x + w <= plot.right) ?? candidates[0]
+  return { x: pick.x, y: pick.y, w }
 })
 
 const step = (pts) => pts.map((p, n) => (n ? `H${p.px}V${p.py}` : `M${p.px},${p.py}`)).join('')
