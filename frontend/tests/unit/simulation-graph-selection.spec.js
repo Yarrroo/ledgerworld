@@ -3,7 +3,7 @@
 // unloaded round or to another run closes the details; a poll that changes nothing keeps them.
 // No request leaves the test: fetch answers GET /runs/<id> from a C6 RunResponse built from the
 // UI design fixture scrubber.json.
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { h } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
@@ -136,11 +136,13 @@ describe('graph selection follows the round cursor', () => {
 // does: nothing inside a closed disclosure, a real size once it is open.
 describe('the evidence graph draws when its disclosure opens', () => {
   const SIZE = { clientWidth: 640, clientHeight: 400 }
-  for (const [prop, size] of Object.entries(SIZE)) {
-    Object.defineProperty(HTMLElement.prototype, prop, {
-      configurable: true, get () { return this.closest('details:not([open])') ? 0 : size }
-    })
-  }
+  beforeAll(() => {
+    for (const [prop, size] of Object.entries(SIZE)) {
+      Object.defineProperty(HTMLElement.prototype, prop, {
+        configurable: true, get () { return this.closest('details:not([open])') ? 0 : size }
+      })
+    }
+  })
   afterAll(() => { for (const prop of Object.keys(SIZE)) delete HTMLElement.prototype[prop] })
 
   const svg = (w) => w.get('[data-test="graph"] .graph-svg').element
