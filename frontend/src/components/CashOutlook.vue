@@ -1,86 +1,74 @@
 <template>
   <div class="lw-outlook">
     <p v-if="!points.length" class="lw-note" data-test="outlook-empty">
-      Projected cash is Unknown: a balance is not observed, so no path is drawn.
+      Projected cash is unknown: a balance is not observed, so no path is drawn.
     </p>
     <template v-else>
       <div ref="frame" class="lw-outlook__frame">
-        <svg :width="width" :height="height" role="group" :aria-label="`Projected cash P in ${currency}, ${points.length} points`"
+        <svg :width="width" :height="height" role="group" :aria-label="`Projected cash in ${currency}, ${points.length} points`"
              data-test="outlook-chart">
           <g class="lw-outlook__axis" aria-hidden="true">
             <g v-for="tick in yTicks" :key="`y${tick}`">
               <line :x1="M.left" :x2="width - M.right" :y1="y(tick)" :y2="y(tick)" class="lw-outlook__grid" />
               <text :x="M.left - 8" :y="y(tick) + 4" text-anchor="end">{{ short(tick) }}</text>
             </g>
+            <line :x1="M.left" :x2="M.left" :y1="M.top" :y2="height - M.bottom" class="lw-outlook__spine" />
             <text v-for="h in xTicks" :key="`x${h}`" :x="x(h)" :y="height - M.bottom + 20" text-anchor="middle">{{ h }}</text>
-            <text :x="width - M.right" :y="height - 4" text-anchor="end">hours from as of</text>
+            <text :x="(M.left + width - M.right) / 2" :y="height - 4" text-anchor="middle">Hours</text>
           </g>
           <path :d="area" class="lw-outlook__area" aria-hidden="true" />
           <line v-if="floorY !== null" :x1="M.left" :x2="width - M.right" :y1="floorY" :y2="floorY"
                 class="lw-outlook__floor" aria-hidden="true" data-test="outlook-floor" />
           <text v-if="floorY !== null" :x="width - M.right" :y="floorY - 6" text-anchor="end"
-                class="lw-outlook__floor-label" aria-hidden="true" data-test="outlook-floor-label">{{ floorText }}</text>
+                class="lw-outlook__floor-label" aria-hidden="true" data-test="outlook-floor-label">
+            <tspan font-style="italic">Reserve floor</tspan> <tspan>{{ short(floor.minor) }}</tspan>
+          </text>
           <path :d="line" class="lw-outlook__line" aria-hidden="true" data-test="outlook-line" />
-          <g v-for="p in drawn" :key="p.t" class="lw-outlook__point"
-             :class="{ 'is-low': p.low, [`is-${lowTone}`]: p.low, 'is-active': active === p.t }"
-             tabindex="0" role="img" :aria-label="p.text" data-test="outlook-point" :data-t="p.t"
-             @pointerenter="hover($event, p.t)" @pointerleave="hover($event, null)"
-             @focus="active = p.t" @blur="active = null" @click="active = p.t">
-            <circle :cx="p.px" :cy="p.py" r="22" class="lw-outlook__hit" />
-            <circle :cx="p.px" :cy="p.py" :r="p.low ? 7 : 5" class="lw-outlook__dot" />
+          <circle v-for="p in valued" :key="`d${p.t}`" :cx="p.px" :cy="p.py" :r="p.low ? 6 : 4.5"
+                  :class="['lw-outlook__dot', { [`is-${lowTone}`]: p.low }]" aria-hidden="true" />
+          <g v-for="a in notes" :key="`n${a.t}`" class="lw-outlook__note" aria-hidden="true" data-test="outlook-note">
+            <line :x1="a.px" :y1="a.py" :x2="a.lx" :y2="a.ly + 4" class="lw-outlook__leader" />
+            <text :x="a.lx" :y="a.ly - 30" class="lw-outlook__note-h">{{ a.h }}</text>
+            <text :x="a.lx" :y="a.ly - 15">{{ a.what }}</text>
+            <text :x="a.lx" :y="a.ly" class="lw-outlook__note-v">{{ a.money }}</text>
           </g>
-          <text v-if="low" :x="lowLabel.x" :y="lowLabel.y" :text-anchor="lowLabel.anchor"
-                class="lw-outlook__low-label" aria-hidden="true" data-test="outlook-low-label">{{ lowLabel.text }}</text>
+          <g v-if="low" :class="['lw-outlook__low', `is-${lowTone}`]" aria-hidden="true" data-test="outlook-low-label">
+            <rect :x="lowBox.x" :y="lowBox.y" :width="lowBox.w" height="40" rx="4" />
+            <text :x="lowBox.x + 10" :y="lowBox.y + 16">Lowest</text>
+            <text :x="lowBox.x + 10" :y="lowBox.y + 32" class="lw-outlook__note-v">{{ short(low.value.minor) }} · h{{ low.hours }}</text>
+          </g>
         </svg>
-        <div v-if="tip" class="lw-outlook__tip" aria-hidden="true" data-test="outlook-tip"
-             :style="tipStyle">
-          <strong>{{ tip.money }}</strong>
-          <span>{{ tip.h }}, simulated time · {{ tip.utc }}</span>
-          <span>{{ tip.event }}</span>
-        </div>
+        <!-- one control per point, over the drawing: the shared tooltip on hover, focus and tap -->
+        <Tip v-for="p in drawn" :key="p.t" class="lw-outlook__pt" :style="{ left: `${p.px}px`, top: `${p.py}px` }" toggle>
+          <button type="button" :aria-label="p.text" data-test="outlook-point" :data-t="p.t" />
+          <template #tip>
+            <span data-test="outlook-tip"><b>{{ p.money }}</b> · h{{ p.hours }} ({{ p.h }})<br>{{ p.event }}<br>
+              {{ p.utc }} · {{ p.against }}</span>
+          </template>
+        </Tip>
       </div>
       <ul class="lw-outlook__legend" aria-hidden="true">
-        <li><span class="lw-outlook__key lw-outlook__key--line" /> Projected cash P (observed)</li>
-        <li v-if="floorY !== null"><span class="lw-outlook__key lw-outlook__key--floor" /> Reserve floor ({{ metricText(floor) }})</li>
-        <li v-if="low"><span :class="['lw-outlook__key', 'lw-outlook__key--low', `is-${lowTone}`]" /> Lowest point, {{ STATES[lowState].word.toLowerCase() }}</li>
+        <li><span class="lw-outlook__key lw-outlook__key--point" /> Projected cash (observed)</li>
+        <li v-if="floorY !== null"><span class="lw-outlook__key lw-outlook__key--floor" /> Reserve floor ({{ short(floor.minor) }})</li>
+        <li v-if="low"><span :class="['lw-outlook__key', 'lw-outlook__key--low', `is-${lowTone}`]" /> Lowest point</li>
       </ul>
-      <button type="button" class="lw-button lw-button--quiet" :aria-expanded="table ? 'true' : 'false'"
-              aria-controls="outlook-data" data-test="outlook-view-data" @click="table = !table">
-        {{ table ? 'Hide data' : 'View data' }}
-      </button>
-      <div v-if="table" id="outlook-data" class="lw-table-wrap" tabindex="0" role="region"
-           aria-label="Projected cash, as data" data-test="outlook-table">
-        <table class="lw-table">
-          <caption class="lw-visually-hidden">Projected cash P at each point the API serves, against the reserve floor</caption>
-          <thead>
-            <tr><th scope="col">When</th><th scope="col">UTC</th><th scope="col">P</th>
-              <th scope="col">What moves it</th><th scope="col">Against the floor</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="p in drawn" :key="p.t" :class="{ 'lw-row--floor': p.low }">
-              <td>{{ p.h }}</td>
-              <td>{{ p.utc }}</td>
-              <td class="lw-num">{{ p.money }}</td>
-              <td>{{ p.event }}</td>
-              <td>{{ p.against }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
     </template>
   </div>
 </template>
 
 <script setup>
 /**
- * O3, the cash outlook: the API's projected-cash points drawn as the step path P is (it moves
- * only at a flow or a deadline), the reserve floor, and the lowest point marked in its floor
- * state (kept is green). Every point takes focus and hover and tells its simulated offset, its
- * UTC time, P and what moves it there; View data shows the same points as a table. Nothing here
- * computes money: positions are geometry, figures are the API's.
+ * The 72-hour cash outlook as mockup 01 draws it (prp/2026-10-29-ux-pass/MATCH.md, 01 Overview):
+ * the API's projected-cash points as the step path P is (it moves only at a flow or a deadline),
+ * a $ axis, the reserve floor, the start and every flow annotated beside its point (hour, what
+ * moves, the cash after), the lowest point boxed in its floor state (kept is green), and a
+ * legend. Each point is a control with the shared tooltip: its simulated hour, UTC time, P, what
+ * moves it and where it stands against the floor. Narrow, the annotations give way to the
+ * tooltips. Nothing here computes money: positions are geometry, figures are the API's.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { STATES, againstFloor, formatAmount, formatMoney, formatTime, hoursFrom, kindText, metricText } from '../api/v1.js'
+import Tip from './Tip.vue'
+import { STATES, againstFloor, formatMoney, formatTime, hoursFrom, kindText, metricText } from '../api/v1.js'
 
 const props = defineProps({
   points: { type: Array, required: true },
@@ -92,10 +80,9 @@ const props = defineProps({
 
 const frame = ref(null)
 const width = ref(640)
-const active = ref(null) // the time of the point whose tip shows
-const table = ref(false)
-const height = computed(() => (width.value < 520 ? 240 : 300))
-const M = { left: 64, right: 20, top: 24, bottom: 44 }
+const wide = computed(() => width.value >= 520)
+const height = computed(() => (wide.value ? 380 : 260))
+const M = computed(() => ({ left: 72, right: 16, top: wide.value ? 64 : 24, bottom: 44 }))
 let observer = null
 
 function measure () {
@@ -121,7 +108,7 @@ const floorKnown = computed(() => (props.floor?.minor ?? null) !== null)
 
 /** A round step for the y axis: 1, 2 or 5 × 10^k of the currency's minor units, at least 1. */
 function niceStep (span) {
-  const raw = Math.max(span / 4, 1)
+  const raw = Math.max(span / 5, 1)
   const mag = 10 ** Math.floor(Math.log10(raw))
   return [1, 2, 5, 10].map((k) => k * mag).find((s) => s >= raw)
 }
@@ -130,19 +117,17 @@ const yRange = computed(() => {
   const values = [...known.value.map((p) => p.value.minor), floorKnown.value ? props.floor.minor : 0, 0]
   const hi = Math.max(...values)
   const lo = Math.min(...values)
-  const step = niceStep((hi - lo) * 1.15)
+  const step = niceStep((hi - lo) * 1.2)
   return {
     step,
-    top: Math.max(step, Math.ceil((hi * 1.15) / step) * step),
-    bottom: lo < 0 ? Math.floor((lo * 1.15) / step) * step : 0
+    top: Math.max(step, Math.ceil((hi * 1.2) / step) * step),
+    bottom: lo < 0 ? Math.floor((lo * 1.2) / step) * step : 0
   }
 })
-const yStep = computed(() => yRange.value.step)
-const yTop = computed(() => yRange.value.top)
-const yBottom = computed(() => yRange.value.bottom)
 const yTicks = computed(() => {
+  const { step, top, bottom } = yRange.value
   const ticks = []
-  for (let v = yBottom.value; v <= yTop.value; v += yStep.value) ticks.push(v)
+  for (let v = bottom; v <= top; v += step) ticks.push(v)
   return ticks
 })
 const xEnd = computed(() => Math.max(1, ...props.points.map((p) => hoursOf(p.t))))
@@ -152,31 +137,32 @@ const xTicks = computed(() => {
   for (let h = 0; h <= xEnd.value + 0.01; h += step) ticks.push(h)
   return ticks
 })
-const x = (h) => M.left + (h / xEnd.value) * (width.value - M.left - M.right)
-const y = (v) => height.value - M.bottom -
-  ((v - yBottom.value) / (yTop.value - yBottom.value)) * (height.value - M.top - M.bottom)
+const x = (h) => M.value.left + (h / xEnd.value) * (width.value - M.value.left - M.value.right)
+const y = (v) => height.value - M.value.bottom -
+  ((v - yRange.value.bottom) / (yRange.value.top - yRange.value.bottom)) * (height.value - M.value.top - M.value.bottom)
 const floorY = computed(() => (floorKnown.value ? y(props.floor.minor) : null))
 
-/** "70,000" on the axis: whole units, the currency named in the chart's label. */
-const short = (minor) => formatAmount(minor, props.currency).replace(/\.0+$/, '')
+/** "$70,000" on the axis and in the notes: the API's amount, formatted. */
+const short = (minor) => formatMoney(minor, props.currency)
 
 /** The point the API names as the lowest; none when it names none. */
 const lowPoint = computed(() => props.points.find((p) => p.t === props.lowAt) ?? null)
 const lowState = computed(() => againstFloor(lowPoint.value?.value, props.floor).state)
 const lowTone = computed(() => STATES[lowState.value]?.tone ?? 'muted')
 
+const signed = (e) => `${e.direction === 'in' ? '+' : '-'}${formatMoney(e.amount.minor, e.amount.currency)}`
+const capital = (s) => s.charAt(0).toUpperCase() + s.slice(1)
+
 function eventText (p) {
-  if (!p.events.length) return Date.parse(p.t) <= Date.parse(props.asOf) ? 'As of: settled cash' : 'Horizon end: nothing moves'
-  return p.events.map((e) =>
-    `${kindText(e.kind)} ${e.ref} ${e.direction === 'in' ? '+' : '−'}${formatMoney(e.amount.minor, e.amount.currency)}`
-  ).join('; ')
+  if (!p.events.length) return Date.parse(p.t) <= Date.parse(props.asOf) ? 'Starting cash, settled' : 'Horizon end: nothing moves'
+  return p.events.map((e) => `${capital(kindText(e.kind))} ${e.ref} ${signed(e)}`).join('; ')
 }
 
 function againstText (value) {
   const { state, gap } = againstFloor(value, props.floor)
-  if (state === 'kept') return `✓ kept, ${formatMoney(gap, props.currency)} above`
-  if (state === 'breached') return `✕ below, short ${formatMoney(-gap, props.currency)}`
-  return state === 'unassessed' ? 'No floor assessed' : 'Unknown'
+  if (state === 'kept') return `${formatMoney(gap, props.currency)} above the floor`
+  if (state === 'breached') return `${formatMoney(-gap, props.currency)} below the floor`
+  return state === 'unassessed' ? 'No floor assessed' : 'Unknown against the floor'
 }
 
 const drawn = computed(() => props.points.map((p) => {
@@ -185,90 +171,50 @@ const drawn = computed(() => props.points.map((p) => {
   const shown = metricText(p.value)
   const event = eventText(p)
   const at = hoursFrom(props.asOf, p.t)
+  const low = p === lowPoint.value
   return {
-    ...p, h: at, utc, money: shown, event, low: p === lowPoint.value,
+    ...p, hours: Math.round(h), h: at, utc, money: shown, event, low,
     px: x(h), py: p.value.minor === null ? y(0) : y(p.value.minor),
     against: againstText(p.value),
-    text: `${at}, ${utc}: P ${shown}. ${event}.${p === lowPoint.value ? ' Lowest point.' : ''}`
+    text: `h${Math.round(h)}, ${utc}: projected cash ${shown}. ${event}.${low ? ' Lowest point.' : ''}`
   }
 }))
+const valued = computed(() => drawn.value.filter((p) => p.value.minor !== null))
 const low = computed(() => drawn.value.find((p) => p.low) ?? null)
-const floorText = computed(() => (floorKnown.value ? `Reserve floor ${short(props.floor.minor)}` : ''))
 
-/** A label's box around its baseline y: 12 px text, a generous glyph width, 3 px to spare. */
-const GLYPH = 7.5
-function box (text, x, baseline, anchor) {
-  const w = text.length * GLYPH
-  const left = anchor === 'end' ? x - w : x
-  return { left: left - 3, right: left + w + 3, top: baseline - 16, bottom: baseline + 7 }
-}
-const meets = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
-/** A box around a stretch of the step line or a point marker, `pad` px out each way. */
-const around = (x1, y1, x2, y2, pad) =>
-  ({ left: Math.min(x1, x2) - pad, right: Math.max(x1, x2) + pad, top: Math.min(y1, y2) - pad, bottom: Math.max(y1, y2) + pad })
-
-/** What the low-point label must not touch besides the floor: the step line P (each H and V
- * stretch) and every other point marker (its own sits 10 px off its text by construction). */
-const marks = computed(() => {
-  const pts = valued.value
-  return [
-    ...pts.slice(1).flatMap((p, n) => [
-      around(pts[n].px, pts[n].py, p.px, pts[n].py, 2),
-      around(p.px, pts[n].py, p.px, p.py, 2)
-    ]),
-    ...drawn.value.filter((p) => !p.low).map((p) => around(p.px, p.py, p.px, p.py, 6))
-  ]
+/**
+ * The notes beside the points, as the mockup: the start ("$70,000 / Starting cash / h0" read as
+ * h0 · Starting cash · $70,000) and each flow that moves cash, except the lowest point, which has
+ * its own box. A note sits up and to the right of its point, clear of the plot's top; wide only.
+ */
+const notes = computed(() => {
+  if (!wide.value) return []
+  const right = width.value - M.value.right
+  return valued.value.filter((p, n) => !p.low && (n === 0 || p.events.length)).map((p) => {
+    const what = p.events.length ? p.events.map((e) => `${capital(kindText(e.kind))} ${signed(e)}`).join(', ') : 'Starting cash'
+    const w = Math.max(what.length, 8) * 6.6
+    const lx = Math.min(p.px + 14, right - w)
+    return { t: p.t, px: p.px, py: p.py, lx, ly: Math.max(M.value.top - 6, p.py - 26), h: `h${p.hours}`, what, money: p.money }
+  })
 })
 
-/** The lowest point's label: to its right (left near the right edge), below the point, then above
- * it, then a line further out each way, each on the other side next; the first that stays inside
- * the chart and touches neither the floor line, the floor label, the step line nor a point
- * marker. When none clears all of that, the first that clears the floor; below when none does. */
-const lowLabel = computed(() => {
+/** The lowest point's box: above the point, inside the plot. */
+const lowBox = computed(() => {
   const p = low.value
-  if (!p) return { x: 0, y: 0, anchor: 'start', text: '' }
-  const text = `Lowest ${short(p.value.minor)} · ${p.h}`
-  const sides = p.px > width.value - 160 ? ['end', 'start'] : ['start', 'end']
-  const fy = floorY.value
-  const floorBox = fy === null ? null : box(floorText.value, width.value - M.right, fy - 6, 'end')
-  const candidates = [24, -14, 40, -30, 56, -46].flatMap((dy) => sides.map((anchor) => {
-    const x = p.px + (anchor === 'end' ? -10 : 10)
-    const y = p.py + dy
-    const b = box(text, x, y, anchor)
-    return {
-      x, y, anchor,
-      floor: fy === null || (!(fy > b.top && fy < b.bottom) && !meets(b, floorBox)),
-      clear: b.left >= 0 && b.right <= width.value && b.top >= 0 && b.bottom <= height.value - M.bottom + 8 &&
-        marks.value.every((m) => !meets(b, m))
-    }
-  }))
-  const pick = candidates.find((c) => c.floor && c.clear) ?? candidates.find((c) => c.floor) ?? candidates[0]
-  return { x: pick.x, y: pick.y, anchor: pick.anchor, text }
+  if (!p) return { x: 0, y: 0, w: 0 }
+  const w = Math.max(110, (short(p.value.minor).length + 6) * 7.4)
+  const xx = Math.min(Math.max(p.px - w / 2, M.value.left + 4), width.value - M.value.right - w)
+  const top = p.py - 58
+  return { x: xx, y: top < 4 ? p.py + 16 : top, w }
 })
 
 const step = (pts) => pts.map((p, n) => (n ? `H${p.px}V${p.py}` : `M${p.px},${p.py}`)).join('')
-const valued = computed(() => drawn.value.filter((p) => p.value.minor !== null))
 const line = computed(() => step(valued.value))
 const area = computed(() => {
   const pts = valued.value
   if (!pts.length) return ''
-  const base = y(yBottom.value)
+  const base = y(yRange.value.bottom)
   return `${step(pts)}H${x(xEnd.value)}V${base}H${pts[0].px}Z`
-})
-
-/** A mouse or a pen shows the tip while over a point; a touch shows it by tapping (focus and
- * click), and its pointer leaving as the finger lifts does not take it away. */
-function hover (event, t) {
-  if (event.pointerType !== 'touch') active.value = t
-}
-
-/** The tip's point, while a point at that time is still drawn. */
-const tip = computed(() => drawn.value.find((p) => p.t === active.value) ?? null)
-const tipStyle = computed(() => {
-  const p = tip.value
-  const left = Math.min(Math.max(p.px, 90), width.value - 90)
-  const above = p.py > 90
-  return { left: `${left}px`, top: `${above ? p.py - 12 : p.py + 16}px`, transform: `translate(-50%, ${above ? '-100%' : '0'})` }
 })
 </script>
 
@@ -291,13 +237,17 @@ const tipStyle = computed(() => {
 }
 
 .lw-outlook__grid {
-  stroke: var(--lw-rule);
+  stroke: transparent;
+}
+
+.lw-outlook__spine {
+  stroke: var(--lw-ink-muted);
   stroke-width: 1;
 }
 
 .lw-outlook__area {
   fill: var(--lw-selected);
-  opacity: 0.7;
+  opacity: 0.8;
 }
 
 .lw-outlook__line {
@@ -312,81 +262,104 @@ const tipStyle = computed(() => {
   stroke-dasharray: 6 5;
 }
 
-.lw-outlook__hit {
-  fill: transparent;
-}
-
 .lw-outlook__dot {
   fill: var(--lw-brand);
-  stroke: var(--lw-surface-raised);
+  stroke: var(--lw-surface);
   stroke-width: 2;
 }
 
-.lw-outlook__point {
-  cursor: pointer;
-  outline: none;
+.lw-outlook__dot.is-ok { fill: var(--lw-ok); }
+.lw-outlook__dot.is-bad { fill: var(--lw-bad); }
+
+.lw-outlook__note text {
+  fill: var(--lw-ink-muted);
+  font-size: 13px;
 }
 
-.lw-outlook__point.is-ok .lw-outlook__dot { fill: var(--lw-ok); }
-.lw-outlook__point.is-bad .lw-outlook__dot { fill: var(--lw-bad); }
-
-.lw-outlook__point:focus-visible .lw-outlook__hit,
-.lw-outlook__point.is-active .lw-outlook__hit {
-  fill: none;
-  stroke: var(--lw-focus);
-  stroke-width: 3;
-}
-
-.lw-outlook__low-label {
-  font-weight: 700;
+.lw-outlook__note .lw-outlook__note-h,
+.lw-outlook__note .lw-outlook__note-v {
   fill: var(--lw-ink);
 }
 
-.lw-outlook__tip {
-  position: absolute;
-  z-index: 2;
-  display: grid;
-  gap: 2px;
-  max-width: 240px;
-  padding: var(--lw-space-2) var(--lw-space-3);
-  background: var(--lw-surface-raised);
-  border: 1px solid var(--lw-rule);
-  border-radius: var(--lw-radius);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+.lw-outlook__note-v {
+  font-weight: 700;
+}
+
+.lw-outlook__leader {
+  stroke: var(--lw-ink-muted);
+  stroke-width: 1;
+}
+
+.lw-outlook__low rect {
+  fill: var(--lw-selected);
+}
+
+.lw-outlook__low text {
+  fill: var(--lw-ink);
   font-size: 13px;
-  line-height: 18px;
-  pointer-events: none;
+}
+
+.lw-outlook__low.is-ok text:first-of-type { fill: var(--lw-ok-text); }
+.lw-outlook__low.is-bad rect { fill: #F7E1DD; }
+.lw-outlook__low.is-bad text { fill: #8A2A20; }
+
+/* each point's control: a 32 px target centred on its dot */
+.lw-outlook__pt {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.lw-outlook__pt button {
+  position: absolute;
+  left: -16px;
+  top: -16px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.lw-outlook__pt button:focus-visible,
+.lw-outlook__pt.is-open button {
+  outline: 3px solid var(--lw-focus);
+  outline-offset: -6px;
 }
 
 .lw-outlook__legend {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--lw-space-2) var(--lw-space-4);
+  justify-content: center;
+  gap: var(--lw-space-2) var(--lw-space-6);
   list-style: none;
   padding: 0;
-  margin: var(--lw-space-3) 0;
+  margin: var(--lw-space-4) 0 0;
   font-size: 13px;
   color: var(--lw-ink-muted);
 }
 
 .lw-outlook__key {
   display: inline-block;
-  width: 18px;
+  margin-right: var(--lw-space-1);
   vertical-align: middle;
 }
 
-.lw-outlook__key--line { border-top: 3px solid var(--lw-brand); }
-.lw-outlook__key--floor { border-top: 2px dashed var(--lw-ink-muted); }
+.lw-outlook__key--point,
 .lw-outlook__key--low {
   width: 10px;
   height: 10px;
   border-radius: 50%;
   background: var(--lw-brand);
 }
+
+.lw-outlook__key--floor {
+  width: 22px;
+  border-top: 2px dashed var(--lw-ink-muted);
+}
+
 .lw-outlook__key--low.is-ok { background: var(--lw-ok); }
 .lw-outlook__key--low.is-bad { background: var(--lw-bad); }
-
-.lw-outlook .lw-table-wrap {
-  margin-top: var(--lw-space-3);
-}
 </style>
