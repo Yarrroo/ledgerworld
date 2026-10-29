@@ -7,7 +7,7 @@ import { mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import { ScreenShell } from '../../src/api/v1.js'
-import { LOGO_BLUE, MARK } from '../../src/components/logo.js'
+import { LOGO_BLUE, LOGO_BLUE_DARK, MARK } from '../../src/components/logo.js'
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
 const favicon = new DOMParser().parseFromString(read('../../public/logo.svg'), 'image/svg+xml')
@@ -50,6 +50,13 @@ describe('the LedgerWorld logo', () => {
     const paths = [...svg.querySelectorAll('path')]
     expect(paths.map((p) => p.getAttribute('d'))).toEqual([MARK.base, ...MARK.facets.map((f) => f.d)])
     expect(paths[0].getAttribute('fill')).toBe(LOGO_BLUE)
+    // a dark tab strip gets the dark theme's logo blue, as the inline mark does
+    expect(paths[0].getAttribute('class')).toBe('base')
+    expect(svg.querySelector('style').textContent.replace(/\s+/g, ''))
+      .toBe(`@media(prefers-color-scheme:dark){.base{fill:${LOGO_BLUE_DARK}}}`)
+    const tokens = read('../../src/styles/tokens.css')
+    expect(tokens).toContain(`--lw-logo: ${LOGO_BLUE};`)
+    expect(tokens).toContain(`--lw-logo: ${LOGO_BLUE_DARK};`)
     expect(paths.slice(1).map((p) => [p.getAttribute('fill'), p.getAttribute('fill-opacity')]))
       .toEqual(MARK.facets.map((f) => [f.fill, f.opacity]))
   })
