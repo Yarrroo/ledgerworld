@@ -204,7 +204,9 @@ import CashPaths from '../components/CashPaths.vue'
 import DetailSheet from '../components/DetailSheet.vue'
 import WorldMap from '../components/WorldMap.vue'
 import { FAMILIES, ROUND_HOURS, familyOf, observedBy, worldFor } from '../api/world.js'
-import { ApiError, LABELS, ScreenShell, formatMoney, request, routeExists, sourceLabel, useReading } from '../api/v1.js'
+import {
+  ApiError, LABELS, ScreenShell, formatMoney, getOverview, request, routeExists, sourceLabel, useReading
+} from '../api/v1.js'
 
 const HORIZON_ROUNDS = 18
 const POLICIES = ['no-action', 'fixed-reserve', 'integrated']
@@ -215,9 +217,17 @@ const route = useRoute()
 const router = useRouter()
 const runId = computed(() => (typeof route.query.run_id === 'string' && route.query.run_id) || null)
 
-const { state, refresh } = useReading(() => runId.value
-  ? request(`/runs/${encodeURIComponent(runId.value)}`)
-  : Promise.reject(new ApiError(0, 'no_run', 'No run selected: open the simulation from Overview')))
+// With no run named (the nav link), the prepared demonstration run, as Decisions and Execution
+// read it; with none prepared, the shell explains the absence.
+const { state, refresh } = useReading(async () => {
+  let run = runId.value
+  if (!run) {
+    run = (await getOverview()).demo?.run_id ?? null
+    if (!run) throw new ApiError(404, 'no_demo_run', 'No demonstration run is prepared')
+    await router.replace({ query: { ...route.query, run_id: run } }) // the watcher reloads it
+  }
+  return request(`/runs/${encodeURIComponent(run)}`)
+})
 
 const body = computed(() => state.body)
 // A background poll is not a user-visible load: the screen keeps its controls while it runs.

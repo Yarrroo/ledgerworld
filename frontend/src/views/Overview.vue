@@ -1,5 +1,5 @@
 <template>
-  <ScreenShell v-slot="{ body, busy }" title="Overview" :reading="state" :refresh="refresh">
+  <ScreenShell v-slot="{ body, busy }" title="Overview" :reading="state" :refresh="refresh" :stale="stale">
     <!-- O1 context -->
     <section class="lw-ov-context" aria-labelledby="ov-context" data-panel="Context" data-test="context-panel">
       <h2 id="ov-context" class="lw-ov-lead">
@@ -174,7 +174,8 @@ import { RouterLink, useRouter } from 'vue-router'
 import CashOutlook from '../components/CashOutlook.vue'
 import {
   LABELS, STATES, ScreenShell, floorState, formatAmount, formatMoney, formatTime, freshness, getOverview,
-  hoursFrom, metricText, modelSource, money, pendingFlows, routeExists, rowLink, stateOf, useReading
+  hoursFrom, metricStatus, metricText, modelSource, money, pendingFlows, routeExists, rowLink, staleOf,
+  useReading
 } from '../api/v1.js'
 
 const router = useRouter()
@@ -187,6 +188,7 @@ const due = computed(() => formatTime(next.value?.due_at))
 const floor = computed(() => floorState(state.body?.coverage.headroom))
 const notCurrent = computed(() =>
   state.body?.completeness.accounts.map((a) => freshness(a).text).join('; '))
+const stale = computed(() => staleOf(state.body?.completeness.accounts))
 const horizon = computed(() => {
   const last = state.body?.outlook?.at(-1)
   return last ? Math.round((Date.parse(last.t) - Date.parse(state.body.as_of)) / 3_600_000) : 72
@@ -204,12 +206,6 @@ const simulationWhy = computed(() => {
   return 'The simulation screen is not part of this build'
 })
 
-function statusLine (metric) {
-  const s = stateOf(metric.status)
-  const at = metric.as_of ? ` as of ${formatTime(metric.as_of).utc}` : ''
-  return `${s.icon} ${s.word}${at}`
-}
-
 // --------------------------------------------------------------------------- O2 strip
 
 const metrics = computed(() => {
@@ -217,12 +213,12 @@ const metrics = computed(() => {
   if (!b) return []
   const n = next.value
   return [
-    { key: 'settled', label: 'Settled cash', figure: metricText(b.cash), fresh: statusLine(b.cash) },
-    { key: 'spendable', label: 'Spendable now (S)', figure: metricText(b.spendable), fresh: statusLine(b.spendable) },
+    { key: 'settled', label: 'Settled cash', figure: metricText(b.cash), fresh: metricStatus(b.cash) },
+    { key: 'spendable', label: 'Spendable now (S)', figure: metricText(b.spendable), fresh: metricStatus(b.spendable) },
     n
       ? { key: 'next-due', label: `Next ${n.kind} due`, figure: money(n.amount), sub: `due ${hoursFrom(b.as_of, n.due_at)}`, subTest: 'next-due-at', fresh: `● ${n.reserved ? 'Reserved' : 'Not reserved'}` }
       : { key: 'next-due', label: 'Next obligation', figure: 'None open', fresh: 'Nothing falls due' },
-    { key: 'coverage', label: 'Reserve headroom', figure: metricText(b.coverage.headroom), fresh: statusLine(b.coverage.headroom) }
+    { key: 'coverage', label: 'Reserve headroom', figure: metricText(b.coverage.headroom), fresh: metricStatus(b.coverage.headroom) }
   ]
 })
 

@@ -1,5 +1,5 @@
 <template>
-  <ScreenShell v-slot="{ body }" title="Treasury" :reading="state" :refresh="refresh">
+  <ScreenShell v-slot="{ body }" title="Treasury" :reading="state" :refresh="refresh" :stale="stale">
     <p class="lw-source">
       Which funds can we use, and when. Spendable now (S) and projected cash (P) are separate
       measures; the reserve floor is checked on P. Every figure is one account's, in its own currency.
@@ -37,6 +37,9 @@
         <article class="lw-tile" data-test="spendable">
           <div class="lw-tile__label">{{ account.id }} · {{ account.currency }}</div>
           <div class="lw-figure">{{ metricText(account.spendable) }}</div>
+          <div :class="['lw-status', `lw-status--${stateOf(account.spendable.status).tone}`]" data-test="spendable-status">
+            {{ metricStatus(account.spendable) }}
+          </div>
           <div class="lw-time">authority {{ account.authority }} · as of {{ formatTime(account.spendable.as_of || account.as_of).utc }}</div>
           <p v-if="account.observability !== 'known'" class="lw-note">
             Balance not observable: settled reads Unknown and adds nothing; authority is reduced.
@@ -218,8 +221,8 @@ import CashChart from '../components/CashChart.vue'
 import DetailSheet from '../components/DetailSheet.vue'
 import {
   STATES, ScreenShell, againstFloor, contextKey, formatAmount, formatMoney, formatTime, getOverview,
-  getTreasury, hoursFrom, metricText, money, pendingFlows, projectionTerms, routeExists, useFocusTarget,
-  useReading
+  getTreasury, hoursFrom, metricStatus, metricText, money, pendingFlows, projectionTerms, routeExists, staleOf,
+  stateOf, useFocusTarget, useReading
 } from '../api/v1.js'
 
 const route = useRoute()
@@ -241,6 +244,9 @@ async function load () {
 }
 
 const { state, refresh } = useReading(load)
+// an account whose spendable figure is its last observed value, for the shell's stale band
+const stale = computed(() => staleOf((state.body?.accounts ?? []).filter((a) => a.spendable.status === 'stale')
+  .map((a) => ({ account_id: a.id, status: 'stale', as_of: a.spendable.as_of ?? a.as_of }))))
 // a deep link (Overview's cash, spendable, next obligation) names an account or an obligation row
 const { focus, moved } = useFocusTarget(state)
 

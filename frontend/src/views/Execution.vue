@@ -9,13 +9,13 @@
 
     <section class="lw-tile" aria-labelledby="authority-heading" data-test="authority" data-panel="Approval">
       <h2 id="authority-heading">Approval</h2>
-      <p class="lw-time">Reading needs no token. Approving and executing take the operator token,
+      <p class="lw-time">Reading needs no access. Approving and executing take operator access,
         entered in the review; it stays in this tab's memory and is forgotten on reload.</p>
       <div class="lw-actions">
         <button ref="opener" type="button" class="lw-button" data-test="review-plan"
                 :disabled="!!reviewWhy" aria-describedby="review-why" @click="openReview">Review plan</button>
         <button v-if="token" type="button" class="lw-button lw-button--quiet"
-                data-test="forget-token" @click="token = ''">Forget token</button>
+                data-test="forget-token" @click="token = ''">Forget access</button>
         <span id="review-why" class="lw-time" data-test="review-why">{{ reviewWhy || authority }}</span>
       </div>
     </section>
@@ -110,7 +110,7 @@
             Execute.
           </p>
           <form class="lw-field" @submit.prevent>
-            <label for="operator-token">Operator token</label>
+            <label for="operator-token">Operator access (kept in this tab's memory only)</label>
             <input id="operator-token" v-model="token" type="password" autocomplete="off"
                    spellcheck="false" data-test="token">
           </form>
@@ -173,7 +173,7 @@ const token = ref('')
 // An operation whose outcome this tab does not know, kept in the same tab memory as the token:
 // run id -> { blocked, followedId, readBy, unseen }. Leaving the screen and coming back restores
 // the block and resumes reading the execution, so the token never outlives its quarantine. Forget
-// token does not lift it: only a reload does. `unseen` ('execution' or 'approval') marks an outcome
+// access does not lift it: only a reload does. `unseen` ('execution' or 'approval') marks an outcome
 // that answered after its screen moved on: it is linked until its own run's screen shows it.
 const unresolved = reactive(new Map())
 
@@ -268,6 +268,7 @@ const { state, refresh } = useReading(async () => {
   const runId = asked || overview.demo.run_id
   const demo = !asked || asked === overview.demo.run_id
   const executionId = route.query.execution_id || (demo ? overview.demo.execution_id : null) || null
+  if (!runId && !executionId) throw new ApiError(404, 'no_demo_run', 'No demonstration run is prepared')
   let decisionsError = ''
   let executionError = null
   const { generation } = guard.issue()
@@ -318,7 +319,7 @@ const reads = new AbortController()
 
 /** Why nothing can be approved from this screen right now, or '' when it can. */
 const authority = computed(() => {
-  if (!token.value) return 'Operator authorisation required'
+  if (!token.value) return 'Operator access required'
   return ''
 })
 

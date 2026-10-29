@@ -161,6 +161,13 @@ export const STATES = {
 
 export const stateOf = (status) => STATES[status] || STATES.unassessed
 
+/** A metric's status line, "● Known as of 2026-01-01 00:00 UTC" or "? Unknown": never colour alone. */
+export function metricStatus (metric) {
+  const s = stateOf(metric?.status)
+  const at = metric?.as_of ? ` as of ${formatTime(metric.as_of).utc}` : ''
+  return `${s.icon} ${s.word}${at}`
+}
+
 /** A not-current account (completeness.accounts, Lending's capacity.unobserved) with its own
  * reason: a stale one was
  * observed and carries its as_of; an unknown one was not and carries none. ``text`` reads
@@ -173,6 +180,9 @@ export function freshness (account) {
     text: `${account.account_id} · ${s.icon} ${s.word}${at ? `, as of ${at}` : ''}`
   }
 }
+
+/** The stale ones of not-current accounts, as `freshness()` reads them: the shell's stale band. */
+export const staleOf = (accounts) => (accounts ?? []).filter((a) => a.status === 'stale').map(freshness)
 
 /** Floor kept or breached, read off an API headroom metric (P minimum − floor). */
 export function floorState (headroom) {
@@ -399,6 +409,9 @@ function panelId (label, taken) {
 
 const PHONE = '(max-width: 767px)'
 
+/** A reading that failed because nothing is prepared to read: explained, never an error. */
+const ABSENT = new Set(['no_demo_run'])
+
 /**
  * One screen, in the handoff's shell (prp/2026-10-29-ux-shell/design.md): the logo and six
  * labelled links with the current one marked (a 208 px sidebar, a 72 px icon rail below 1200 px,
@@ -407,6 +420,13 @@ const PHONE = '(max-width: 767px)'
  * index, the reading's error and context notices, and the screen itself, rendered only once there
  * is a body. The mode label is shown only from a loaded answer: nothing inherits an authoritative
  * badge from an earlier render.
+ *
+ * The handoff's loading, empty and failure states, the same on every screen: before the first
+ * answer, skeleton tiles where the figures go and one polite "Loading"; a reading refused because
+ * no run is prepared (`no_demo_run`) is an inline explanation of what is missing, not an
+ * error and not a chart; a failed first read says Could not load with Retry; a failed refresh
+ * keeps the last body, labelled last loaded and not current, with Retry; `stale` (the screen's
+ * stale accounts, `staleOf()`) draws a warning band naming each one and its as of.
  *
  * The drawer is modal while open: the page behind it is inert, Escape, the scrim or any link
  * closes it, and leaving the phone width closes it. The panel index lists every element the
@@ -418,7 +438,8 @@ export const ScreenShell = defineComponent({
   props: {
     title: { type: String, required: true },
     reading: { type: Object, required: true },
-    refresh: { type: Function, required: true }
+    refresh: { type: Function, required: true },
+    stale: { type: Array, default: () => [] }
   },
   setup (props, { slots }) {
     const route = useRoute()
@@ -617,6 +638,8 @@ export const ScreenShell = defineComponent({
       ])
       const scrim = menu.value && h('div', { class: 'lw-scrim', 'aria-hidden': 'true', onClick: () => closeMenu(true) })
 
+      // nothing prepared to read: explained in place of the screen, never an error
+      const absent = !body && error && ABSENT.has(error.code)
       const queried = typeof route.query.run_id === 'string' ? route.query.run_id : null
       const run = body?.run_id ?? queried
       const crumbs = h('nav', { class: 'lw-crumbs', 'aria-label': 'Breadcrumb', 'data-test': 'breadcrumb' }, [
@@ -637,7 +660,7 @@ export const ScreenShell = defineComponent({
           h('button', {
             type: 'button', class: 'lw-button lw-button--quiet', 'data-test': 'refresh',
             disabled: busy, onClick: () => props.refresh()
-          }, error ? 'Retry' : 'Refresh')
+          }, error && !absent ? 'Retry' : 'Refresh')
         ])
       ])
 
@@ -653,22 +676,48 @@ export const ScreenShell = defineComponent({
         ])))
       ])
 
+      const retry = h('button', {
+        type: 'button', class: 'lw-button lw-button--quiet', 'data-test': 'retry',
+        disabled: busy, onClick: () => props.refresh()
+      }, 'Retry')
+      const stale = body && props.stale.length > 0 && h('p', {
+        class: 'lw-band lw-band--stale', role: 'status', 'data-test': 'stale-band'
+      }, [
+        h('strong', `${STATES.stale.icon} ${STATES.stale.word}: `),
+        `last observed values for ${props.stale.map((f) => `${f.id}${f.at ? `, as of ${f.at}` : ''}`).join('; ')}. ` +
+        'Refresh the evidence before acting on them; they are not current authority.'
+      ])
       const notices = [
-        error && h('div', { class: 'lw-alert', role: 'alert', 'data-test': 'error' }, [
-          h('strong', `${STATES.error.icon} ${body ? STATES.error.word : 'Could not load'}. `),
-          error.message
+        error && !absent && h('div', { class: 'lw-alert', role: 'alert', 'data-test': 'error' }, [
+          h('strong', `${STATES.error.icon} ${body ? `Could not refresh. ${STATES.error.word}` : 'Could not load'}. `),
+          error.message, ' ', retry
         ]),
+        stale,
         contextChanged && body && h('p', { class: 'lw-note', role: 'status', 'data-test': 'context-changed' },
           `The provider mode or snapshot changed; every figure below was reloaded for ` +
           `${LABELS[body.mode] || body.mode}, ${sourceLabel(body)}.`)
       ]
-      const content = body
-        ? slots.default?.({ body, busy })
-        : h('div', { class: 'lw-strip' }, [
-          h('article', { class: 'lw-tile' }, [
-            h('span', { class: 'lw-skeleton', 'aria-label': busy ? 'Loading' : 'Not loaded' })
-          ])
+      const skeleton = () => h('article', { class: 'lw-tile', 'aria-hidden': 'true' }, [
+        h('span', { class: 'lw-skeleton lw-skeleton--label' }),
+        h('span', { class: 'lw-skeleton lw-skeleton--figure' })
+      ])
+      let content
+      if (body) content = slots.default?.({ body, busy })
+      else if (absent) {
+        content = h('section', { class: 'lw-empty', 'aria-labelledby': 'lw-empty-heading', 'data-test': 'empty' }, [
+          h('h2', { id: 'lw-empty-heading' }, 'No prepared run'),
+          h('p', `${error.message}. ${props.title} reads a prepared run; there is none to show, so nothing is drawn here.`),
+          h('p', { class: 'lw-time' },
+            'An operator prepares one with the demo command, then Refresh. The browser never starts a run or shows a receipt on its own.'),
+          home({ class: 'lw-button lw-button--quiet', 'data-test': 'empty-overview' }, 'Open Overview')
         ])
+      } else {
+        content = [
+          busy && h('p', { class: 'lw-loading', role: 'status', 'data-test': 'loading' }, `Loading ${props.title}…`),
+          h('div', { class: 'lw-strip', 'data-test': 'skeleton', 'aria-label': busy ? 'Loading' : 'Not loaded' },
+            [skeleton(), skeleton(), skeleton(), skeleton()])
+        ]
+      }
       const footer = SOURCE_URL && h('p', { class: 'lw-source' }, [
         h('a', { href: SOURCE_URL }, 'Source code (AGPL-3.0)')
       ])
