@@ -611,7 +611,11 @@ export const ScreenShell = defineComponent({
     }
 
     return () => {
-      const { body, status, error, contextChanged } = props.reading
+      const { status, error, contextChanged } = props.reading
+      // nothing prepared to read, now or since the last answer: explained in place of the screen
+      // and of any figures shown before, never an error
+      const absent = error?.code === NO_DEMO_RUN
+      const body = absent ? null : props.reading.body
       const busy = status === 'loading'
       const time = formatTime(body?.as_of)
       const mode = body ? (LABELS[body.mode] || body.mode) : 'Provider mode not loaded'
@@ -640,8 +644,6 @@ export const ScreenShell = defineComponent({
       ])
       const scrim = menu.value && h('div', { class: 'lw-scrim', 'aria-hidden': 'true', onClick: () => closeMenu(true) })
 
-      // nothing prepared to read: explained in place of the screen, never an error
-      const absent = !body && error?.code === NO_DEMO_RUN
       const queried = typeof route.query.run_id === 'string' ? route.query.run_id : null
       const run = body?.run_id ?? queried
       const crumbs = h('nav', { class: 'lw-crumbs', 'aria-label': 'Breadcrumb', 'data-test': 'breadcrumb' }, [

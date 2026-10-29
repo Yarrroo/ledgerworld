@@ -1776,3 +1776,21 @@ describe('correction: a status read never overwrites a newer one', () => {
     expect(calls.filter((c) => c.path === '/executions/apr-1')).toHaveLength(reads404)
   })
 })
+
+// A demo cleared while the screen is open: the refresh explains the absence in place of the old
+// run's figures, never as a failure whose Retry can only fail again.
+describe('no prepared run on refresh', () => {
+  it('Decisions shows the empty state, not the last run under an error', async () => {
+    let demo = { run_id: 'run-1', execution_id: null }
+    serve({ 'GET /overview': () => overview(demo), 'GET /decisions/run-1': decisionsBody(), 'GET /treasury': refuse(404, 'none', 'none') })
+    const w = await open(Decisions, '/decisions')
+    expect(w.find('[data-test="cohort"]').exists()).toBe(true)
+    demo = { run_id: null, execution_id: null }
+    await w.get('[data-test="refresh"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="error"]').exists()).toBe(false)
+    expect(w.get('[data-test="empty"]').text()).toContain('No demonstration run is prepared')
+    expect(w.find('[data-test="cohort"]').exists()).toBe(false)
+    expect(w.get('[data-test="refresh"]').text()).toBe('Refresh')
+  })
+})

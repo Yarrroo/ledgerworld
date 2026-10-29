@@ -219,13 +219,19 @@ const router = useRouter()
 const runId = computed(() => (typeof route.query.run_id === 'string' && route.query.run_id) || null)
 
 // With no run named (the nav link), the prepared demonstration run, as Decisions and Execution
-// read it; with none prepared, the shell explains the absence.
+// read it, named in the URL by this read (so the run watcher does not read it again), and only
+// while the URL is still the one it was asked from; with none prepared, the shell explains it.
+let adopted = null
 const { state, refresh } = useReading(async () => {
   let run = runId.value
   if (!run) {
+    const asked = route.fullPath
     run = (await getOverview()).demo?.run_id ?? null
     if (!run) throw noDemoRun()
-    await router.replace({ query: { ...route.query, run_id: run } }) // the watcher reloads it
+    if (route.fullPath === asked) {
+      adopted = run
+      await router.replace({ query: { ...route.query, run_id: run } }).finally(() => { adopted = null })
+    }
   }
   return request(`/runs/${encodeURIComponent(run)}`)
 })
@@ -615,7 +621,8 @@ const asking = ref(false)
 const answer = ref(null)
 const interviewError = ref('')
 
-watch(runId, () => {
+watch(runId, (id) => {
+  if (id && id === adopted) return // the read that named it is already reading it
   selected.value = null
   actor.value = null
   forked.value = answer.value = null

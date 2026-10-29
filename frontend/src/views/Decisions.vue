@@ -187,7 +187,8 @@ const { state, refresh } = useReading(async () => {
   // one after the other: the offline app's SQLite refuses a ledger read beside a job-store read
   const decisions = await request(`/decisions/${encodeURIComponent(runId)}`)
   const treasury = await getTreasury().catch(() => null)
-  // the run's own snapshot, or the one it observed (a prepared demo's money screens read that one)
+  // the run's own snapshot (a prepared demo's money screens read the world's h0, the snapshot a
+  // run starts from), or one the run observed from it
   const same = treasury && treasury.mode === decisions.mode &&
     (treasury.snapshot_id === decisions.snapshot_id || observedBy(treasury.snapshot_id, decisions.run_id))
   return { ...decisions, treasury: same ? treasury : null }
