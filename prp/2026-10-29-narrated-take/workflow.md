@@ -1,8 +1,8 @@
 # Narrated machine take — workflow
 
-> Workflow output (dev-build, Medium depth: design folded in). Source: board item 136. Next: implement → report.md → close-out.
+> Workflow (Medium depth: design folded in). Next: implement → report.md → close-out.
 
-**Goal.** One MP4 the owner can upload if the human take does not arrive: the seven beats of
+**Goal.** One MP4 that can be uploaded if the human take does not arrive: the seven beats of
 `docs/video-script.md`, recorded against the deployment, voiced by a synthetic voice that a
 3-second opening card names as synthetic, with the script's operator actions sent off-screen.
 
@@ -23,14 +23,14 @@ narrated_take.sh URL
   └─ voiceover.py summary               planned vs actual, voice length, operator results
 ```
 
-## Decisions (made here, no human in the pane)
+## Decisions
 
 - **TTS:** `edge-tts` (no key, needs the network), **ffmpeg:** `imageio-ffmpeg`'s static build.
   Both fetched per call with `uv run --with`, pinned; neither enters `pyproject.toml`.
 - **Fit:** a clip longer than its beat window is re-voiced faster (edge-tts `rate`) up to +40%;
   past that the take fails rather than spill into the next beat.
 - **Fork:** the prepared run refuses forks (`prepared_demo_read_only`), so the take starts a new
-  run of the prepared scenario (`delayed-receipt`, seed 7, 5 rounds), forks it at the prepared
+  run of the prepared scenario (`delayed_receipt`, seed 7, 5 rounds) from the prepared run's snapshot, forks it at the prepared
   checkpoint with the prepared policies, and shows its screens when they arrive.
 - **Approval capture:** `POST /approvals` for the fresh run's selected policy (the prepared run's
   when the fresh one did not decide). A `409 already_approved` is shown as that refusal and the
@@ -38,6 +38,8 @@ narrated_take.sh URL
 - **Interview:** the prepared run's base branch, the lender at the checkpoint round. A refusal
   (e.g. `503 model_unavailable`) is shown as such.
 - **No token:** the take still records, read-only; the card and every operator beat say so.
+- **Token hygiene:** only the spec's process holds it, only over https (or this machine's
+  localhost), from a request context of its own; refusals are shown, never hidden.
 
 ## Phases
 

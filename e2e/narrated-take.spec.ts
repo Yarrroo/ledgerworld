@@ -16,7 +16,8 @@
  *   Explain  interview the lender at the checkpoint round of the prepared run's base branch
  * Each answer is shown on the caption as an off-screen operator action. Without a token none is
  * sent and the caption says so. Per-beat timing and every action (method, path, status, at; never
- * a header) go to $NARRATED_OUT/beats.json after every beat, with the card's length as `offset`.
+ * a header) go to $NARRATED_OUT/beats.json after every beat, with the seconds from the test's
+ * start to the first beat as `offset`.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -38,8 +39,13 @@ if (!PLAN || !OUT || !LABEL) throw new Error('NARRATED_PLAN, NARRATED_OUT and NA
 const BEATS: Beat[] = JSON.parse(readFileSync(PLAN, 'utf-8')).beats
 const CARD: { seconds: number, title: string, lines: string[] } = JSON.parse(readFileSync(LABEL, 'utf-8'))
 const TOKEN = process.env.LEDGERWORLD_DEMO_TOKEN ?? ''
+// the beats that carry an operator action, by name: a renamed beat must fail here, not drop its action
+const ACTED = ['Fork', 'Break', 'Execute', 'Explain']
+const unknown = ACTED.filter((name) => !BEATS.some((b) => b.beat === name))
+if (unknown.length) throw new Error(`the plan has no beat ${unknown.join(', ')}: update narrated-take.spec.ts`)
 
-const SCENARIO = { family: 'delayed-receipt', seed: 7 } // the prepared run's own: backend/app/demo/prepare.py
+// the prepared run's scenario (backend/app/demo/prepare.py) as POST /runs takes it; JSON, read by its test
+const SCENARIO = {"family": "delayed_receipt", "seed": 7, "params": {}}
 const ROUNDS = 5
 const GRACE_S = 20 // how far past its beat a fresh run may run before the take moves on
 const QUESTION = 'What did you observe in this round, and why did you act as you did?'
@@ -61,17 +67,18 @@ async function call (method: 'GET' | 'POST', path: string, data?: object, timeou
     })
     answer = { status: r.status(), body: await r.json().catch(() => null) }
   } catch (error) {
-    answer = { status: 'no answer', body: { message: String((error as Error).message).split('\n')[0] } }
+    answer = { status: 'no answer', body: { error: { code: 'no_answer', detail: String((error as Error).message).split('\n')[0] } } }
   }
   if (method === 'POST') {
-    const b = answer.body ?? {}
-    const detail = typeof answer.status === 'number' && answer.status < 300 ? '' : `${b.code ?? ''} ${b.message ?? b.detail ?? ''}`.trim()
-    actions.push({ method, path, status: answer.status, at: now(), detail })
+    const ok = typeof answer.status === 'number' && answer.status < 300
+    actions.push({ method, path, status: answer.status, at: now(), detail: ok ? '' : reason(answer) })
   }
   return answer
 }
 
-const refusal = (a: Answer): string => `${a.status}${a.body?.code ? ` ${a.body.code}` : ''}${a.body?.message ? `: ${a.body.message}` : ''}`
+/** An ErrorResponse's `error: {code, detail}`, as one line. */
+const reason = (a: Answer): string => [a.body?.error?.code, a.body?.error?.detail].filter(Boolean).join(': ')
+const refusal = (a: Answer): string => [a.status, reason(a)].filter(Boolean).join(' ')
 
 /** The caption box: fixed over the bottom of the screen, never in the way of a click. */
 async function caption (page: Page, title: string, text: string, notes: string[]): Promise<void> {
@@ -83,7 +90,7 @@ async function caption (page: Page, title: string, text: string, notes: string[]
       box.setAttribute('aria-hidden', 'true')
       box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;' +
         'pointer-events:none;padding:10px 16px;background:rgba(10,12,16,.88);color:#fff;' +
-        'font:13px/1.4 system-ui,sans-serif;max-height:38vh;overflow:hidden'
+        'font:13px/1.4 system-ui,sans-serif;max-height:50vh;overflow:hidden'
       document.body.appendChild(box)
     }
     box.innerHTML = ''
@@ -92,7 +99,7 @@ async function caption (page: Page, title: string, text: string, notes: string[]
     const body = document.createElement('div')
     body.textContent = text
     box.append(head, body)
-    for (const note of notes) {
+    for (const note of notes.slice(-3)) { // the newest three: an answer is never the one clipped
       const line = document.createElement('em')
       line.style.display = 'block'
       line.textContent = note
@@ -139,37 +146,42 @@ async function fork (stage: Stage, page: Page, beat: Beat, prepared: any): Promi
     await stage.say('Not performed: the fresh branch is an operator POST and no demo token was given.')
     return null
   }
+  if (!prepared.checkpoint_round || !prepared.results?.length) {
+    await stage.say('Not performed: the prepared run has no readable decision to fork like.')
+    return null
+  }
   const deadline = beat.end + GRACE_S
-  const overview = await call('GET', '/overview')
-  const run = await call('POST', '/runs', { snapshot_id: overview.body?.snapshot_id, scenario: SCENARIO, rounds: ROUNDS })
+  // the snapshot runs start from: the prepared run's own, never the observed one Overview reports
+  const run = await call('POST', '/runs', { snapshot_id: prepared.snapshot_id, scenario: SCENARIO, rounds: ROUNDS })
   if (run.status !== 202) {
     await stage.say(`Off-screen operator POST /runs was refused (${refusal(run)}); no fresh branch this take.`)
     return null
   }
   const id: string = run.body.run_id
-  await stage.show(`/simulation?run_id=${encodeURIComponent(id)}`)
+  const q = encodeURIComponent(id)
+  await stage.show(`/simulation?run_id=${q}`)
   await stage.say(`Off-screen operator POST /runs → 202: a new run ${id} of the same scenario starts now.`)
-  const ran = await until(`/runs/${encodeURIComponent(id)}`, (a) => ['done', 'failed', 'cancelled'].includes(a.body?.status), deadline)
+  const ran = await until(`/runs/${q}`, (a) => ['done', 'failed', 'cancelled'].includes(a.body?.status), deadline)
   if (ran.body?.status !== 'done') {
     await stage.say(`Run ${id} is ${ran.body?.status ?? refusal(ran)} at the beat's end; its fork is not shown.`)
     return null
   }
-  await stage.show(`/simulation?run_id=${encodeURIComponent(id)}`)
-  const forked = await call('POST', `/runs/${encodeURIComponent(id)}/fork`, {
+  await stage.show(`/simulation?run_id=${q}`)
+  const forked = await call('POST', `/runs/${q}/fork`, {
     checkpoint_round: prepared.checkpoint_round,
-    policies: (prepared.results ?? []).map((r: any) => r.policy)
+    policies: prepared.results.map((r: any) => r.policy)
   })
   if (forked.status !== 202) {
     await stage.say(`Off-screen operator POST /runs/${id}/fork was refused (${refusal(forked)}).`)
     return null
   }
   await stage.say(`Off-screen operator POST /runs/${id}/fork → 202: ${forked.body.branch_ids.length} fresh branches at round ${prepared.checkpoint_round}.`)
-  const decided = await until(`/decisions/${encodeURIComponent(id)}`, (a) => a.status !== 200 || a.body?.status !== 'pending', deadline)
+  const decided = await until(`/decisions/${q}`, (a) => a.status !== 200 || a.body?.status !== 'pending', deadline)
   if (decided.status !== 200 || decided.body?.status === 'pending') {
     await stage.say(`The fresh branches had not decided by the beat's end (${decided.status === 200 ? 'pending' : refusal(decided)}).`)
     return null
   }
-  await stage.show(`/decisions?run_id=${encodeURIComponent(id)}`)
+  await stage.show(`/decisions?run_id=${q}`)
   await stage.say(`Fresh branches of ${id}: ${decided.body.status}${decided.body.selected ? `, selected ${decided.body.selected}` : ''}.`)
   return { run: id, status: decided.body.status, selected: decided.body.selected ?? null }
 }
@@ -183,6 +195,10 @@ async function approve (stage: Stage, fresh: Fresh | null, prepared: any): Promi
   const own = fresh?.status === 'selected' && fresh.selected
   const runId = own ? fresh.run : prepared.run_id
   const policy = own ? fresh.selected : prepared.selected
+  if (!policy) {
+    await stage.say('Not performed: no selected policy to ask an approval for. What follows is an inspection of the saved receipt.')
+    return
+  }
   const a = await call('POST', '/approvals', { run_id: runId, policy })
   if (a.status === 201) {
     const ap = a.body.approval
@@ -223,12 +239,13 @@ async function interview (stage: Stage, prepared: any): Promise<void> {
 }
 
 test('narrated take: opening card, seven timed beats, off-screen operator actions', async ({ page, baseURL }) => {
+  // the video starts with the page, just before this line; the voice is placed from here
+  const t0 = performance.now()
   mkdirSync(OUT, { recursive: true })
   api = await http.newContext({ baseURL, userAgent: 'ledgerworld-narrated-take/1' })
   const writes = await readOnly(page, baseURL!)
 
   // the card, on a blank page before the app: the first thing the video shows
-  const t0 = performance.now()
   await page.setContent('<main id="card"></main>')
   await page.evaluate(({ title, lines }) => {
     const card = document.getElementById('card')!
@@ -239,7 +256,6 @@ test('narrated take: opening card, seven timed beats, off-screen operator action
     card.append(head, ...lines.map((text) => Object.assign(document.createElement('p'), { textContent: text })))
   }, CARD)
   await page.waitForTimeout(CARD.seconds * 1000)
-  const offset = (performance.now() - t0) / 1000
 
   const overview = await call('GET', '/overview')
   const runId: string | null = overview.body?.demo?.run_id ?? null
@@ -247,6 +263,7 @@ test('narrated take: opening card, seven timed beats, off-screen operator action
   const prepared = { ...(decisions?.body ?? {}), run_id: runId }
 
   started = performance.now()
+  const offset = (started - t0) / 1000
   const results: Result[] = []
   let fresh: Fresh | null = null
   let shown = ''

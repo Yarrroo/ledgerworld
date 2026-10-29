@@ -5,7 +5,8 @@
     uv run python scripts/voiceover.py voice --out DIR --dry-run   estimate the fit; no network
     uv run python scripts/voiceover.py label [--operator]  the opening card, as JSON on stdout
     uv run --with imageio-ffmpeg==0.7.0 python scripts/voiceover.py mux \\
-        --video WEBM --voice VOICE --beats BEATS --out MP4   [--dry-run: print the command only]
+        --video WEBM --voice VOICE --beats BEATS --out MP4   the MP4 and its .srt beside it
+        (--dry-run: print the command only; without --beats: the planned starts)
     uv run python scripts/voiceover.py summary --voice VOICE --beats BEATS
 
 The Voice lines, beats and windows are scripts/walkthrough_plan.py's (the first paragraph of each
@@ -35,6 +36,7 @@ ENGINE = "Microsoft Edge neural text-to-speech, through edge-tts"
 CARD_S = 3
 MAX_RATE = 40  # percent faster than the voice's own pace; beyond it speech stops being clear
 MARGIN_S = 0.4  # silence kept between a clip's end and its beat's end
+TAIL_S = 1.0  # the MP4 ends this long after the last beat, never at the recorder's close
 WPS = 2.3  # edge-tts words per second at +0%, its trailing pause included (measured, 2026-10-29)
 
 
@@ -79,7 +81,8 @@ def media_seconds(path: Path) -> float:
 def label(operator: bool) -> dict:
     """The opening card: what made this video, before any of it plays."""
     action = ("Operator actions (a fresh fork, an approval request, an actor interview) were sent "
-              "off-screen with the demo token; no execution was started for this take."
+              "off-screen with the demo token; each answer, a refusal included, is shown where it "
+              "happens. No execution was started for this take."
               if operator else
               "No operator action was sent: this take is read-only, and the fork, approval and "
               "interview beats say so where they would happen.")
@@ -90,10 +93,18 @@ def label(operator: bool) -> dict:
                       action]}
 
 
-async def _speak(text: str, path: Path, rate: int) -> None:
+async def _speak(text: str, path: Path, rate: int, tries: int = 3, pause_s: float = 2.0) -> None:
+    """One clip; the service drops a connection now and then, so a failed call is tried again."""
     import edge_tts  # fetched by `uv run --with`, never a project dependency
 
-    await edge_tts.Communicate(text, VOICE, rate=f"+{rate}%").save(str(path))
+    for attempt in range(1, tries + 1):
+        try:
+            await edge_tts.Communicate(text, VOICE, rate=f"+{rate}%").save(str(path))
+            return
+        except (OSError, edge_tts.exceptions.EdgeTTSException):
+            if attempt == tries:
+                raise
+            await asyncio.sleep(pause_s * attempt)
 
 
 def voice(out: Path, dry: bool) -> int:
@@ -104,15 +115,14 @@ def voice(out: Path, dry: bool) -> int:
         if dry:
             rate, seconds = rate_for(estimate(line["text"]), window), None
         else:
-            rate, seconds = 0, 0.0
+            rate = 0
             while True:
                 asyncio.run(_speak(line["text"], path, rate))
                 seconds = media_seconds(path)
                 if seconds <= window - MARGIN_S:
                     break
                 faster = rate_for(seconds * (100 + rate) / 100, window)
-                rate = None if faster is None else max(faster, rate + 5)
-                if rate is None or rate > MAX_RATE:
+                if faster is None or (rate := max(faster, rate + 5)) > MAX_RATE:
                     rate = None
                     break
         if rate is None:
@@ -140,8 +150,14 @@ def placements(voice_doc: dict, beats_doc: dict) -> list[tuple[str, float]]:
     return [(c["file"], beats_doc["offset"] + began[c["beat"]]) for c in voice_doc["clips"]]
 
 
-def mux_command(exe: str, video: str, clips: list[tuple[str, float]], out: str) -> list[str]:
-    """The video as recorded, each clip delayed to its place, padded with silence to the end."""
+def ending(beats_doc: dict) -> float:
+    """Where the MP4 stops: TAIL_S after the last beat left its screen."""
+    return beats_doc["offset"] + beats_doc["beats"][-1]["left"] + TAIL_S
+
+
+def mux_command(exe: str, video: str, clips: list[tuple[str, float]], out: str,
+                end: float) -> list[str]:
+    """The video as recorded up to `end`, each clip delayed to its place, padded with silence."""
     command = [exe, "-hide_banner", "-loglevel", "error", "-y", "-i", video]
     chains = []
     for i, (path, at) in enumerate(clips, 1):
@@ -151,16 +167,34 @@ def mux_command(exe: str, video: str, clips: list[tuple[str, float]], out: str) 
     chains.append(f"{mix}amix=inputs={len(clips)}:duration=longest:normalize=0,apad[voice]")
     return command + ["-filter_complex", ";".join(chains), "-map", "0:v", "-map", "[voice]",
                       "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-                      "-r", "25", "-c:a", "aac", "-b:a", "128k", "-shortest",
+                      "-r", "25", "-c:a", "aac", "-b:a", "128k", "-shortest", "-t", f"{end:.3f}",
                       "-movflags", "+faststart", out]
 
 
-def mux(video: Path, voice_path: Path, beats: Path, out: Path, dry: bool) -> int:
+def planned(voice_doc: dict) -> dict:
+    """A take that kept to plan: each beat began at its planned start, after the card."""
+    return {"offset": CARD_S, "beats": [{"beat": c["beat"], "began": c["start"], "left": c["end"]}
+                                        for c in voice_doc["clips"]]}
+
+
+def srt_clock(seconds: float) -> str:
+    ms = round(seconds * 1000)
+    return f"{ms // 3_600_000:02d}:{ms // 60_000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+
+
+def subtitles(voice_doc: dict, clips: list[tuple[str, float]]) -> str:
+    """Each Voice line from where its clip plays in the MP4 to where it ends."""
+    return "\n".join(f"{n}\n{srt_clock(at)} --> {srt_clock(at + (c['seconds'] or 0))}\n{c['text']}\n"
+                     for n, (c, (_, at)) in enumerate(zip(voice_doc["clips"], clips, strict=True), 1))
+
+
+def mux(video: Path, voice_path: Path, beats: Path | None, out: Path, dry: bool) -> int:
     voice_doc = json.loads(voice_path.read_text(encoding="utf-8"))
-    beats_doc = json.loads(beats.read_text(encoding="utf-8"))
+    beats_doc = json.loads(beats.read_text(encoding="utf-8")) if beats else planned(voice_doc)
     try:
-        command = mux_command("ffmpeg" if dry else ffmpeg(), str(video),
-                              placements(voice_doc, beats_doc), str(out))
+        clips = placements(voice_doc, beats_doc)
+        command = mux_command("ffmpeg" if dry else ffmpeg(), str(video), clips, str(out),
+                              ending(beats_doc))
     except ValueError as error:
         print(f"voiceover: {error}", file=sys.stderr)
         return 1
@@ -171,6 +205,7 @@ def mux(video: Path, voice_path: Path, beats: Path, out: Path, dry: bool) -> int
     if done.returncode or not out.exists():
         print(f"voiceover: ffmpeg failed: {done.stderr.strip()[-400:]}", file=sys.stderr)
         return 1
+    out.with_suffix(".srt").write_text(subtitles(voice_doc, clips), encoding="utf-8")
     return 0
 
 
@@ -207,8 +242,9 @@ def main(argv: list[str] | None = None) -> int:
     lab = verbs.add_parser("label")
     lab.add_argument("--operator", action="store_true", help="operator actions will be sent")
     m = verbs.add_parser("mux")
-    for name in ("video", "voice", "beats", "out"):
+    for name in ("video", "voice", "out"):
         m.add_argument(f"--{name}", type=Path, required=True)
+    m.add_argument("--beats", type=Path, help="the take's beats.json; omitted, the planned starts")
     m.add_argument("--dry-run", action="store_true")
     s = verbs.add_parser("summary")
     s.add_argument("--voice", type=Path, required=True)
