@@ -43,8 +43,8 @@ than 2 s late.
 **Shot:** Overview with the mode banner, `as_of`, snapshot, cash buckets and next obligation. Name
 the prepared `run_id` and associated execution, or show unavailable and stop the success take.
 
-**Voice:** “This is synthetic treasury cash. Settled, pending and reserved are different buckets.
-We rehearse a shock before a bounded approval can spend anything.”
+**Voice:** “Will you have enough for payroll? See cash in the bank, money set aside and payments
+still due. This is made-up company data; nothing moves until you approve and send.”
 
 ## 00:15-00:25 World
 
@@ -52,8 +52,8 @@ We rehearse a shock before a bounded approval can spend anything.”
 shared venue exposure. Open the evidence slate with the actual run, branch, seed, checkpoint and
 source mode; follow the field mapping below. Keep the model provenance separate from freshness.
 
-**Voice:** “Borrowers and the lender share constraints. Each sees only its scoped observation.
-This run's model source is shown here; a fresh computation can still use scripted actors.”
+**Voice:** “Your lender and other borrowers share risks. Each sees only its own information and
+public news. The label says whether agents follow scripts or use a model.”
 
 ## 00:25-00:40 Shock
 
@@ -62,9 +62,9 @@ the linked evidence view. For the scripted shock/control fixture, show both labe
 use its test command from the submission instructions. Do not silently replace the filmed run
 with the fixture. If the current run lacks a trace, show the fixture separately as wiring evidence.
 
-**Voice:** “The scripted shock/control test proves wiring, not independent live-model choice.
-The post, request, accepted intents and journal establish the recorded action path. An observation
-hash identifies an input; it cannot reveal an actor's unseen causal reasoning.”
+**Voice:** “What if a payment is late and worrying news spreads? Follow the request for money
+through to the books. The scripted test checks the steps, not a model's own choices. It shows
+what happened, not why an agent thought it should.”
 
 ## 00:40-01:35 Fork
 
@@ -75,9 +75,12 @@ Simulation and start one genuinely fresh branch on camera with the authorized op
 Show the new branch metadata and committed rounds as it completes; label every precomputed cohort
 **Replay**. A re-fork may reuse a branch ID, so identity alone is not freshness evidence.
 
-**Voice:** “Policies drive the treasury in these branches; other actors re-react. This new branch
-runs now. Freshness, model provenance, replay status and provider mode answer different questions.
-The result is a comparison, not permission to execute.”
+**Voice:** “Compare doing nothing, keeping a fixed buffer and borrowing just enough. Which plan
+covers payroll, stays above your safety minimum, and at what fee? Each plan guides your company's
+choices; your lender and the other borrowers respond again. We're running a new what-if now.
+Earlier results are labelled Replay. Fresh does not mean the agents used a live model, and neither
+Fresh nor Replay tells you whether the bank connection is simulated or sandbox. Comparing plans
+does not approve a payment.”
 
 ## 01:35-02:00 Break
 
@@ -85,8 +88,9 @@ The result is a comparison, not permission to execute.”
 this supported cut-line path; the demo does not currently expose a reverse-stress run. Only use a
 reverse-stress shot if that feature actually ran and its evidence is available, and label it so.
 
-**Voice:** “Here is the constraint that breaks each losing policy. If all policies fail, the system
-returns the earliest unmet obligation and escalation; it must not quietly lower the reserve floor.”
+**Voice:** “See which bill goes unpaid or when cash drops below your safety minimum. If no plan
+keeps you safe, you see the first bill you cannot pay and who to contact. The app never lowers
+your minimum to make a plan look safe.”
 
 ## 02:00-03:55 Execute
 
@@ -99,10 +103,12 @@ comparison branch. If no original footage exists, inspect the saved approval and
 narrate that as inspection, not a new approval. Show setup wallet funding separately from the plan.
 Do not film the token.
 
-**Voice:** “This previously approved plan crossed the gateway. The banner identifies fake or Airwallex
-sandbox, and the receipt identifies connected-account Mode A or fallback Mode B. In Mode B this
-advance is an advance inflow (sandbox simulation), not a lender disbursement through Airwallex;
-repayment is ledger-only and simulated. Pending or unknown is not settled.”
+**Voice:** “Check what moved and whether it matches your books. This is the earlier approved plan,
+not a new payment. The banner says Simulated bank connection or Sandbox bank. The receipt names
+connected-account Mode A or fallback Mode B. In Mode B, the advance inflow (sandbox simulation)
+adds test money; it is not a lender disbursement through Airwallex. Repayment is recorded only in
+the books and is simulated. Pending means still waiting; unknown means we cannot confirm. Neither
+means the money has arrived.”
 
 If sandbox evidence is unavailable, say “This take uses a simulated provider; no sandbox execution
 is claimed.” Keep that label on the shot. Never use fake receipts under a sandbox narration.
@@ -113,8 +119,9 @@ is claimed.” Keep that label on the shot. Never use fake receipts under a sand
 its evidence IDs. Open the grounded report for the same run. Finish on the repository and setup
 links and the visible provider/model/replay labels. Do not invent a probability or a receipt.
 
-**Voice:** “The report's figures trace to structured results. The interview can explain recorded
-observations but cannot move money. The source, setup steps and limitations are linked.”
+**Voice:** “Ask why cash ran short, then check the figures against the saved results. The interview
+explains only what the agent could see; it cannot move money. The source code, setup steps and
+limitations are linked.”
 
 ## Evidence rules
 

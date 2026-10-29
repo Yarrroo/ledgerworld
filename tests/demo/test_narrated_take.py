@@ -22,7 +22,7 @@ BEATS = ("State", "World", "Shock", "Fork", "Break", "Execute", "Explain")
 def test_seven_voice_lines_in_order_from_the_script() -> None:
     lines = voiceover.lines()
     assert tuple(line["beat"] for line in lines) == BEATS
-    assert lines[0]["text"].startswith("This is synthetic treasury cash.")
+    assert lines[0]["text"].startswith("Will you have enough for payroll?")
     assert lines[0]["start"] == 0 and lines[-1]["end"] == 275
     for line in lines:
         assert line["text"] and "**" not in line["text"] and "\n" not in line["text"]
