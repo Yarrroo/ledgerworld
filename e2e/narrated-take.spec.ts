@@ -4,8 +4,9 @@
  * its spoken line as a subtitle. scripts/narrated_take.sh lays the voice over the video afterwards.
  *
  * The plan is scripts/walkthrough_plan.py's (NARRATED_PLAN), the card scripts/voiceover.py's
- * (NARRATED_LABEL). Beats move as walkthrough.spec.ts's do: each opens its screen on the prepared
- * demonstration run and holds to its planned end; a late beat makes the next start at once.
+ * (NARRATED_LABEL). Each beat opens its screen on the prepared demonstration run and holds to its
+ * planned end, counted from the take's start (clock.js): every wait inside a beat is cut at that
+ * end, so a slow screen, scroll or operator call shortens the beat it hit and never the next one.
  *
  * Three beats carry the script's operator actions, sent with LEDGERWORLD_DEMO_TOKEN from a request
  * context of their own, off-screen; the browser stays read-only (guard.ts) and never holds the token:
@@ -22,6 +23,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, request as http, test, type APIRequestContext, type Page } from '@playwright/test'
+import { Clock, hold as holdUntil, runBeats } from './clock'
 import { readOnly } from './guard'
 
 interface Beat { beat: string, start: number, end: number, route: string, subtitle: string }
@@ -47,22 +49,29 @@ if (unknown.length) throw new Error(`the plan has no beat ${unknown.join(', ')}:
 // the prepared run's scenario (backend/app/demo/prepare.py) as POST /runs takes it; JSON, read by its test
 const SCENARIO = {"family": "delayed_receipt", "seed": 7, "params": {}}
 const ROUNDS = 5
-const GRACE_S = 20 // how far past its beat a fresh run may run before the take moves on
 const QUESTION = 'What did you observe in this round, and why did you act as you did?'
+// an operator write goes out only with this much of its beat left, so its answer is seen in time:
+// a write cut short by the beat's end could land on the server while the take calls it refused
+const WRITE_ROOM_S = 10
 
 const mmss = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
 
 let api: APIRequestContext
 let actions: Action[] = []
-let started = 0
-const now = (): number => (performance.now() - started) / 1000
+const clock = new Clock(() => performance.now(), async (ms) => await new Promise((resolve) => setTimeout(resolve, ms)))
+const now = (): number => clock.now()
 
 /** A read or an operator write to the API; a write is logged without its headers. */
 async function call (method: 'GET' | 'POST', path: string, data?: object, timeout = 30_000): Promise<Answer> {
   let answer: Answer
+  if (method === 'POST' && clock.left() < WRITE_ROOM_S) {
+    const detail = `${Math.max(0, clock.left()).toFixed(1)} s of the beat left`
+    actions.push({ method, path, status: 'not sent', at: now(), detail })
+    return { status: 'not sent', body: { error: { code: 'not_sent', detail } } }
+  }
   try {
     const r = await api.fetch(`/api/v1${path}`, {
-      method, data, timeout, failOnStatusCode: false,
+      method, data, timeout: clock.budget(timeout), failOnStatusCode: false,
       headers: method === 'POST' ? { Authorization: `Bearer ${TOKEN}` } : {}
     })
     answer = { status: r.status(), body: await r.json().catch(() => null) }
@@ -83,7 +92,7 @@ const refusal = (a: Answer): string => [a.status, reason(a)].filter(Boolean).joi
 
 /** The caption box: fixed over the bottom of the screen, never in the way of a click. */
 async function caption (page: Page, title: string, text: string, notes: string[]): Promise<void> {
-  await page.evaluate(({ title, text, notes }) => {
+  await clock.within(page.evaluate(({ title, text, notes }) => {
     let box = document.getElementById('lw-narrated-caption')
     if (!box) {
       box = document.createElement('div')
@@ -106,32 +115,28 @@ async function caption (page: Page, title: string, text: string, notes: string[]
       line.textContent = note
       box.append(line)
     }
-  }, { title, text, notes }).catch(() => {})
+  }, { title, text, notes }).catch(() => {}), 1000)
 }
 
 /** Loaded means the screen's reading arrived: a source label and no load error. */
 async function ready (page: Page): Promise<void> {
-  await expect(page.locator('h1')).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator('main.lw-main')).toHaveAttribute('aria-busy', 'false', { timeout: 30_000 })
-  await expect(page.locator('[data-test="error"]'), 'the screen shows a load error').toHaveCount(0)
-  await expect(page.locator('[data-test="source"]').first()).not.toBeEmpty({ timeout: 5_000 })
+  await expect(page.locator('h1')).toBeVisible({ timeout: clock.budget(30_000) })
+  await expect(page.locator('main.lw-main')).toHaveAttribute('aria-busy', 'false', { timeout: clock.budget(30_000) })
+  await expect(page.locator('[data-test="error"]'), 'the screen shows a load error').toHaveCount(0, { timeout: clock.budget(5_000) })
+  await expect(page.locator('[data-test="source"]').first()).not.toBeEmpty({ timeout: clock.budget(5_000) })
 }
 
-/** Scroll through the screen evenly over the time left, until `until`. */
+/** Scroll through the screen evenly over the time left, until `until`; a scroll that stalls is cut. */
 async function hold (page: Page, until: number): Promise<void> {
-  const steps = Math.max(1, Math.ceil(until - now()))
-  for (let i = 1; i <= steps && now() < until; i++) {
-    await page.evaluate((f) => window.scrollTo({ top: f * (document.documentElement.scrollHeight - innerHeight) }), i / steps)
-      .catch(() => {})
-    await page.waitForTimeout(Math.max(0, Math.min(1000, (until - now()) * 1000)))
-  }
+  await holdUntil(clock, until, async (f) => await page.evaluate(
+    (f) => window.scrollTo({ top: f * (document.documentElement.scrollHeight - innerHeight) }), f).catch(() => {}))
 }
 
 /** Poll a read until `done` says so or the deadline passes; the last answer either way. */
 async function until (path: string, done: (a: Answer) => boolean, deadline: number): Promise<Answer> {
   let a = await call('GET', path)
   while (!done(a) && now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 2_000))
+    await clock.sleep(Math.max(0, Math.min(2_000, (deadline - now()) * 1000)))
     a = await call('GET', path)
   }
   return a
@@ -151,7 +156,7 @@ async function fork (stage: Stage, page: Page, beat: Beat, prepared: any): Promi
     await stage.say('Not performed: the prepared run has no readable decision to fork like.')
     return null
   }
-  const deadline = beat.end + GRACE_S
+  const deadline = beat.end
   // the snapshot runs start from: the prepared run's own, never the observed one Overview reports
   const run = await call('POST', '/runs', { snapshot_id: prepared.snapshot_id, scenario: SCENARIO, rounds: ROUNDS })
   if (run.status !== 202) {
@@ -256,19 +261,23 @@ test('narrated take: opening card, seven timed beats, off-screen operator action
     head.textContent = title
     card.append(head, ...lines.map((text) => Object.assign(document.createElement('p'), { textContent: text })))
   }, CARD)
-  await page.waitForTimeout(CARD.seconds * 1000)
+  // the prepared run is read while the card shows; only reads that outlast the card lengthen it
+  const reads = (async () => {
+    const overview = await call('GET', '/overview')
+    const runId: string | null = overview.body?.demo?.run_id ?? null
+    const decisions = runId ? await call('GET', `/decisions/${encodeURIComponent(runId)}`) : null
+    return { ...(decisions?.body ?? {}), run_id: runId }
+  })()
+  await clock.sleep(CARD.seconds * 1000)
+  const prepared = await reads
+  const runId: string | null = prepared.run_id
 
-  const overview = await call('GET', '/overview')
-  const runId: string | null = overview.body?.demo?.run_id ?? null
-  const decisions = runId ? await call('GET', `/decisions/${encodeURIComponent(runId)}`) : null
-  const prepared = { ...(decisions?.body ?? {}), run_id: runId }
-
-  started = performance.now()
-  const offset = (started - t0) / 1000
+  clock.start()
+  const offset = (performance.now() - t0) / 1000
   const results: Result[] = []
   let fresh: Fresh | null = null
   let shown = ''
-  for (const beat of BEATS) {
+  await runBeats(clock, BEATS, async (beat) => {
     actions = []
     const query = (run: string | null): string => run && beat.route !== '/overview' ? `?run_id=${encodeURIComponent(run)}` : ''
     const url = beat.route + query(beat.beat === 'Break' && fresh ? fresh.run : runId)
@@ -281,7 +290,7 @@ test('narrated take: opening card, seven timed beats, off-screen operator action
     const stage: Stage = {
       say: async (note) => { notes.push(note); await caption(page, title, beat.subtitle, notes) },
       show: async (to) => {
-        await page.goto(to, { timeout: 30_000 }).then(async () => await ready(page)).catch(() => {})
+        await page.goto(to, { timeout: clock.budget(30_000) }).then(async () => await ready(page)).catch(() => {})
         shown = to
         await caption(page, title, beat.subtitle, notes)
       }
@@ -289,7 +298,7 @@ test('narrated take: opening card, seven timed beats, off-screen operator action
     try {
       if (url !== shown) {
         shown = ''
-        await page.goto(url, { timeout: 30_000 })
+        await page.goto(url, { timeout: clock.budget(30_000) })
         shown = url
       }
       await ready(page)
@@ -303,10 +312,11 @@ test('narrated take: opening card, seven timed beats, off-screen operator action
     if (beat.beat === 'Execute') await approve(stage, fresh, prepared)
     if (beat.beat === 'Explain') await interview(stage, prepared)
     await hold(page, beat.end)
-    result.left = now()
-    results.push(result)
+    return result
+  }, (result) => {
+    results.push(result as Result)
     writeFileSync(join(OUT, 'beats.json'), JSON.stringify({ offset, operator: TOKEN !== '', writes, beats: results }, null, 2))
-  }
+  })
   await api.dispose()
 
   expect(writes, 'the browser sent a write').toEqual([])

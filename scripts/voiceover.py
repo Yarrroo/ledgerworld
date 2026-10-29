@@ -8,6 +8,10 @@
         --video WEBM --voice VOICE --beats BEATS --out MP4   the MP4 and its .srt beside it
         (--dry-run: print the command only; without --beats: the planned starts)
     uv run python scripts/voiceover.py summary --voice VOICE --beats BEATS
+    uv run --with imageio-ffmpeg==0.7.0 python scripts/voiceover.py gate \
+        --voice VOICE --beats BEATS --video MP4 [--keep DIR]   fail a take past 4:40 or a
+        beat 2 s late; --keep copies the MP4, SRT and beats.json into DIR, under a name that says
+        `not-held` when the gate failed (--dry-run: the plan itself, without a take)
 
 The Voice lines, beats and windows are scripts/walkthrough_plan.py's (the first paragraph of each
 **Voice:**); this file reads them, it does not restate them. A clip longer than its beat's window
@@ -22,6 +26,7 @@ import asyncio
 import json
 import math
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +43,8 @@ MAX_RATE = 40  # percent faster than the voice's own pace; beyond it speech stop
 MARGIN_S = 0.4  # silence kept between a clip's end and its beat's end
 TAIL_S = 1.0  # the MP4 ends this long after the last beat or line, never at the recorder's close
 WPS = 2.3  # edge-tts words per second at +0%, its trailing pause included (measured, 2026-10-29)
+MAX_TAKE_S = 280  # 4:40, the script's target; the event allows five minutes
+MAX_LATE_S = 2.0  # how long after its planned end a beat may leave its screen
 
 
 def lines(script: Path = ROOT / "docs" / "video-script.md") -> list[dict]:
@@ -246,6 +253,34 @@ def summary(voice_doc: dict, beats_doc: dict) -> str:
     return "\n".join(rows)
 
 
+def gate(voice_doc: dict, beats_doc: dict, seconds: float) -> list[str]:
+    """What keeps a take from upload: an MP4 of `seconds` past MAX_TAKE_S, a beat that left its
+    screen more than MAX_LATE_S after its planned end, a beat that never ran. Empty when it may go."""
+    problems = [f"the MP4 runs {mmss(seconds)}, past {mmss(MAX_TAKE_S)}"] if seconds > MAX_TAKE_S else []
+    done = {b["beat"]: b for b in beats_doc["beats"]}
+    for clip in voice_doc["clips"]:
+        b = done.get(clip["beat"])
+        if b is None:
+            problems.append(f"{clip['beat']} did not run")
+        elif b["left"] - clip["end"] > MAX_LATE_S:
+            problems.append(f"{clip['beat']} left at {mmss(b['left'])}, {b['left'] - clip['end']:.1f} s "
+                            f"after its planned {mmss(clip['end'])}")
+    return problems
+
+
+def keep(take: Path, beats: Path, into: Path, held: bool) -> list[Path]:
+    """Copy the MP4, its SRT and beats.json into `into`. A take that failed the gate keeps a name
+    that says so, never the name an upload would use."""
+    stem = take.stem if held else f"{take.stem}.not-held"
+    kept = []
+    for source, name in ((take, f"{stem}.mp4"), (take.with_suffix(".srt"), f"{stem}.srt"),
+                         (beats, beats.name)):
+        if source.is_file():
+            shutil.copy2(source, into / name)
+            kept.append(into / name)
+    return kept
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     verbs = parser.add_subparsers(dest="verb", required=True)
@@ -262,7 +297,17 @@ def main(argv: list[str] | None = None) -> int:
     s = verbs.add_parser("summary")
     s.add_argument("--voice", type=Path, required=True)
     s.add_argument("--beats", type=Path, required=True)
+    g = verbs.add_parser("gate")
+    g.add_argument("--voice", type=Path, required=True)
+    g.add_argument("--beats", type=Path, help="the take's beats.json; omitted, the planned starts")
+    g.add_argument("--video", type=Path, help="the MP4 whose length is checked")
+    g.add_argument("--dry-run", action="store_true", help="check the length the plan would give")
+    g.add_argument("--keep", type=Path, help="copy the MP4, SRT and beats.json into this directory")
     args = parser.parse_args(argv)
+    if args.verb == "gate" and not (args.video or args.dry_run):
+        parser.error("gate needs --video MP4 or --dry-run")
+    if args.verb == "gate" and args.keep and not (args.video and args.beats):
+        parser.error("gate --keep needs the take: --video MP4 and --beats BEATS")
     try:
         if args.verb == "voice":
             return voice(args.out, args.dry_run)
@@ -271,6 +316,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.verb == "mux":
             return mux(args.video, args.voice, args.beats, args.out, args.dry_run)
+        if args.verb == "gate":
+            voice_doc = json.loads(args.voice.read_text(encoding="utf-8"))
+            beats_doc = json.loads(args.beats.read_text(encoding="utf-8")) if args.beats else planned(voice_doc)
+            seconds = ending(voice_doc, beats_doc) if args.dry_run else media_seconds(args.video)
+            problems = gate(voice_doc, beats_doc, seconds)
+            for problem in problems:
+                print(f"voiceover: {problem}", file=sys.stderr)
+            print(f"gate: {mmss(seconds)} long, {'held' if not problems else 'NOT held'} "
+                  f"(limit {mmss(MAX_TAKE_S)}, a beat at most {MAX_LATE_S:.0f} s late)", file=sys.stderr)
+            if args.keep:
+                for path in keep(args.video, args.beats, args.keep, not problems):
+                    print(f"kept: {path}", file=sys.stderr)
+            return 1 if problems else 0
         print(summary(json.loads(args.voice.read_text(encoding="utf-8")),
                       json.loads(args.beats.read_text(encoding="utf-8"))))
         return 0
