@@ -172,8 +172,8 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import DetailSheet from '../components/DetailSheet.vue'
 import { familyOf, observedBy, worldFor } from '../api/world.js'
 import {
-  ApiError, LABELS, STATES, ScreenShell, againstFloor, formatMoney, getOverview, getTreasury,
-  metricText, money, request, routeExists, useReading
+  LABELS, STATES, ScreenShell, againstFloor, formatMoney, getOverview, getTreasury,
+  metricText, money, noDemoRun, request, routeExists, useReading
 } from '../api/v1.js'
 
 const ORDER = ['no-action', 'fixed-reserve', 'integrated']
@@ -183,7 +183,7 @@ const route = useRoute()
 const router = useRouter()
 const { state, refresh } = useReading(async () => {
   const runId = route.query.run_id || (await getOverview()).demo.run_id
-  if (!runId) throw new ApiError(404, 'no_demo_run', 'No demonstration run is prepared')
+  if (!runId) throw noDemoRun()
   // one after the other: the offline app's SQLite refuses a ledger read beside a job-store read
   const decisions = await request(`/decisions/${encodeURIComponent(runId)}`)
   const treasury = await getTreasury().catch(() => null)

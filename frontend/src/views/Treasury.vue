@@ -245,8 +245,8 @@ async function load () {
 
 const { state, refresh } = useReading(load)
 // an account whose spendable figure is its last observed value, for the shell's stale band
-const stale = computed(() => staleOf((state.body?.accounts ?? []).filter((a) => a.spendable.status === 'stale')
-  .map((a) => ({ account_id: a.id, status: 'stale', as_of: a.spendable.as_of ?? a.as_of }))))
+const stale = computed(() => staleOf((state.body?.accounts ?? [])
+  .map((a) => ({ account_id: a.id, status: a.spendable.status, as_of: a.spendable.as_of ?? a.as_of }))))
 // a deep link (Overview's cash, spendable, next obligation) names an account or an obligation row
 const { focus, moved } = useFocusTarget(state)
 

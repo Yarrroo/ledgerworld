@@ -193,7 +193,7 @@ export function forgetTab () {
 import { computed, nextTick, onUnmounted, reactive, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
-  ApiError, LABELS, STATES, ScreenShell, formatMoney, formatTime, getOverview, latestOnly, money,
+  ApiError, LABELS, STATES, ScreenShell, formatMoney, formatTime, getOverview, latestOnly, money, noDemoRun,
   request, useReading
 } from '../api/v1.js'
 
@@ -268,7 +268,7 @@ const { state, refresh } = useReading(async () => {
   const runId = asked || overview.demo.run_id
   const demo = !asked || asked === overview.demo.run_id
   const executionId = route.query.execution_id || (demo ? overview.demo.execution_id : null) || null
-  if (!runId && !executionId) throw new ApiError(404, 'no_demo_run', 'No demonstration run is prepared')
+  if (!runId && !executionId) throw noDemoRun()
   let decisionsError = ''
   let executionError = null
   const { generation } = guard.issue()

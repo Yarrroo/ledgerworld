@@ -75,7 +75,7 @@ class Services:
     report_key: bytes = field(default_factory=lambda: secrets.token_bytes(32))
     lock: threading.RLock = field(default_factory=threading.RLock)
     _gateway: Gateway | None = None
-    _baseline: tuple[LedgerStore, Snapshot] | None = None  # the h0 baseline a prepared demo shows
+    _baseline: LedgerStore | None = None  # the h0 snapshot a prepared demo shows, loaded once
 
     def __post_init__(self) -> None:
         if self.beneficiaries is None:
@@ -157,11 +157,9 @@ class Services:
             return self.store, self.snapshot, self.now()
         with self.lock:
             if self._baseline is None:
-                store = LedgerStore("sqlite://")
-                from_snapshot(store, self.snapshot)
-                self._baseline = (store, self.snapshot)
-            store, snapshot = self._baseline
-        return store, snapshot, snapshot.as_of
+                self._baseline = LedgerStore("sqlite://")
+                from_snapshot(self._baseline, self.snapshot)
+            return self._baseline, self.snapshot, self.snapshot.as_of
 
     def authorised(self, header: str | None) -> bool:
         """`Authorization: Bearer <LEDGERWORLD_DEMO_TOKEN>`; no configured token admits nobody."""

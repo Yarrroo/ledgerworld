@@ -205,7 +205,8 @@ import DetailSheet from '../components/DetailSheet.vue'
 import WorldMap from '../components/WorldMap.vue'
 import { FAMILIES, ROUND_HOURS, familyOf, observedBy, worldFor } from '../api/world.js'
 import {
-  ApiError, LABELS, ScreenShell, formatMoney, getOverview, request, routeExists, sourceLabel, useReading
+  LABELS, ScreenShell, formatMoney, getOverview, noDemoRun, request, routeExists, sourceLabel,
+  useReading
 } from '../api/v1.js'
 
 const HORIZON_ROUNDS = 18
@@ -223,7 +224,7 @@ const { state, refresh } = useReading(async () => {
   let run = runId.value
   if (!run) {
     run = (await getOverview()).demo?.run_id ?? null
-    if (!run) throw new ApiError(404, 'no_demo_run', 'No demonstration run is prepared')
+    if (!run) throw noDemoRun()
     await router.replace({ query: { ...route.query, run_id: run } }) // the watcher reloads it
   }
   return request(`/runs/${encodeURIComponent(run)}`)

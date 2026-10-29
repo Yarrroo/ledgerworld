@@ -71,6 +71,10 @@ export const getOverview = (opts) => request('/overview', opts)
 export const getTreasury = (opts) => request('/treasury', opts)
 export const getLending = (opts) => request('/lending', opts)
 
+/** A reading refused because no demonstration run is prepared: the shell explains it, never an error. */
+export const NO_DEMO_RUN = 'no_demo_run'
+export const noDemoRun = () => new ApiError(404, NO_DEMO_RUN, 'No demonstration run is prepared')
+
 // ------------------------------------------------------------------------ late responses
 
 /** The context an answer belongs to: never merge two of these into one apparent state. */
@@ -409,8 +413,6 @@ function panelId (label, taken) {
 
 const PHONE = '(max-width: 767px)'
 
-/** A reading that failed because nothing is prepared to read: explained, never an error. */
-const ABSENT = new Set(['no_demo_run'])
 
 /**
  * One screen, in the handoff's shell (prp/2026-10-29-ux-shell/design.md): the logo and six
@@ -423,7 +425,7 @@ const ABSENT = new Set(['no_demo_run'])
  *
  * The handoff's loading, empty and failure states, the same on every screen: before the first
  * answer, skeleton tiles where the figures go and one polite "Loading"; a reading refused because
- * no run is prepared (`no_demo_run`) is an inline explanation of what is missing, not an
+ * no run is prepared (`noDemoRun()`) is an inline explanation of what is missing, not an
  * error and not a chart; a failed first read says Could not load with Retry; a failed refresh
  * keeps the last body, labelled last loaded and not current, with Retry; `stale` (the screen's
  * stale accounts, `staleOf()`) draws a warning band naming each one and its as of.
@@ -639,7 +641,7 @@ export const ScreenShell = defineComponent({
       const scrim = menu.value && h('div', { class: 'lw-scrim', 'aria-hidden': 'true', onClick: () => closeMenu(true) })
 
       // nothing prepared to read: explained in place of the screen, never an error
-      const absent = !body && error && ABSENT.has(error.code)
+      const absent = !body && error?.code === NO_DEMO_RUN
       const queried = typeof route.query.run_id === 'string' ? route.query.run_id : null
       const run = body?.run_id ?? queried
       const crumbs = h('nav', { class: 'lw-crumbs', 'aria-label': 'Breadcrumb', 'data-test': 'breadcrumb' }, [
