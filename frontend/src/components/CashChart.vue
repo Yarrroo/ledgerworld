@@ -69,8 +69,12 @@ const plot = computed(() => {
   const known = props.points
     .filter((p) => p.value?.minor != null)
     .map((p) => ({ ...p, h: (Date.parse(p.t) - Date.parse(props.asOf)) / 3_600_000 }))
+    .sort((a, b) => a.h - b.h)
   if (!known.length) return null
-  const low = known.reduce((a, b) => (b.value.minor < a.value.minor ? b : a))
+  // the minimum is marked only when every point is known: with one unknown it is not
+  const low = known.length === props.points.length
+    ? known.reduce((a, b) => (b.value.minor < a.value.minor ? b : a))
+    : null
   const floorMinor = props.floor?.minor ?? null
   const ys = known.map((p) => p.value.minor).concat(floorMinor === null ? [] : [floorMinor])
   const [y0, y1] = [Math.min(...ys), Math.max(...ys)]

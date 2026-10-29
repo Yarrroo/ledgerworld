@@ -57,9 +57,12 @@ export function worldFor (snapshotId) {
   }
   for (const e of world.snapshot.exposures) {
     for (const party of e.shared_with) {
+      // the venue account is the edge of the party that holds it; the flow, the other party's
+      const holds = Boolean(e.account?.startsWith(`${party}/`))
+      const account = holds ? e.account : null
+      const flow = holds ? null : (e.flow_id ?? null)
       edges.push({ id: `exposure:${e.exposure_id}:${party}`, from: party, to: e.venue, type: 'exposure',
-        label: party === 'lender' && e.account ? `exposure · ${e.account}` : `exposure · ${e.flow_id ?? e.exposure_id}`,
-        ref: e.exposure_id, account: e.account ?? null, flow: e.flow_id ?? null })
+        label: `exposure · ${account ?? flow ?? e.exposure_id}`, ref: e.exposure_id, account, flow })
     }
   }
   if (ids.has('market-maker') && ids.has('treasury')) {

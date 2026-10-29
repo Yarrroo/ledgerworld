@@ -276,7 +276,7 @@ const accounts = computed(() => {
 const currencies = computed(() => new Set(accounts.value.map((a) => a.currency)).size)
 
 // T1: the operating account by default, or the one the URL names (?account=, or a deep link to
-// an account or to an obligation, which selects the account the obligation is on); a reload
+// an account or to an obligation, which selects the account the obligation is on); Refresh
 // keeps the choice.
 function linked () {
   const q = route.query

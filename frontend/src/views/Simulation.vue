@@ -11,6 +11,7 @@
           <div><dt>Provenance</dt><dd>{{ provenance(base.replay) }}</dd></div>
           <div><dt>Mode</dt><dd>{{ body ? (LABELS[body.mode] || body.mode) : '–' }}</dd></div>
         </dl>
+        <p v-if="handoff" class="lw-live__note lw-sim__handoff" data-test="handoff">{{ handoff }}</p>
         <button type="button" class="lw-button lw-button--quiet" data-test="settings" @click="settingsOpen = true">
           Scenario settings
         </button>
@@ -289,6 +290,22 @@ const checkpoints = computed(() => {
   return rounds.length ? rounds.map((r) => `round ${r}`).join(', ') : 'none forked yet'
 })
 const settingsOpen = ref(false)
+
+/** What a handoff from Treasury (account, snapshot) or Lending (scenario) carried, said back. */
+const handoff = computed(() => {
+  const q = route.query
+  const said = (key) => (typeof q[key] === 'string' && q[key]) || null
+  const [account, snapshot, scenario] = [said('account'), said('snapshot'), said('scenario')]
+  if (!account && !snapshot && !scenario) return ''
+  const parts = []
+  if (account) parts.push(`Rehearsing for account ${account}.`)
+  if (scenario) parts.push(`Scenario asked for: ${scenario}.`)
+  const runSnapshot = body.value?.snapshot_id
+  if (snapshot && runSnapshot && snapshot !== runSnapshot) {
+    parts.push(`The handoff was made on snapshot ${snapshot}; this run is on ${runSnapshot}.`)
+  }
+  return parts.join(' ')
+})
 
 // A phone shows the selected actor in a full-height sheet; wider screens show it inline.
 const phone = ref(false)

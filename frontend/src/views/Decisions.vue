@@ -217,21 +217,34 @@ const account = computed(() => {
   return accounts.find((a) => a.id.endsWith('/operating')) ?? accounts[0] ?? null
 })
 
-/** A policy's lowest minimum cash across its scenarios, the API's own metric. */
+/** A policy's lowest minimum cash across its scenarios, the API's own metric; Unknown when any
+ * scenario's is, since the lowest of them cannot then be known. */
 function lowestOf (rows) {
-  const known = rows.filter((r) => r.min_cash?.minor != null)
-  if (!known.length || known.length !== rows.length) return rows[0]?.min_cash ?? null
-  return known.reduce((a, b) => (b.min_cash.minor < a.min_cash.minor ? b : a)).min_cash
+  if (!rows.length) return null
+  if (rows.some((r) => r.min_cash?.minor == null)) {
+    return { minor: null, currency: rows[0].min_cash?.currency, status: 'unknown', as_of: null }
+  }
+  return rows.reduce((a, b) => (b.min_cash.minor < a.min_cash.minor ? b : a)).min_cash
 }
 
-/** The largest shortfall against the floor across a policy's scenarios, or why there is none. */
+/** The treasury floor, when it is in ``currency``; a floor in another currency is not compared. */
+const floorIn = (currency) => {
+  const floor = account.value?.floor ?? null
+  return floor && floor.currency === currency ? floor : null
+}
+
+/**
+ * The largest shortfall against the floor, over the scenarios whose floor the API says broke
+ * (`floor_kept` is the branch's own verdict; this screen never overrules it), or why there is none.
+ */
 function largestShort (rows) {
-  const floor = account.value?.floor
+  const floor = floorIn(rows[0].min_cash?.currency)
   if (!floor) return 'Not assessed'
-  const gaps = rows.map((r) => againstFloor(r.min_cash, floor))
-  if (gaps.some((g) => g.state !== 'kept' && g.state !== 'breached')) return 'Unknown'
-  const worst = Math.min(...gaps.map((g) => g.gap))
-  return worst < 0 ? formatMoney(-worst, floor.currency) : 'None'
+  const broke = rows.filter((r) => !r.floor_kept)
+  if (!broke.length) return 'None'
+  const gaps = broke.map((r) => againstFloor(r.min_cash, floor))
+  if (gaps.some((g) => g.state !== 'breached')) return 'Unknown'
+  return formatMoney(-Math.min(...gaps.map((g) => g.gap)), floor.currency)
 }
 
 const policies = computed(() => {
@@ -261,11 +274,12 @@ const gap = computed(() => {
   const rows = (state.body?.results ?? []).filter((r) => r.policy === 'no-action')
   if (!rows.length) return null
   const min = lowestOf(rows)
-  const floor = account.value?.floor ?? null
+  const floor = floorIn(min?.currency)
   return { min, floor, check: againstFloor(min, floor), unmet: rows.reduce((n, r) => n + r.obligations_unmet, 0) }
 })
 
 const hoursAt = (asOf, at) => Math.round((Date.parse(at) - Date.parse(asOf)) / 3_600_000)
+const timed = (row) => Number.isFinite(row.h) // a time that does not parse is left out, never "hNaN"
 
 /**
  * h0 cash, each deadline and arrival of the account, and the delayed receipt the family moves,
@@ -289,7 +303,7 @@ const timing = computed(() => {
       rows.push({ key: `f:${f.flow_id}`, h, what: `${f.kind} ${money(f.amount)} arrives (${f.flow_id})` })
     }
   }
-  return rows.sort((x, y) => x.h - y.h)
+  return rows.filter(timed).sort((x, y) => x.h - y.h)
 })
 
 const details = ref(false)
