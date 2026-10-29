@@ -17,6 +17,7 @@ import {
   computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, shallowReactive, shallowRef, watch
 } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { logoMark } from '../components/logo.js'
 import '@fontsource-variable/inter'
 import '@fontsource-variable/source-serif-4'
 import '../styles/tokens.css'
@@ -367,16 +368,6 @@ export function useFocusTarget (reading) {
 
 // ------------------------------------------------------------------------------ the shell
 
-/** The faceted LedgerWorld mark in the logo blue: a drawn stand-in until the vector asset lands. */
-function logo () {
-  return h('svg', { viewBox: '0 0 32 32', 'aria-hidden': 'true', focusable: 'false' }, [
-    h('path', { fill: 'currentColor', d: 'M16 2l12 7v14l-12 7-12-7V9z' }),
-    h('path', { fill: '#FFFFFF', 'fill-opacity': '0.38', d: 'M16 2l12 7-12 7-12-7z' }),
-    h('path', { fill: '#000000', 'fill-opacity': '0.24', d: 'M16 16l12-7v14l-12 7z' }),
-    h('path', { fill: '#FFFFFF', 'fill-opacity': '0.12', d: 'M16 16v14l-12-7V9z' })
-  ])
-}
-
 function icon (d) {
   return h('svg', {
     viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8',
@@ -587,7 +578,7 @@ export const ScreenShell = defineComponent({
       const time = formatTime(body?.as_of)
       const mode = body ? (LABELS[body.mode] || body.mode) : 'Provider mode not loaded'
       const brand = (attrs) => home({ class: 'lw-brand', 'aria-label': 'LedgerWorld, Overview', ...attrs },
-        [logo(), h('span', 'LedgerWorld')])
+        [logoMark(), h('span', 'LedgerWorld')])
 
       const topbar = h('header', { class: 'lw-topbar', inert: menu.value }, [
         brand(),
