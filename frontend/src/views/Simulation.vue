@@ -259,10 +259,12 @@ const { state, refresh } = useReading(async () => {
   const body = await request(`/runs/${encodeURIComponent(run)}`)
   // the treasury on the run's snapshot, read once per snapshot (not on every poll) and after the
   // run, never beside it: the offline app's SQLite refuses a ledger read beside a job-store read
-  if (treasury.value?.for !== body.snapshot_id) {
+  // a read that failed is read again on the next load; one that answered for another snapshot is kept
+  const key = `${body.snapshot_id}|${body.run_id}`
+  if (treasury.value?.for !== key || treasury.value.failed) {
     const t = await getTreasury().catch(() => null)
     const same = t && t.mode === body.mode && (t.snapshot_id === body.snapshot_id || observedBy(t.snapshot_id, body.run_id))
-    treasury.value = { for: body.snapshot_id, body: same ? t : null }
+    treasury.value = { for: key, failed: !t, body: same ? t : null }
   }
   return body
 })
@@ -342,7 +344,7 @@ const settingsOpen = ref(false)
 /** The pending flow the run's scenario family delays, from the treasury on the run's snapshot. */
 const delayed = computed(() => {
   const id = family.value?.params.flow_id
-  const t = treasury.value?.for === body.value?.snapshot_id ? treasury.value.body : null
+  const t = treasury.value?.for === `${body.value?.snapshot_id}|${body.value?.run_id}` ? treasury.value.body : null
   if (!id || !t) return null
   return t.accounts.flatMap((a) => a.buckets.pending_in ?? []).find((f) => f.flow_id === id) ?? null
 })

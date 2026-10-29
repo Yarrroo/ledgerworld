@@ -305,7 +305,7 @@ import { computed, nextTick, onUnmounted, reactive, shallowRef, watch } from 'vu
 import { RouterLink, useRoute } from 'vue-router'
 import HowWeKnow from '../components/HowWeKnow.vue'
 import {
-  ApiError, LABELS, PLAIN, PLANS, STATES, ScreenShell, decimalMinor, formatMoney, formatTime, getOverview, kindText,
+  ApiError, LABELS, PLAIN, PLANS, STATES, ScreenShell, decimalMinor, feesAcross, formatMoney, formatTime, getOverview, kindText,
   latestOnly, money, noDemoRun, request, useReading
 } from '../api/v1.js'
 
@@ -422,15 +422,7 @@ const selectedRows = computed(() =>
   (decisions.value?.results ?? []).filter((r) => r.policy === policy.value))
 const branchFees = computed(() =>
   selectedRows.value.map((r) => `${r.scenario_id} ${money(r.funding_cost)}`).join(' · ') || 'None')
-const scenarioCost = computed(() => {
-  const rows = selectedRows.value
-  if (!rows.length) return 'None'
-  const currency = rows[0].funding_cost.currency
-  if (rows.some((r) => r.funding_cost.currency !== currency)) return 'Mixed currencies; not summed'
-  const total = rows.reduce((sum, r) => sum + r.funding_cost.minor, 0)
-  return `${formatMoney(total, currency)} across ${rows.length} what-if${rows.length === 1 ? '' : 's'}; ` +
-    'the plan\'s own fee is set at review'
-})
+const scenarioCost = computed(() => (selectedRows.value.length ? feesAcross(selectedRows.value) : 'None'))
 
 // ------------------------------------------------------------------ approve, then execute
 
@@ -942,9 +934,12 @@ const incidents = computed(() => {
 
 /**
  * Money a set of legs moved, from their provider receipts ("USD 10,000.00"), one sum per
- * currency; '' when no leg of that kind is there, "an unknown amount" when a receipt is missing.
+ * currency; '' when no leg of that kind is there, "an unknown amount" when a receipt does not read.
+ * Ledger-only legs carry no receipt and are counted apart (`ledgerOnly`).
  */
+const ledgerOnly = (leg) => !leg.receipt && !leg.provider_id
 function movedWords (legs) {
+  legs = legs.filter((l) => !ledgerOnly(l))
   if (!legs.length) return ''
   const sums = new Map()
   for (const leg of legs) {
@@ -964,6 +959,10 @@ function movedWords (legs) {
 const lead = computed(() => {
   const body = execution.value
   if (!body) {
+    // sent from this tab and not recorded yet: never "nothing moves", which invites a second send
+    if (notFound.value && followedId.value && followedId.value === activeId.value) {
+      return 'The plan you sent is not recorded yet; reading again. Do not send it twice.'
+    }
     if (activeId.value && !notFound.value) {
       if (!pollError.value) return 'Reading what the plan you sent moved.'
       return `We could not read what the plan you sent moved yet; ${rereading.value ? 'reading again' : 'refresh to try again'}.`
@@ -982,8 +981,14 @@ const lead = computed(() => {
   if (checked < n) return `The plan you approved is under way: ${checked} of ${n} payments checked against your books so far.`
   const moved = movedWords(body.legs.filter((l) => INFLOW.has(l.kind)))
   const paid = movedWords(body.legs.filter((l) => OUTFLOW.has(l.kind)))
+  const local = body.legs.filter(ledgerOnly).length
   const parts = [moved && `moved ${moved} in`, paid && `paid ${paid} out`].filter(Boolean)
-  const what = parts.length ? parts.join(' and ') : `made its ${n === 1 ? 'payment' : 'payments'}`
+  let what = parts.length ? parts.join(' and ') : ''
+  if (local) {
+    const entries = `${local} ledger-only entr${local === 1 ? 'y' : 'ies'}`
+    what = what ? `${what}, plus ${entries}` : `booked ${entries}`
+  }
+  what = what || `made its ${n === 1 ? 'payment' : 'payments'}`
   return `The plan you approved ${what} — ${n === 2 ? 'both ' : n > 2 ? 'all ' : ''}checked against your books.`
 })
 

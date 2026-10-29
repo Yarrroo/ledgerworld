@@ -187,7 +187,7 @@ import HowWeKnow from '../components/HowWeKnow.vue'
 import { familyOf, observedBy, worldFor } from '../api/world.js'
 import {
   FLOOR_WORDS, LABELS, OWED, PLAIN, PLANS, PLANS_DOING, STATES, ScreenShell, againstFloor, dayText,
-  formatMoney, getOverview, getTreasury, metricText, money, noDemoRun, request, routeExists, useReading
+  feesAcross, formatMoney, getOverview, getTreasury, metricText, money, noDemoRun, request, routeExists, useReading
 } from '../api/v1.js'
 
 const ORDER = ['no-action', 'fixed-reserve', 'integrated']
@@ -217,15 +217,6 @@ const reviewable = computed(() => state.status === 'loaded' && state.body.status
 const family = computed(() => familyOf(state.body?.cohort))
 
 const floorOf = (r) => (r.floor_kept ? 'kept' : 'breached')
-
-/** One policy's funding cost summed over its scenarios: integers, one currency, or say so. */
-function scenarioCost (rows) {
-  const currency = rows[0].funding_cost.currency
-  if (rows.some((r) => r.funding_cost.currency !== currency)) return 'Mixed currencies; not summed'
-  const total = rows.reduce((sum, r) => sum + r.funding_cost.minor, 0)
-  return `${formatMoney(total, currency)} across ${rows.length} what-if${rows.length === 1 ? '' : 's'}; ` +
-    'the plan\'s own fee is set at review'
-}
 
 /** The treasury's operating account, whose floor the policies are judged against. */
 const account = computed(() => {
@@ -272,7 +263,7 @@ const policies = computed(() => {
       rows,
       unmet: rows.reduce((n, r) => n + r.obligations_unmet, 0),
       breached: rows.filter((r) => !r.floor_kept).length,
-      cost: rows.length ? scenarioCost(rows) : '',
+      cost: rows.length ? feesAcross(rows) : '',
       short: rows.length ? largestShort(rows) : '',
       min: rows.length ? metricText(lowestOf(rows)) : ''
     }
@@ -294,12 +285,18 @@ const gap = computed(() => {
   return { min, floor, check: againstFloor(min, floor), unmet: rows.reduce((n, r) => n + r.obligations_unmet, 0) }
 })
 
-/** " on 2 Jan": the first payment still owed on the operating account, or '' when none is read. */
+/**
+ * " on 2 Jan": the first payment still owed on the operating account from the treasury's as of on
+ * (a missing state is open, as in projectionTerms), by time, not by string; '' when none is read.
+ */
 const firstDue = computed(() => {
+  const t = state.body?.treasury
   const a = account.value
-  const due = (state.body?.treasury?.obligations ?? [])
-    .filter((o) => o.account === a?.id && OWED.has(o.state)).map((o) => o.due_at).filter(Boolean).sort()
-  return due.length ? ` on ${dayText(due[0])}` : ''
+  const from = Date.parse(t?.as_of)
+  const due = (t?.obligations ?? [])
+    .filter((o) => o.account === a?.id && OWED.has(o.state ?? 'open'))
+    .map((o) => Date.parse(o.due_at)).filter((at) => Number.isFinite(at) && !(at < from)).sort((x, y) => x - y)
+  return due.length ? ` on ${dayText(new Date(due[0]).toISOString())}` : ''
 })
 
 /** The selected plan's fee in a sentence ("a USD 800.00 fee"): one what-if's, or the largest of several. */
@@ -333,9 +330,18 @@ const lead = computed(() => {
   }
   const chosen = policies.value.find((p) => p.policy === b.selected)
   if (!chosen) return first || 'No plan is chosen yet.'
-  const second = chosen.policy === 'no-action'
-    ? 'No plan needs to move money.'
-    : `${PLANS_DOING[chosen.policy]} keeps you covered for ${feeWords(chosen.rows)}.`
+  // the backend's pick is the best ranked, not always a covering one: its own rows say which
+  const n = chosen.rows.length
+  let second
+  if (chosen.policy === 'no-action') {
+    second = chosen.breached || chosen.unmet ? 'No plan does better.' : 'No plan needs to move money.'
+  } else if (chosen.breached) {
+    second = `${PLANS[chosen.policy]} is best, yet short in ${chosen.breached} of ${n} what-if${n === 1 ? '' : 's'}.`
+  } else if (chosen.unmet) {
+    second = `${PLANS[chosen.policy]} is best, yet misses ${chosen.unmet} payment${chosen.unmet === 1 ? '' : 's'}.`
+  } else {
+    second = `${PLANS_DOING[chosen.policy]} keeps you covered for ${feeWords(chosen.rows)}.`
+  }
   return `${first} ${second}`.trim()
 })
 

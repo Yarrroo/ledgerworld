@@ -13,37 +13,22 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
+import { $, fmt, folded, open, plainHeadings, read, technical, words } from './copy'
 import { demoRunId, settled } from './routes'
 
-const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 const FAMILY = (id: string) => JSON.parse(readFileSync(join(__dirname, `../../scenarios/families/${id}.json`), 'utf-8'))
 const PLANS: Record<string, string> = { 'no-action': 'Do nothing', 'fixed-reserve': 'Keep a fixed buffer', integrated: 'Borrow just enough' }
 const DOING: Record<string, string> = { 'fixed-reserve': 'Keeping a fixed buffer', integrated: 'Borrowing just enough' }
 const RIPPLE = 'Watch how it ripples through your partners, round by round.'
 
-interface Money { minor: number, currency: string }
-/** "USD 70,000.00", as the screens format integer minor units. */
-const fmt = (m: Money) => `${m.currency} ${(m.minor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
 /** "2 Jan", the UTC day of an instant. */
+/** "10 days", "1 day", "36 hours": a delay as the lead says it. */
+const delayWords = (h: number) => (h && h % 24 === 0 ? `${h / 24} day${h === 24 ? '' : 's'}` : `${h} hour${h === 1 ? '' : 's'}`)
+/** The first payment still owed from `asOf` on (a missing state is open), for the lead's day. */
+const firstDue = (obligations: any[], account: string, asOf: string) => obligations
+  .filter((o) => o.account === account && ['open', 'missed'].includes(o.state ?? 'open') && Date.parse(o.due_at) >= Date.parse(asOf))
+  .map((o) => o.due_at).sort((a, b) => Date.parse(a) - Date.parse(b))[0]
 const day = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })
-
-/** The words a finance lead should not meet in a heading or a lead sentence (COPY.md rule 2). */
-const JARGON = /\b(snapshot|branch|cohort|checkpoint|intent|provenance|policy|policies)\b/i
-const SYMBOL = /K_p|\((S|P)\)|(^|\s)(P|S)(?=[\s,.;:]|$)/
-const technical = (text: string) => JARGON.test(text) || SYMBOL.test(text)
-/** Words in a sentence, an amount ("USD 20,000.00") counting as one and a dash as none. */
-const words = (text: string) => text.replace(/\b[A-Z]{3} (?=[\d-])/g, '').split(/\s+/).filter((w) => /\w/.test(w)).length
-
-async function read (page: Page, path: string): Promise<any> {
-  const reply = await page.request.get(`/api/v1${path}`)
-  expect(reply.status(), `GET /api/v1${path}`).toBe(200)
-  return reply.json()
-}
-
-async function open (page: Page, path: string): Promise<void> {
-  await page.goto(path)
-  await settled(page)
-}
 
 /** The lead: short, plain, visible, before the screen's figures and panels. */
 async function leads (page: Page): Promise<string> {
@@ -62,15 +47,6 @@ async function leads (page: Page): Promise<string> {
   return text
 }
 
-/** Every visible section heading is in plain words. */
-async function plainHeadings (page: Page): Promise<void> {
-  for (const h of await page.locator('main.lw-main section h2').all()) {
-    if (!(await h.isVisible())) continue
-    const text = (await h.textContent())!.trim()
-    expect(technical(text), `a heading uses a technical term: ${text}`).toBe(false)
-  }
-}
-
 /** The honesty labels, visible in plain words. */
 async function honest (page: Page, whatIf: boolean): Promise<void> {
   await expect($(page, 'plain-mode')).toHaveText(/^(Simulated bank connection|Sandbox bank)$/)
@@ -79,24 +55,6 @@ async function honest (page: Page, whatIf: boolean): Promise<void> {
     await expect($(page, 'hypothetical')).toHaveText('What-if')
     await expect($(page, 'hypothetical')).toBeVisible()
   }
-}
-
-/** A How we know disclosure: closed, keyboard-reachable, holding `facts`. */
-async function folded (page: Page, test: string, facts: string[]): Promise<void> {
-  const how = $(page, test)
-  await expect(how).toHaveCount(1)
-  await expect(how).not.toHaveAttribute('open', '')
-  await expect(how.locator('.lw-calc__body')).not.toBeVisible()
-  const summary = how.locator('summary')
-  await expect(summary).toHaveText('How we know')
-  await summary.focus()
-  await expect(summary).toBeFocused()
-  await page.keyboard.press('Enter')
-  await expect(how).toHaveAttribute('open', '')
-  for (const fact of facts) await expect(how.locator('.lw-calc__body')).toContainText(fact)
-  expect((await summary.boundingBox())!.height, 'How we know is shorter than 44 px').toBeGreaterThanOrEqual(44)
-  await page.keyboard.press('Enter')
-  await expect(how).not.toHaveAttribute('open', '')
 }
 
 test('Simulation: the what-if from the treasury and the family, ids one click down', async ({ page, baseURL, request }) => {
@@ -112,7 +70,7 @@ test('Simulation: the what-if from the treasury and the family, ids one click do
   if (id === 'delayed-receipt') {
     const { params } = FAMILY(id)
     const flow = treasury.accounts.flatMap((a: any) => a.buckets.pending_in).find((f: any) => f.flow_id === params.flow_id)
-    expect(text).toBe(`What if your ${fmt(flow.amount)} ${flow.kind.replace(/_/g, ' ')} arrives ${params.delay_h / 24} days late? ${RIPPLE}`)
+    expect(text).toBe(`What if your ${fmt(flow.amount)} ${flow.kind.replace(/_/g, ' ')} arrives ${delayWords(params.delay_h)} late? ${RIPPLE}`)
   } else {
     expect(text).toMatch(/^What (if|happens)/)
     expect(text).toContain(RIPPLE)
@@ -142,8 +100,7 @@ test('Decisions: what doing nothing costs, the plan that keeps you covered and i
   const none = api.results.filter((r: any) => r.policy === 'no-action')
   const lowest = none.reduce((a: any, b: any) => (b.min_cash.minor < a.min_cash.minor ? b : a)).min_cash
   if (api.status === 'selected' && lowest.minor < account.floor.minor) {
-    const due = treasury.obligations.filter((o: any) => o.account === account.id && ['open', 'missed'].includes(o.state))
-      .map((o: any) => o.due_at).sort()[0]
+    const due = firstDue(treasury.obligations, account.id, treasury.as_of)
     expect(text).toContain(`Doing nothing leaves you ${fmt({ minor: account.floor.minor - lowest.minor, currency: lowest.currency })} ` +
       `under your safety minimum${due ? ` on ${day(due)}` : ''}.`)
   }
@@ -200,9 +157,9 @@ test('Execution: what moved in and out, checked against your books; ids one clic
   // a read the offline app answers 500 (two reads at once on its SQLite file) is read again in 5 s
   await expect($(page, 'lead')).toHaveText(/^The plan you approved /, { timeout: 15_000 })
   const text = await leads(page)
-  const sum = (kinds: string[]) => execution.legs.filter((l: any) => kinds.includes(l.kind)).map((l: any) => receiptMoney(l.receipt))
+  const sum = (kinds: string[]) => execution.legs.filter((l: any) => kinds.includes(l.kind) && l.receipt).map((l: any) => receiptMoney(l.receipt))
   const [inn, out] = [sum(['advance']), sum(['payout', 'repayment'])]
-  if (execution.legs.every((l: any) => l.reconciled) && inn.length === 1 && out.length === 1 && execution.legs.length === 2) {
+  if (execution.legs.every((l: any) => l.reconciled && l.receipt) && inn.length === 1 && out.length === 1 && execution.legs.length === 2) {
     expect(text).toBe(`The plan you approved moved ${inn[0]} in and paid ${out[0]} out — both checked against your books.`)
   } else {
     expect(text).toMatch(/^The plan you approved /)
@@ -250,5 +207,79 @@ test('Execution: before anything is sent, and when something needs a look', asyn
   await page.route('**/api/v1/executions/**', (route) => route.fulfill({ json: { ...execution, incidents: [incident] } }))
   await open(page, '/execution')
   expect(await leads(page)).toBe('Something needs a look: 1 problem on the plan you sent; nothing is resent.')
+  expect(writes).toEqual([])
+})
+
+test('Simulation: a treasury read that failed is read again, and the amount comes back', async ({ page, baseURL, request }) => {
+  const writes = await readOnly(page, baseURL!)
+  const runId = await demoRunId(request)
+  let reads = 0
+  await page.route('**/api/v1/treasury', (route) => (reads++ === 0
+    ? route.fulfill({ status: 500, json: { code: 'internal', message: 'busy' } })
+    : route.continue()))
+  await open(page, `/simulation?run_id=${runId}`)
+  await expect($(page, 'lead')).toContainText('What if your expected payment arrives')
+  await $(page, 'refresh').click()
+  await settled(page)
+  await expect($(page, 'lead')).toHaveText(/^What if your [A-Z]{3} [\d,]+\.\d\d \w/)
+  expect(writes).toEqual([])
+})
+
+test('Decisions: the chosen plan that still falls short says so; the day is the first payment still ahead', async ({ page, baseURL, request }) => {
+  const writes = await readOnly(page, baseURL!)
+  const runId = await demoRunId(request)
+  const api = await read(page, `/decisions/${runId}`)
+  const treasury = await read(page, '/treasury')
+  const account = treasury.accounts.find((a: any) => a.id.endsWith('/operating'))
+  const due = firstDue(treasury.obligations, account.id, treasury.as_of)
+
+  // a missed payment before today and obligations with no state: the day is still the next one due
+  const before = new Date(Date.parse(treasury.as_of) - 86_400_000).toISOString()
+  const changed = structuredClone(treasury)
+  changed.obligations = [
+    ...changed.obligations.map(({ state, ...o }: any) => o),
+    { ...treasury.obligations[0], account: account.id, obligation_id: 'late-x', due_at: before, state: 'missed' }
+  ]
+  await page.route('**/api/v1/treasury', (route) => route.fulfill({ json: changed }))
+
+  // the backend's pick still breaks the floor in one what-if
+  const short = structuredClone(api)
+  short.selected = 'fixed-reserve'
+  for (const r of short.results) if (r.policy === 'fixed-reserve') r.floor_kept = false
+  const n = short.results.filter((r: any) => r.policy === 'fixed-reserve').length
+  await page.route(`**/api/v1/decisions/${runId}`, (route) => route.fulfill({ json: short }))
+  await open(page, `/decisions?run_id=${runId}`)
+  const text = await leads(page)
+  if (due) expect(text).toContain(`under your safety minimum on ${day(due)}.`)
+  expect(text).toMatch(new RegExp(`Keep a fixed buffer is best, yet short in ${n} of ${n} what-ifs?\\.$`))
+  expect(text).not.toContain('keeps you covered')
+  await page.unroute(`**/api/v1/decisions/${runId}`)
+
+  // doing nothing chosen while it breaks the floor: no "needs no money" beside the shortfall
+  const none = structuredClone(api)
+  none.selected = 'no-action'
+  await page.route(`**/api/v1/decisions/${runId}`, (route) => route.fulfill({ json: none }))
+  await open(page, `/decisions?run_id=${runId}`)
+  const lead = await leads(page)
+  if (/under your safety minimum/.test(lead)) expect(lead).toMatch(/No plan does better\.$/)
+  expect(writes).toEqual([])
+})
+
+test('Execution: a ledger-only leg is named as a ledger entry, never an unknown amount', async ({ page, baseURL }) => {
+  const writes = await readOnly(page, baseURL!)
+  const overview = await read(page, '/overview')
+  const execution = await read(page, `/executions/${overview.demo.execution_id}`)
+  const legs = execution.legs.filter((l: any) => l.receipt)
+  const ledger = { leg_id: `${legs[0].leg_id}-repayment`, kind: 'repayment', label: 'repayment (ledger only)', state: 'settled',
+    reconciled: true, journal_id: 'j-ledger-only', provider_id: null, request_id: null, receipt: null }
+  await page.route('**/api/v1/executions/**', (route) => route.fulfill({ json: { ...execution, legs: [...legs, ledger] } }))
+  await open(page, '/execution')
+  const text = await leads(page)
+  expect(text).not.toContain('unknown amount')
+  const inn = legs.filter((l: any) => l.kind === 'advance').map((l: any) => receiptMoney(l.receipt))
+  const out = legs.filter((l: any) => ['payout', 'repayment'].includes(l.kind)).map((l: any) => receiptMoney(l.receipt))
+  if (inn.length === 1 && out.length === 1) {
+    expect(text).toBe(`The plan you approved moved ${inn[0]} in and paid ${out[0]} out, plus 1 ledger-only entry — all checked against your books.`)
+  }
   expect(writes).toEqual([])
 })
