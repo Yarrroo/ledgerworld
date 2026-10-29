@@ -75,7 +75,9 @@ const props = defineProps({
   floor: { type: Object, default: null },
   lowAt: { type: String, default: null }, // the API's coverage.at: where P is lowest, first reached
   asOf: { type: String, required: true },
-  currency: { type: String, required: true }
+  currency: { type: String, required: true },
+  // the horizon in hours when the points stop before it (P holds flat after its last move)
+  horizon: { type: Number, default: null }
 })
 
 const frame = ref(null)
@@ -130,7 +132,7 @@ const yTicks = computed(() => {
   for (let v = bottom; v <= top; v += step) ticks.push(v)
   return ticks
 })
-const xEnd = computed(() => Math.max(1, ...props.points.map((p) => hoursOf(p.t))))
+const xEnd = computed(() => Math.max(1, props.horizon ?? 0, ...props.points.map((p) => hoursOf(p.t))))
 const xTicks = computed(() => {
   const step = xEnd.value > 48 ? 12 : 6
   const ticks = []
@@ -255,7 +257,7 @@ const lowBox = computed(() => {
 })
 
 const step = (pts) => pts.map((p, n) => (n ? `H${p.px}V${p.py}` : `M${p.px},${p.py}`)).join('')
-const line = computed(() => step(valued.value))
+const line = computed(() => step(valued.value) + (props.horizon && valued.value.length ? `H${x(xEnd.value)}` : ''))
 const area = computed(() => {
   const pts = valued.value
   if (!pts.length) return ''

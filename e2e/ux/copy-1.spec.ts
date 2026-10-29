@@ -128,16 +128,17 @@ test('Treasury: in the bank, set aside, free to spend, from the selected account
     expect(text).toContain(`so ${fmt(account.spendable)}`)
     expect(text).toMatch(/is free to spend\.$/)
   }
-  await expect(page.locator('#spend-heading')).toHaveText('Free to spend now')
-  await expect($(page, 'bucket-settled').locator('summary')).toContainText('Cash in the bank')
-  await expect($(page, 'bucket-reserved').locator('summary')).toContainText('Set aside')
-  await expect($(page, 'floor').locator('.lw-tile__label')).toHaveText('Lowest point ahead')
+  // the mockup's words (MATCH.md 02)
+  await expect(page.locator('#spend-heading')).toHaveText('Spendable is not settled')
+  await expect($(page, 'bucket-settled').locator('td').first()).toHaveText('Settled')
+  await expect($(page, 'bucket-reserved').locator('td').first()).toHaveText(b.reserved.minor ? /^Reserved for / : 'Reserved')
+  await expect($(page, 'floor').locator('dt').first()).toContainText('Minimum projected')
   await plainHeadings(page)
   await folded(page, 'how-treasury', [body.snapshot_id, 'spendable S', 'reserve floor'])
   await folded(page, 'how-spendable', [account.id, `authority ${account.authority}`])
   await tipped($(page, 'rehearse-tip'), [body.snapshot_id]) // the hand-off to Simulation names its snapshot
   // the hooks the older checks and the judge path read are all still there
-  for (const hook of ['spendable', 'spend-calc', 'buckets', 'obligations', 'coverage', 'floor-status', 'timeline', 'rehearse']) {
+  for (const hook of ['spendable', 'spend-calc', 'buckets', 'obligations', 'coverage', 'floor-status', 'outlook', 'rehearse']) {
     await expect($(page, hook)).toHaveCount(1)
   }
   expect(writes).toEqual([])
@@ -151,9 +152,9 @@ test('Lending: what the lender can still lend, then how; K_p one click down', as
   const kp = body.capacity.K_p
   if (kp.minor === null) expect(text).toMatch(/unknown/)
   else expect(text).toMatch(new RegExp(`^Your lender can still lend you up to ${fmt(kp).replace(/[$.]/g, '\\$&')}`))
-  await expect(page.locator('#capacity-heading')).toHaveText('What the lender can still lend')
-  await expect($(page, 'parts').locator('[data-part="K_p"]')).toContainText('Left to lend')
-  await expect($(page, 'parts').locator('[data-part="settled_known"]')).toContainText('Cash the lender holds')
+  await expect(page.locator('#capacity-heading')).toHaveText('Available pool capacity')
+  await expect($(page, 'parts').locator('[data-part="K_p"]')).toContainText('Available capacity')
+  await expect($(page, 'parts').locator('[data-part="settled_known"]')).toContainText('Settled known')
   await plainHeadings(page)
   await expect($(page, 'authority')).not.toBeVisible()
   await folded(page, 'how-lending', [body.snapshot_id, 'K_p', `Balance authority ${body.capacity.authority}`])

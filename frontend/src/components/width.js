@@ -1,5 +1,5 @@
 /**
- * The rendered width of an element, followed while it changes: a drawing (CashChart, WorldMap)
+ * The rendered width of an element, followed while it changes: a drawing (WorldMap)
  * lays itself out in real pixels, so its labels stay readable at every width. `min` and
  * `fallback` bound it before the first measurement and where ResizeObserver is absent.
  */

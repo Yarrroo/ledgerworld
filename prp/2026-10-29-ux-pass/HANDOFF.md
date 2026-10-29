@@ -140,7 +140,7 @@ Panel identifiers are the handoff contract. All secondary surfaces inherit the s
 
 **Content and data:** Default operating account; show all returned treasury accounts by currency and freshness. Never aggregate mixed currencies into a dollar total.
 
-**Interaction and alternate state:** Select account updates bucket table, calculation and cash path together. Empty accounts has a descriptive empty state.
+**Interaction and alternate state:** Select account updates bucket table, calculation and cash path together. Empty accounts has a descriptive empty state. As built to mockup 02 (MATCH.md): the selector shows only when the API serves more than one account.
 
 ### T2 / Cash buckets
 
@@ -164,7 +164,7 @@ Panel identifiers are the handoff contract. All secondary surfaces inherit the s
 
 **Content and data:** Minimum P $40k h40; floor $30k; headroom $10k; Floor held. Chart and text table share the same API points.
 
-**Interaction and alternate state:** Focus point reveals calculation at that instant. Separate projection from spendable-now.
+**Interaction and alternate state:** Focus point reveals calculation at that instant. Separate projection from spendable-now. As built to mockup 02: each chart point is a tooltip control naming its hour, P and what moves it, in place of a separate point table; the lowest point's calculation sits in View calculation.
 
 ### T6 / Scenario handoff
 
@@ -192,7 +192,7 @@ Panel identifiers are the handoff contract. All secondary surfaces inherit the s
 
 **Content and data:** Pool -> Treasury via adv-a; Pool -> Borrower B via line-b; Pool -> Exchange as a $15k exposure. Treasury also depends on a $15k venue withdrawal.
 
-**Interaction and alternate state:** Select node or edge opens account/contract detail. Arrows and exposure labels follow the integrity appendix.
+**Interaction and alternate state:** Select node or edge opens account/contract detail. Arrows and exposure labels follow the integrity appendix. As built to mockup 03: that detail is each node's and link's tooltip; one node per party and one link per pair of parties.
 
 ### L4 / Freeze scenario
 
@@ -204,7 +204,7 @@ Panel identifiers are the handoff contract. All secondary surfaces inherit the s
 
 **Content and data:** adv-a principal $10k; fee 8% = $800; total owed $10,800; repayment 15% of observed revenue. Terms are not proof of disbursement.
 
-**Interaction and alternate state:** Open facility shows parties, status, outstanding and revenue evidence from API. View repayments shows observed receipts and actual applied amounts, not a forecast.
+**Interaction and alternate state:** Open facility shows parties, status, outstanding and revenue evidence from API. View repayments shows observed receipts and actual applied amounts, not a forecast. As built to mockup 03: the facility terms table (no revenue-share column: the API serves no such field) and View repayment schedule, outstanding and observed revenue per facility.
 
 ### L6 / Plan handoff
 

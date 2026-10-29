@@ -11,7 +11,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { onPage as seen } from './visible.js' // what a reader sees, closed tooltips and dialogs left out
 import Decisions from '../../src/views/Decisions.vue'
 import Simulation from '../../src/views/Simulation.vue'
-import CashChart from '../../src/components/CashChart.vue'
+import CashOutlook from '../../src/components/CashOutlook.vue'
 import { worldFor } from '../../src/api/world.js'
 
 const Stub = { render: () => h('div', 'stub') }
@@ -114,22 +114,25 @@ describe('the world file and the cash chart claim nothing they do not hold', () 
     expect(edges.find((e) => e.from === 'treasury').account).toBeNull()
   })
 
-  it('the chart marks no minimum when any point is unknown, and draws in time order', async () => {
-    const w = mount(CashChart, {
+  it('the chart marks no minimum when any point is unknown, and draws no dot for it', async () => {
+    const w = mount(CashOutlook, {
       props: {
         asOf: '2026-01-01T00:00:00Z',
+        currency: 'USD',
         floor: usd(3000000),
+        lowAt: null, // Treasury names no lowest point when any point is unknown
         points: [
-          { t: '2026-01-03T00:00:00Z', value: usd(5000000) },
-          { t: '2026-01-01T00:00:00Z', value: usd(1000000) },
-          { t: '2026-01-02T00:00:00Z', value: usd(null, 'unknown') }
+          { t: '2026-01-01T00:00:00Z', value: usd(1000000), events: [] },
+          { t: '2026-01-02T00:00:00Z', value: usd(null, 'unknown'), events: [] },
+          { t: '2026-01-03T00:00:00Z', value: usd(5000000), events: [] }
         ]
       }
     })
     await flushPromises()
-    expect(w.findAll('.is-low')).toHaveLength(0)
-    expect(w.findAll('[data-test="chart-point"]').map((p) => p.attributes('data-t')))
-      .toEqual(['2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z'])
+    expect(w.find('[data-test="outlook-low-label"]').exists()).toBe(false)
+    expect(w.findAll('circle.lw-outlook__dot')).toHaveLength(2)
+    expect(w.findAll('[data-test="outlook-point"]').map((p) => p.attributes('data-t')))
+      .toEqual(['2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', '2026-01-03T00:00:00Z'])
   })
 })
 
