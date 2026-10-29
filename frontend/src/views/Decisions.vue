@@ -200,7 +200,8 @@ import Tip from '../components/Tip.vue'
 import { familyOf, observedBy, worldFor } from '../api/world.js'
 import {
   FLOOR_WORDS, LABELS, OWED, PLANS, PLANS_DOING, STATES, ScreenShell, againstFloor, dayText,
-  feesAcross, formatMoney, formatTime, getOverview, getTreasury, metricText, money, noDemoRun, request, routeExists, useReading
+  feesAcross, formatMoney, formatTime, getOverview, getTreasury, metricText, money, noDemoRun, replayed as replayedIn, request,
+  routeExists, useReading
 } from '../api/v1.js'
 
 const ORDER = ['no-action', 'fixed-reserve', 'integrated']
@@ -224,7 +225,7 @@ watch(() => route.query.run_id, () => refresh())
 
 /** A reverse-stress search finds a breaking path: not a forecast, and not a decision. */
 const search = computed(() => /reverse[_-]stress/.test(state.body?.cohort ?? ''))
-const replayed = computed(() => state.body?.results.some((r) => r.replay))
+const replayed = computed(() => replayedIn(state.body))
 const reviewable = computed(() => state.status === 'loaded' && state.body.status === 'selected' &&
   !search.value && routeExists(router, '/execution'))
 const family = computed(() => familyOf(state.body?.cohort))

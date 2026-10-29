@@ -268,6 +268,22 @@ describe('Decisions: policies side by side', () => {
     expect(review.attributes('href')).toBe('/execution?run_id=run-1&review=1')
     expect(tipOf(review)).toContain('worked out again on today\'s real figures')
   })
+
+  it('a comparison with any replayed result says Replay on the page, outside every tooltip', async () => {
+    const body = decisionsBody()
+    body.results[0].replay = true // one replayed branch among fresh ones; the body itself carries no replay
+    serve({ 'GET /overview': overview(), 'GET /decisions/run-1': body })
+    const w = await open(Decisions, '/decisions')
+    expect(text(w, 'context-line')).toBe('Snapshot lf1 · USD · Replay')
+    expect(bare(w.get('[data-test="mode"]'))).toContain('Replay')
+  })
+
+  it('a fresh comparison carries no Replay label in the header', async () => {
+    serve({ 'GET /overview': overview(), 'GET /decisions/run-1': decisionsBody() })
+    const w = await open(Decisions, '/decisions')
+    expect(text(w, 'context-line')).toBe('Snapshot lf1 · USD · Synthetic data')
+    expect(text(w, 'mode')).not.toContain('Replay')
+  })
 })
 
 // -------------------------------------------------------------------------------- Execution

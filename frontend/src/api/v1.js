@@ -352,9 +352,16 @@ export const PLAIN = {
 /** The agents' model kind (/health `model`) in the cash owner's words; its own keyspace, never a mode's. */
 export const AGENTS = { scripted: 'Scripted agents', live: 'Live AI agents' }
 
+/**
+ * Whether a response's figures were replayed: the body's own flag, or any of its results' (a
+ * Decisions comparison carries replay per branch, never on the body).
+ */
+export const replayed = (body) =>
+  Boolean(body?.replay || (Array.isArray(body?.results) && body.results.some((r) => r?.replay)))
+
 /** The bar's tag for figures that are not the observed snapshot: "What-if", "Replay", or both. */
 export const contextTag = (body) =>
-  [body?.replay && PLAIN.replay, body?.branch_id && PLAIN.branch].filter(Boolean).join(' · ')
+  [replayed(body) && PLAIN.replay, body?.branch_id && PLAIN.branch].filter(Boolean).join(' · ')
 
 export const FLOOR_WORDS = {
   kept: 'Above your safety minimum',
@@ -423,7 +430,7 @@ export function lastSeen (...metrics) {
 
 /** What a response's figures are: a replay, a hypothetical branch, or the observed snapshot. */
 export function sourceLabel (body) {
-  if (body.replay) {
+  if (replayed(body)) {
     const of = body.branch_id ? `${LABELS.branch} ${body.branch_id}` : (body.run_id ?? body.snapshot_id)
     return `${LABELS.replay} · ${of}`
   }
@@ -586,7 +593,7 @@ export function currencyOf (body) {
 
 /** The figures' kind for the header's second line: the observed snapshot is synthetic data. */
 export function dataKind (body) {
-  if (body?.replay) return PLAIN.replay
+  if (replayed(body)) return PLAIN.replay
   if (body?.branch_id) return 'What-if branch'
   return 'Synthetic data'
 }

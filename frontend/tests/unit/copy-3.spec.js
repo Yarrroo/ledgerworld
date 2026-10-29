@@ -3,7 +3,7 @@
  * by name, and the context bar's tag for figures that are not the observed snapshot.
  */
 import { describe, expect, it } from 'vitest'
-import { AGENTS, PLAIN, accountName, asOfText, contextTag, hoursFrom, projectionTerms } from '../../src/api/v1.js'
+import { AGENTS, PLAIN, accountName, asOfText, contextTag, dataKind, hoursFrom, projectionTerms, sourceLabel } from '../../src/api/v1.js'
 
 const AS_OF = '2026-01-01T00:00:00Z'
 
@@ -29,6 +29,15 @@ describe('copy pass 3', () => {
     expect(contextTag({ branch_id: 'b1' })).toBe(PLAIN.branch)
     expect(contextTag({ replay: true })).toBe(PLAIN.replay)
     expect(contextTag({ snapshot_id: 'demo-world' })).toBe('')
+  })
+
+  it('tags a comparison Replay when any of its results was replayed, though its body carries no replay', () => {
+    const results = [{ branch_id: 'b1', replay: false }, { branch_id: 'b2', replay: true }]
+    expect(contextTag({ results })).toBe(PLAIN.replay)
+    expect(dataKind({ results })).toBe(PLAIN.replay)
+    expect(sourceLabel({ run_id: 'run-1', results })).toBe(`${PLAIN.replay} · run-1`)
+    expect(contextTag({ results: [{ replay: false }] })).toBe('')
+    expect(dataKind({ results: [{ replay: false }] })).toBe('Synthetic data')
   })
 
   it('says what P leaves out as due after the point, never as counted later', () => {
