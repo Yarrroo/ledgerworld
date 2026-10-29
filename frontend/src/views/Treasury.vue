@@ -39,8 +39,11 @@
       </p>
     </section>
 
-    <div v-if="account" class="lw-tre" :data-account="account.id" :data-focus="`account:${account.id}`"
-         :class="{ 'lw-row--focus': focus === `account:${account.id}` }">
+    <!-- with one account (no selector) the panel itself is a deep link's target -->
+    <div v-if="account" class="lw-tre" :data-account="account.id"
+         :data-focus="accounts.length === 1 ? `account:${account.id}` : undefined"
+         :tabindex="accounts.length === 1 ? -1 : undefined"
+         :class="{ 'lw-row--focus': accounts.length === 1 && focus === `account:${account.id}` }">
       <div class="lw-tre__main">
         <!-- the three figures -->
         <section class="lw-tre-strip" aria-label="Cash today" data-test="strip">
@@ -92,8 +95,7 @@
               </thead>
               <tbody>
                 <tr v-for="r in rows" :key="r.key" :data-row="r.id" :data-test="r.obligation ? `obligation-${r.id}` : undefined"
-                    :data-focus="r.obligation ? `obligation:${r.id}` : `flow:${r.id}`" tabindex="-1"
-                    :class="{ 'is-open': r.key === openRow, 'lw-row--focus': focus === (r.obligation ? `obligation:${r.id}` : `flow:${r.id}`) }">
+                    :data-focus="r.key" tabindex="-1" :class="{ 'is-open': r.key === openRow, 'lw-row--focus': focus === r.key }">
                   <td data-label="Event">
                     <Tip :text="`${r.what} ${r.id}${r.mandatory ? ' · mandatory' : ''} · ${r.source}. Opens its details; it pays nothing.`">
                       <button type="button" class="lw-tre__open" :data-test="`row-${r.id}`" @click="openRow = r.key">
@@ -276,10 +278,11 @@ const router = useRouter()
 /** The API's projection horizon (backend views.HORIZON): P holds flat after its last move. */
 const HORIZON_H = 72
 const capital = (s) => s.charAt(0).toUpperCase() + s.slice(1)
-/** "h12": whole simulated hours from the reading's as_of, as the mockup's tables write timing. */
+/** "h12": whole simulated hours from the reading's as_of, as the mockup's tables write timing; "5h ago" once past. */
 function hShort (asOf, at) {
   const h = Math.round((Date.parse(at) - Date.parse(asOf)) / 3_600_000)
-  return Number.isNaN(h) ? 'unknown' : `h${h}`
+  if (Number.isNaN(h)) return 'unknown'
+  return h < 0 ? `${-h}h ago` : `h${h}`
 }
 
 /** The treasury read, and the prepared run of the same context when the overview answers. */
@@ -362,7 +365,6 @@ const heldFor = computed(() => {
 const protects = computed(() => (account.value?.buckets.reserved.minor && heldFor.value.length ? listWords(heldFor.value) : ''))
 const reservedLabel = computed(() => (heldFor.value.length ? `Reserved for ${listWords(heldFor.value)}` : 'Reserved'))
 
-const fa = (m, c) => formatAmount(m.minor, c)
 const arrived = (f) => Date.parse(f.expected_at) <= Date.parse(state.body.as_of)
 
 /** The three figures, each with the inputs the API served for it, for its tooltip. */
@@ -406,7 +408,7 @@ const bridge = computed(() => {
   const b = a.buckets
   const less = (m) => `−${money(m)}`
   const out = [{ label: 'Settled cash', value: b.settled ? money(b.settled) : 'Unknown' }]
-  if (b.reserved.minor || !b.pledged.minor) out.push({ label: `Less: ${reservedLabel.value.toLowerCase()}`, value: less(b.reserved) })
+  if (b.reserved.minor) out.push({ label: `Less: ${reservedLabel.value.toLowerCase()}`, value: less(b.reserved) })
   if (b.pledged.minor) out.push({ label: 'Less: pledged', value: less(b.pledged) })
   for (const f of pendingFlows(a).filter(arrived)) {
     out.push({ label: `${f.direction === 'in' ? 'Plus' : 'Less'}: ${kindText(f.kind)}`, value: f.direction === 'in' ? `+${money(f.amount)}` : less(f.amount) })
@@ -436,7 +438,7 @@ const buckets = computed(() => {
 })
 
 /** A plain word for what a kind is, beside its name (mockup 02: "Receivable (customer payment)"). */
-const PLAIN = {
+const KIND_WORDS = {
   receivable: 'customer payment',
   payroll: 'employee payments',
   exchange_withdrawal: 'market inflow',
@@ -473,7 +475,7 @@ const rows = computed(() => {
     mandatory: o.mandatory !== false
   }))
   return [...flows, ...owed].sort((x, y) => Date.parse(x.at) - Date.parse(y.at))
-    .map((r) => ({ ...r, plain: PLAIN[r.kind] ?? '', ...rowState(r) }))
+    .map((r) => ({ ...r, plain: KIND_WORDS[r.kind] ?? '', ...rowState(r) }))
 })
 const openRow = ref(null)
 const detail = computed(() => rows.value.find((r) => r.key === openRow.value) ?? null)

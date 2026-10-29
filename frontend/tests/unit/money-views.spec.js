@@ -569,3 +569,96 @@ describe('formatting and labels', () => {
     expect(text(w, 'source')).toContain(dataStates.labels.replay)
   })
 })
+
+// ------------------------------------------------- the rebuilt Treasury and Lending (items 159, 160)
+
+describe('Treasury as mockup 02 keeps its rules', () => {
+  it('a bridge with nothing held lists no "Less" line', async () => {
+    serve({
+      '/treasury': treasuryWith((body, a) => {
+        a.buckets.reserved = { minor: 0, currency: 'USD' }
+        body.obligations[0].reservation_id = null
+      })
+    })
+    const w = await open(Treasury, '/treasury')
+    expect(text(w, 'spend-bridge')).not.toContain('Less')
+  })
+
+  it('a past deadline reads "5h ago", never "h-5"', async () => {
+    serve({ '/treasury': treasuryWith((body) => { body.obligations[0].due_at = '2026-01-04T19:00:00Z' }) })
+    const w = await open(Treasury, '/treasury')
+    expect(shown(w, 'obligation-payroll-1')).toContain('5h ago')
+    expect(shown(w, 'obligation-payroll-1')).not.toContain('h-5')
+  })
+
+  it('a deep link to the one account lands on a focusable panel, named once', async () => {
+    serve({ '/treasury': treasuryDelayed.instance })
+    const w = await open(Treasury, '/treasury?focus=account:borrower-a/operating')
+    const targets = w.findAll('[data-focus="account:borrower-a/operating"]')
+    expect(targets).toHaveLength(1)
+    expect(targets[0].attributes('tabindex')).toBe('-1')
+  })
+
+  it('with several accounts the selector, not the panel, is the deep link target', async () => {
+    serve({
+      '/treasury': treasuryWith((body, a) => { body.accounts.push({ ...clone(a), id: 'borrower-a/reserve' }) })
+    })
+    const w = await open(Treasury, '/treasury?focus=account:borrower-a/operating')
+    expect(w.findAll('[data-focus="account:borrower-a/operating"]')).toHaveLength(1)
+    expect(w.get('.lw-tre').attributes('data-focus')).toBeUndefined()
+  })
+})
+
+describe('Lending as mockup 03: the map draws each party once', () => {
+  const venue = (source) => ({ kind: 'venue_exposure', ref: `x-${source}`, source: { entity_id: source, name: source },
+    target: { entity_id: 'venue', name: 'Exchange venue' }, amount: null })
+  const withOverview = (change) => { const o = clone(overviewLf1.instance); change(o); return o }
+  const nodeIds = (w) => w.findAll('[data-test="map-node"]').map((n) => n.attributes('data-node'))
+  const relations = (w) => w.findAll('[data-test="relations"] li').map((li) => shown({ get: () => li }, null))
+
+  it('a treasury that is also a borrower is one node', async () => {
+    serveLending(lendingLf2.instance, withOverview((o) => {
+      o.company = { entity_id: 'borrower-a', name: 'Northwind Parts' }
+      o.relations = [venue('borrower-a')]
+    }))
+    const w = await open(Lending, '/lending')
+    const ids = nodeIds(w)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('two facilities to one borrower are one link, not two drawn on top of each other', async () => {
+    const lending = clone(lendingLf2.instance)
+    lending.facilities[1].borrower = lending.facilities[0].borrower
+    serveLending(lending)
+    const w = await open(Lending, '/lending')
+    expect(relations(w).filter((r) => r.includes(`→ ${lending.facilities[0].borrower}`))).toHaveLength(1)
+  })
+
+  it('the treasury link names an expected withdrawal only when there is exactly one', async () => {
+    const lending = lendingLf2.instance
+    const withdrawal = (id) => ({ flow_id: id, kind: 'exchange_withdrawal', reservation_id: null,
+      amount: { minor: 1500000, currency: 'USD' }, expected_at: '2026-01-07T00:00:00Z' })
+    const treasury = (flows) => {
+      const t = clone(treasuryDelayed.instance)
+      t.snapshot_id = lending.snapshot_id
+      t.mode = lending.mode
+      t.accounts[0].buckets.pending_in = flows
+      return t
+    }
+    const overview = { ...withOverview((o) => { o.relations = [venue('treasury')] }), snapshot_id: lending.snapshot_id, mode: lending.mode }
+    serve({ '/lending': lending, '/overview': overview, '/treasury': treasury([withdrawal('wd-1')]) })
+    let w = await open(Lending, '/lending')
+    expect(relations(w).find((r) => r.startsWith('Treasury →'))).toContain('Expected withdrawal')
+    w.unmount()
+    serve({ '/lending': lending, '/overview': overview, '/treasury': treasury([withdrawal('wd-1'), withdrawal('wd-2')]) })
+    w = await open(Lending, '/lending')
+    expect(relations(w).find((r) => r.startsWith('Treasury →'))).not.toContain('Expected withdrawal')
+  })
+
+  it('a treasury whose cash the overview does not serve says nothing about its cash', async () => {
+    serveLending(lendingLf2.instance, withOverview((o) => { o.cash = null; o.relations = [venue('treasury')] }))
+    const w = await open(Lending, '/lending')
+    const node = w.findAll('[data-test="map-node"]').find((n) => n.attributes('data-node') === 'treasury')
+    expect(node.get('[role="tooltip"]').text()).not.toContain('Unavailable')
+  })
+})

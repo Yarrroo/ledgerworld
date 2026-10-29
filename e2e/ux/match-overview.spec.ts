@@ -17,31 +17,11 @@
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
-import { settled, sideways } from './routes'
+import { settled, sideways, tipWorks } from './routes'
 import { visibleWords, wordBudget } from './words'
 
 const box = async (l: Locator) => (await l.boundingBox())!
 
-/** Open a tooltip the way this width's reader would, and close it with Escape after focus. */
-async function tipWorks (page: Page, trigger: Locator, touch: boolean, what: string): Promise<void> {
-  const tip = trigger.locator('xpath=ancestor-or-self::*[contains(concat(" ", @class, " "), " lw-tip ")][1]')
-  const bubble = tip.locator(':scope > [role="tooltip"]')
-  await expect(bubble, `${what}: shown before it is asked for`).toBeHidden()
-  if (touch) {
-    await trigger.tap()
-  } else {
-    await trigger.hover()
-  }
-  await expect(bubble, `${what}: does not open on ${touch ? 'tap' : 'hover'}`).toBeVisible()
-  await page.mouse.move(0, 0)
-  await page.keyboard.press('Escape')
-  await page.locator('h1').click()
-  await expect(bubble, `${what}: does not close`).toBeHidden()
-  await trigger.focus()
-  await expect(bubble, `${what}: does not open on focus`).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(bubble, `${what}: Escape does not close it`).toBeHidden()
-}
 
 test('Overview as mockup 01', async ({ page, request, baseURL }, info) => {
   const writes = await readOnly(page, baseURL!)
