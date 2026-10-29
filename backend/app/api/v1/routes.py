@@ -37,7 +37,7 @@ from ...jobs.runner import (
 )
 from ...simulation.clock import HORIZON_ROUNDS
 from ...simulation.interview import Interview, ReadOnlyViolation
-from ...simulation.scenarios import load_world
+from ...simulation.scenarios import FAMILIES_DIR, load_world
 from . import reports, views
 from .services import API_VERSION, APPROVER, Services
 
@@ -113,13 +113,32 @@ def health():
                                       "model": s.model_kind, "version": API_VERSION})
 
 
+@functools.cache
+def _family_about(family_id: str) -> str:
+    return json.loads((FAMILIES_DIR / f"{family_id}.json").read_text(encoding="utf-8"))["about"]
+
+
+def _demo_scenario(run_id: str | None) -> dict | None:
+    """The prepared run's scenario as it was run, read-only; None when there is no such run or
+    its family no longer loads (Overview stays readable either way)."""
+    spec = services().jobs.get("run_spec", run_id) if run_id else None
+    if spec is None:
+        return None
+    try:
+        family = family_of(spec["scenario"])
+        return {"family": family.id, "about": _family_about(family.id), "params": family.params}
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        log.warning("overview: run %s has a scenario that no longer loads: %s", run_id, error)
+        return None
+
+
 @bp.get("/overview")
 def overview():
     s = services()
     with s.lock:
         demo = s.demo()
         store, snapshot, now = s.observed(demo)
-        body = views.overview(store, snapshot, now, demo)
+        body = views.overview(store, snapshot, now, demo, _demo_scenario(demo["run_id"]))
     return _reply(c6.OverviewResponse, body, as_of=now)
 
 

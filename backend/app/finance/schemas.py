@@ -580,11 +580,15 @@ class DemoContext(_Shape):
 
 
 class UpcomingOutflow(_Shape):
+    """An open obligation due from now on, with the account it is paid from and its hold."""
+
     obligation_id: Id
     kind: Kind
     amount: Amount
     due_at: Time
     reserved: StrictBool
+    account: Id | None = None
+    reservation_id: Id | None = None
 
 
 class Coverage(_Shape):
@@ -630,19 +634,6 @@ class Completeness(_Shape):
         return self
 
 
-class OverviewResponse(Response):
-    """GET /api/v1/overview."""
-
-    snapshot_id: Id
-    cash: Metric
-    spendable: Metric
-    upcoming_outflows: list[UpcomingOutflow]
-    coverage: Coverage
-    lender_capacity: Metric
-    completeness: Completeness
-    demo: DemoContext
-
-
 class CashPoint(_Shape):
     t: Time
     value: Metric
@@ -682,6 +673,70 @@ class TreasuryResponse(Response):
     snapshot_id: Id
     accounts: list[TreasuryAccount]
     obligations: list[Obligation]
+
+
+class OutlookEvent(_Shape):
+    """A flow or an obligation that moves P at an outlook point."""
+
+    ref: Id
+    kind: Kind
+    direction: Literal["in", "out"]
+    amount: Amount
+
+
+class OutlookPoint(_Shape):
+    """P of the overview's accounts together at one time: now, each flow or deadline inside the
+    horizon, and the horizon's end. `events` are what moves P at `t`."""
+
+    t: Time
+    value: Metric
+    events: list[OutlookEvent]
+
+
+class Party(_Shape):
+    entity_id: Id
+    name: Name
+
+
+class Relation(_Shape):
+    """One relationship of the observed snapshot, read from its contracts, exposures and
+    obligations: a line, an obligation or a shared venue. It states a dependency, never a
+    transfer."""
+
+    ref: Id
+    kind: Literal["credit_line", "obligation", "venue_exposure"]
+    source: Party
+    target: Party | None  # an obligation whose payee the snapshot does not record
+    amount: Amount | None
+
+
+class ScenarioPreview(_Shape):
+    """The prepared demonstration run's scenario, read-only: its family, what it shocks and its
+    parameters as run. Hypothetical; it changes no observed figure."""
+
+    family: Id
+    about: str
+    params: dict[str, Any]
+
+
+class OverviewResponse(Response):
+    """GET /api/v1/overview. `accounts` are the cash accounts the cash, spendable and coverage
+    figures combine (their inputs, as Treasury serves them); `outlook` is their P together over
+    the horizon; `relations` a subset of the observed world around the company."""
+
+    snapshot_id: Id
+    cash: Metric
+    spendable: Metric
+    upcoming_outflows: list[UpcomingOutflow]
+    coverage: Coverage
+    lender_capacity: Metric
+    completeness: Completeness
+    demo: DemoContext
+    company: Party | None = None
+    accounts: list[TreasuryAccount] = Field(default_factory=list)
+    outlook: list[OutlookPoint] = Field(default_factory=list)
+    relations: list[Relation] = Field(default_factory=list)
+    scenario: ScenarioPreview | None = None
 
 
 class CapacityParts(_Shape):

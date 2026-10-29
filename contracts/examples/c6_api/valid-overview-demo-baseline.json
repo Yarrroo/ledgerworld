@@ -1,0 +1,324 @@
+{
+ "about": "GET /api/v1/overview on the demo world (scenarios/world.json) at its epoch, before any run: the UX handoff's baseline (settled 70,000, spendable 20,000, payroll 50,000 due t=40, P 70k/90k/40k/55k/55k at t=0/12/40/48/72, floor 30,000). No run is prepared, so demo is null. Recorded from the API.",
+ "def": "OverviewResponse",
+ "valid": true,
+ "instance": {
+  "accounts": [
+   {
+    "as_of": "2026-01-01T00:00:00Z",
+    "authority": "full",
+    "buckets": {
+     "pending_in": [
+      {
+       "amount": {
+        "currency": "USD",
+        "minor": 2000000
+       },
+       "expected_at": "2026-01-01T12:00:00Z",
+       "flow_id": "receivable-1",
+       "kind": "receivable",
+       "reservation_id": null
+      },
+      {
+       "amount": {
+        "currency": "USD",
+        "minor": 1500000
+       },
+       "expected_at": "2026-01-03T00:00:00Z",
+       "flow_id": "withdrawal-1",
+       "kind": "exchange_withdrawal",
+       "reservation_id": null
+      }
+     ],
+     "pending_out": [],
+     "pledged": {
+      "currency": "USD",
+      "minor": 0
+     },
+     "reserved": {
+      "currency": "USD",
+      "minor": 5000000
+     },
+     "settled": {
+      "currency": "USD",
+      "minor": 7000000
+     }
+    },
+    "currency": "USD",
+    "entity": "treasury",
+    "floor": {
+     "as_of": null,
+     "currency": "USD",
+     "minor": 3000000,
+     "status": "known"
+    },
+    "id": "treasury/operating",
+    "kind": "cash",
+    "observability": "known",
+    "projected": [
+     {
+      "t": "2026-01-01T00:00:00Z",
+      "value": {
+       "as_of": null,
+       "currency": "USD",
+       "minor": 7000000,
+       "status": "known"
+      }
+     },
+     {
+      "t": "2026-01-01T12:00:00Z",
+      "value": {
+       "as_of": null,
+       "currency": "USD",
+       "minor": 9000000,
+       "status": "known"
+      }
+     },
+     {
+      "t": "2026-01-02T16:00:00Z",
+      "value": {
+       "as_of": null,
+       "currency": "USD",
+       "minor": 4000000,
+       "status": "known"
+      }
+     },
+     {
+      "t": "2026-01-03T00:00:00Z",
+      "value": {
+       "as_of": null,
+       "currency": "USD",
+       "minor": 5500000,
+       "status": "known"
+      }
+     }
+    ],
+    "spendable": {
+     "as_of": "2026-01-01T00:00:00Z",
+     "currency": "USD",
+     "minor": 2000000,
+     "status": "known"
+    },
+    "venue": null
+   }
+  ],
+  "as_of": "2026-01-01T00:00:00Z",
+  "cash": {
+   "as_of": "2026-01-01T00:00:00Z",
+   "currency": "USD",
+   "minor": 7000000,
+   "status": "known"
+  },
+  "company": {
+   "entity_id": "treasury",
+   "name": "Northwind Parts treasury (synthetic)"
+  },
+  "completeness": {
+   "accounts": [],
+   "missing": [],
+   "status": "complete"
+  },
+  "coverage": {
+   "at": "2026-01-02T16:00:00Z",
+   "floor": {
+    "as_of": null,
+    "currency": "USD",
+    "minor": 3000000,
+    "status": "known"
+   },
+   "headroom": {
+    "as_of": null,
+    "currency": "USD",
+    "minor": 1000000,
+    "status": "known"
+   },
+   "min_projected": {
+    "as_of": "2026-01-01T00:00:00Z",
+    "currency": "USD",
+    "minor": 4000000,
+    "status": "known"
+   }
+  },
+  "demo": {
+   "execution_id": null,
+   "run_id": null
+  },
+  "lender_capacity": {
+   "as_of": "2026-01-01T00:00:00Z",
+   "currency": "USD",
+   "minor": 4200000,
+   "status": "known"
+  },
+  "mode": "fake",
+  "outlook": [
+   {
+    "events": [],
+    "t": "2026-01-01T00:00:00Z",
+    "value": {
+     "as_of": null,
+     "currency": "USD",
+     "minor": 7000000,
+     "status": "known"
+    }
+   },
+   {
+    "events": [
+     {
+      "amount": {
+       "currency": "USD",
+       "minor": 2000000
+      },
+      "direction": "in",
+      "kind": "receivable",
+      "ref": "receivable-1"
+     }
+    ],
+    "t": "2026-01-01T12:00:00Z",
+    "value": {
+     "as_of": null,
+     "currency": "USD",
+     "minor": 9000000,
+     "status": "known"
+    }
+   },
+   {
+    "events": [
+     {
+      "amount": {
+       "currency": "USD",
+       "minor": 5000000
+      },
+      "direction": "out",
+      "kind": "payroll",
+      "ref": "payroll-1"
+     }
+    ],
+    "t": "2026-01-02T16:00:00Z",
+    "value": {
+     "as_of": null,
+     "currency": "USD",
+     "minor": 4000000,
+     "status": "known"
+    }
+   },
+   {
+    "events": [
+     {
+      "amount": {
+       "currency": "USD",
+       "minor": 1500000
+      },
+      "direction": "in",
+      "kind": "exchange_withdrawal",
+      "ref": "withdrawal-1"
+     }
+    ],
+    "t": "2026-01-03T00:00:00Z",
+    "value": {
+     "as_of": null,
+     "currency": "USD",
+     "minor": 5500000,
+     "status": "known"
+    }
+   },
+   {
+    "events": [],
+    "t": "2026-01-04T00:00:00Z",
+    "value": {
+     "as_of": null,
+     "currency": "USD",
+     "minor": 5500000,
+     "status": "known"
+    }
+   }
+  ],
+  "relations": [
+   {
+    "amount": {
+     "currency": "USD",
+     "minor": 5000000
+    },
+    "kind": "obligation",
+    "ref": "payroll-1",
+    "source": {
+     "entity_id": "treasury",
+     "name": "Northwind Parts treasury (synthetic)"
+    },
+    "target": {
+     "entity_id": "payroll",
+     "name": "Northwind payroll bureau (synthetic)"
+    }
+   },
+   {
+    "amount": {
+     "currency": "USD",
+     "minor": 1000000
+    },
+    "kind": "credit_line",
+    "ref": "line-b",
+    "source": {
+     "entity_id": "lender",
+     "name": "Harbourline Credit pool (synthetic)"
+    },
+    "target": {
+     "entity_id": "borrower-b",
+     "name": "Bellfield Kitchens (synthetic)"
+    }
+   },
+   {
+    "amount": {
+     "currency": "USD",
+     "minor": 1500000
+    },
+    "kind": "venue_exposure",
+    "ref": "venue-1",
+    "source": {
+     "entity_id": "treasury",
+     "name": "Northwind Parts treasury (synthetic)"
+    },
+    "target": {
+     "entity_id": "venue",
+     "name": "Quayside Exchange (synthetic)"
+    }
+   },
+   {
+    "amount": {
+     "currency": "USD",
+     "minor": 1500000
+    },
+    "kind": "venue_exposure",
+    "ref": "venue-1",
+    "source": {
+     "entity_id": "lender",
+     "name": "Harbourline Credit pool (synthetic)"
+    },
+    "target": {
+     "entity_id": "venue",
+     "name": "Quayside Exchange (synthetic)"
+    }
+   }
+  ],
+  "scenario": null,
+  "snapshot_id": "demo-world",
+  "spendable": {
+   "as_of": "2026-01-01T00:00:00Z",
+   "currency": "USD",
+   "minor": 2000000,
+   "status": "known"
+  },
+  "upcoming_outflows": [
+   {
+    "account": "treasury/operating",
+    "amount": {
+     "currency": "USD",
+     "minor": 5000000
+    },
+    "due_at": "2026-01-02T16:00:00Z",
+    "kind": "payroll",
+    "obligation_id": "payroll-1",
+    "reservation_id": "payroll-hold",
+    "reserved": true
+   }
+  ]
+ }
+}

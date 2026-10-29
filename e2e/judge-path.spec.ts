@@ -61,8 +61,8 @@ async function overview (page: Page): Promise<Demo> {
   if (await test$(page, 'due').count()) {
     await expect(test$(page, 'due')).toHaveText(/due \d{4}-\d\d-\d\d \d\d:\d\d UTC · local /)
   }
-  await expect(test$(page, 'coverage')).toContainText('minimum projected cash')
-  await expect(test$(page, 'coverage').locator('.lw-figure')).toHaveText(/\d.*floor/)
+  await expect(test$(page, 'coverage')).toContainText(/\d.* minimum projected cash \/ .*\d.* floor/)
+  await expect(test$(page, 'coverage').locator('.lw-figure')).toHaveText(/\d|Unknown|Not assessed/)
   await expect(test$(page, 'floor-status')).toHaveText(/\w/)
   expect(demo.run_id, 'the deployment names no prepared demonstration run').toBeTruthy()
   expect(demo.execution_id, `run ${demo.run_id} has no linked execution`).toBeTruthy()

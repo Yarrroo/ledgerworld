@@ -106,46 +106,109 @@ def _capacity_metric(store: LedgerStore, pool: str | None, now: datetime,
     return metric(cap.K_p, cap.currency, status, now)
 
 
-def _combined_low(views: list[AccountView], now: datetime,
-                  horizon: timedelta = HORIZON) -> tuple[int, datetime]:
-    """The lowest P of the accounts together over the horizon, and when it is first reached;
-    P moves only at a flow's or an obligation's time, so only those times are evaluated."""
-    end = now + horizon
-    times = sorted({now, *(x.at for v in views
-                           for x in v.pending_in + v.pending_out + v.obligations
-                           if now < x.at <= end)})
-    return min(((sum(projected_cash(v, t) for v in views), t) for t in times),
-               key=lambda pair: pair[0])
-
-
 # ---------------------------------------------------------------------------- Overview
 
-def overview(store: LedgerStore, snapshot: Snapshot, now: datetime, demo: Body) -> Body:
+def _outlook(views: list[AccountView], now: datetime, status: str,
+             horizon: timedelta = HORIZON) -> list[Body]:
+    """P of the accounts together at now, at each flow or deadline inside the horizon, and at
+    the horizon's end, each with what moves it there (a flow or deadline already past and still
+    pending is counted in P now, so it is an event of the first point); empty when a balance is
+    unknown. P moves only at those times, so its minimum over the horizon is among them."""
+    if status == "unknown":
+        return []
+    currency = views[0].currency
+    end = now + horizon
+    moves: dict[datetime, list[Body]] = {}
+    for v in views:
+        for items, direction in ((v.pending_in, "in"), (v.pending_out, "out"),
+                                 (v.obligations, "out")):
+            for x in items:
+                if x.at <= end:
+                    ref = getattr(x, "flow_id", None) or x.obligation_id
+                    moves.setdefault(max(x.at, now), []).append(
+                        {"ref": ref, "kind": x.kind, "direction": direction,
+                         "amount": {"minor": x.amount_minor, "currency": currency}})
+    return [{"t": iso(t), "value": metric(sum(projected_cash(v, t) for v in views), currency,
+                                          status),
+             "events": sorted(moves.get(t, []), key=lambda e: e["ref"])}
+            for t in sorted({now, end, *moves})]
+
+
+def _party(names: dict[str, str], entity: str) -> Body:
+    return {"entity_id": entity, "name": names.get(entity, entity)}
+
+
+def _relations(snapshot: Snapshot, entity: str, pool: str | None, names: dict[str, str],
+               open_rows: list[Any]) -> list[Body]:
+    """The world around ``entity`` as the snapshot states it: its open obligations (payee: the
+    world's entity of the obligation's kind, as its payroll bureau is ``payroll``; none recorded
+    otherwise), the pool's committed lines, and the venues ``entity`` or the pool depend on. A
+    relation is a dependency, never a transfer."""
+    flows = {f.flow_id: f.amount for a in snapshot.accounts
+             for f in a.buckets.pending_in + a.buckets.pending_out}
+    accounts = {a.id: a for a in snapshot.accounts}
+    out: list[Body] = [
+        {"ref": o["obligation_id"], "kind": "obligation", "source": _party(names, entity),
+         "target": _party(names, o["kind"]) if o["kind"] in names else None,
+         "amount": {"minor": o["amount_minor"], "currency": o["currency"]}}
+        for o in open_rows]
+    for c in snapshot.contracts:
+        if c.kind == "committed_line" and c.lender in (entity, pool):
+            out.append({"ref": c.contract_id, "kind": "credit_line",
+                        "source": _party(names, c.lender), "target": _party(names, c.borrower),
+                        "amount": c.limit.model_dump()})
+    for x in snapshot.exposures:
+        for party in x.shared_with:
+            if party not in (entity, pool):
+                continue
+            held = accounts.get(x.account)
+            amount = held.buckets.settled if held and held.entity == party else flows.get(x.flow_id)
+            out.append({"ref": x.exposure_id, "kind": "venue_exposure",
+                        "source": _party(names, party), "target": _party(names, x.venue),
+                        "amount": amount.model_dump() if amount and amount.minor > 0 else None})
+    return out
+
+
+def overview(store: LedgerStore, snapshot: Snapshot, now: datetime, demo: Body,
+             scenario: Body | None = None) -> Body:
     entity, views = _primary(store, snapshot)
     currency = views[0].currency
+    names = {e.entity_id: e.name for e in snapshot.entities}
+    pool = _pool(store)
     cash = _sum_metric(views, now, lambda v: v.settled_minor)
     spendable = _sum_metric(views, now, lambda v: spendability(v, now, now).value or 0)
     status = cash["status"]
-    low, at = (None, None) if status == "unknown" else _combined_low(views, now)
+    outlook = _outlook(views, now, status)
+    lowest = min(outlook, key=lambda p: p["value"]["minor"], default=None)  # first reached
     floor_minor = sum(v.floor_minor or 0 for v in views)
     floor_known = any(v.floor_minor is not None for v in views)
     floor = metric(floor_minor, currency, "known" if floor_known else "unassessed")
+    low = None if lowest is None else lowest["value"]["minor"]
     headroom = metric(None if low is None else low - floor_minor, currency,
                       status if floor_known else "unassessed")
+    open_rows = [o for o in sorted(store.rows("obligations"),
+                                   key=lambda o: (o["due_at"], o["obligation_id"]))
+                 if o["entity_id"] == entity and o["state"] == "open"]
     outflows = [
         {"obligation_id": o["obligation_id"], "kind": o["kind"],
          "amount": {"minor": o["amount_minor"], "currency": o["currency"]},
-         "due_at": iso(_aware(o["due_at"])), "reserved": o["reservation_id"] is not None}
-        for o in sorted(store.rows("obligations"), key=lambda o: (o["due_at"], o["obligation_id"]))
-        if o["entity_id"] == entity and o["state"] == "open" and _aware(o["due_at"]) >= now
+         "due_at": iso(_aware(o["due_at"])), "reserved": o["reservation_id"] is not None,
+         "account": o["account_id"], "reservation_id": o["reservation_id"]}
+        for o in open_rows if _aware(o["due_at"]) >= now
     ]
     return {
         "snapshot_id": snapshot.snapshot_id, "cash": cash, "spendable": spendable,
         "upcoming_outflows": outflows,
-        "coverage": {"min_projected": metric(low, currency, status, now), "at": iso(at),
+        "coverage": {"min_projected": metric(low, currency, status, now),
+                     "at": None if lowest is None else lowest["t"],
                      "floor": floor, "headroom": headroom},
-        "lender_capacity": _capacity_metric(store, _pool(store), now, currency),
+        "lender_capacity": _capacity_metric(store, pool, now, currency),
         "completeness": _completeness(store, now), "demo": demo,
+        "company": _party(names, entity),
+        "accounts": [treasury_account(v, now) for v in views],
+        "outlook": outlook,
+        "relations": _relations(snapshot, entity, pool, names, open_rows),
+        "scenario": scenario,
     }
 
 

@@ -2343,9 +2343,74 @@
       "title": "Obligation",
       "type": "object"
     },
+    "OutlookEvent": {
+      "additionalProperties": false,
+      "description": "A flow or an obligation that moves P at an outlook point.",
+      "properties": {
+        "ref": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Ref",
+          "type": "string"
+        },
+        "kind": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Kind",
+          "type": "string"
+        },
+        "direction": {
+          "enum": [
+            "in",
+            "out"
+          ],
+          "title": "Direction",
+          "type": "string"
+        },
+        "amount": {
+          "$ref": "#/$defs/Amount"
+        }
+      },
+      "required": [
+        "ref",
+        "kind",
+        "direction",
+        "amount"
+      ],
+      "title": "OutlookEvent",
+      "type": "object"
+    },
+    "OutlookPoint": {
+      "additionalProperties": false,
+      "description": "P of the overview's accounts together at one time: now, each flow or deadline inside the\nhorizon, and the horizon's end. `events` are what moves P at `t`.",
+      "properties": {
+        "t": {
+          "format": "date-time",
+          "title": "T",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/Metric"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/OutlookEvent"
+          },
+          "title": "Events",
+          "type": "array"
+        }
+      },
+      "required": [
+        "t",
+        "value",
+        "events"
+      ],
+      "title": "OutlookPoint",
+      "type": "object"
+    },
     "OverviewResponse": {
       "additionalProperties": false,
-      "description": "GET /api/v1/overview.",
+      "description": "GET /api/v1/overview. `accounts` are the cash accounts the cash, spendable and coverage\nfigures combine (their inputs, as Treasury serves them); `outlook` is their P together over\nthe horizon; `relations` a subset of the observed world around the company.",
       "properties": {
         "as_of": {
           "format": "date-time",
@@ -2390,6 +2455,49 @@
         },
         "demo": {
           "$ref": "#/$defs/DemoContext"
+        },
+        "company": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Party"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "accounts": {
+          "items": {
+            "$ref": "#/$defs/TreasuryAccount"
+          },
+          "title": "Accounts",
+          "type": "array"
+        },
+        "outlook": {
+          "items": {
+            "$ref": "#/$defs/OutlookPoint"
+          },
+          "title": "Outlook",
+          "type": "array"
+        },
+        "relations": {
+          "items": {
+            "$ref": "#/$defs/Relation"
+          },
+          "title": "Relations",
+          "type": "array"
+        },
+        "scenario": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScenarioPreview"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -2434,6 +2542,29 @@
           "type": "null"
         }
       ]
+    },
+    "Party": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity_id",
+        "name"
+      ],
+      "title": "Party",
+      "type": "object"
     },
     "PolicyResult": {
       "additionalProperties": false,
@@ -2629,6 +2760,59 @@
         "observed_at"
       ],
       "title": "Receipt",
+      "type": "object"
+    },
+    "Relation": {
+      "additionalProperties": false,
+      "description": "One relationship of the observed snapshot, read from its contracts, exposures and\nobligations: a line, an obligation or a shared venue. It states a dependency, never a\ntransfer.",
+      "properties": {
+        "ref": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Ref",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "credit_line",
+            "obligation",
+            "venue_exposure"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/Party"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Party"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "amount": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Amount"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ref",
+        "kind",
+        "source",
+        "target",
+        "amount"
+      ],
+      "title": "Relation",
       "type": "object"
     },
     "ReportFigure": {
@@ -2925,6 +3109,34 @@
       "title": "RunResponse",
       "type": "object"
     },
+    "ScenarioPreview": {
+      "additionalProperties": false,
+      "description": "The prepared demonstration run's scenario, read-only: its family, what it shocks and its\nparameters as run. Hypothetical; it changes no observed figure.",
+      "properties": {
+        "family": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Family",
+          "type": "string"
+        },
+        "about": {
+          "title": "About",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": true,
+          "title": "Params",
+          "type": "object"
+        }
+      },
+      "required": [
+        "family",
+        "about",
+        "params"
+      ],
+      "title": "ScenarioPreview",
+      "type": "object"
+    },
     "ScenarioSpec": {
       "additionalProperties": false,
       "properties": {
@@ -3192,6 +3404,7 @@
     },
     "UpcomingOutflow": {
       "additionalProperties": false,
+      "description": "An open obligation due from now on, with the account it is paid from and its hold.",
       "properties": {
         "obligation_id": {
           "maxLength": 128,
@@ -3216,6 +3429,34 @@
         "reserved": {
           "title": "Reserved",
           "type": "boolean"
+        },
+        "account": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Account"
+        },
+        "reservation_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reservation Id"
         }
       },
       "required": [
