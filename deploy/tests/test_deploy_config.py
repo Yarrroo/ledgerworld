@@ -424,6 +424,36 @@ def test_the_api_serves_the_api_the_build_and_the_frontend_routes(served):
     assert served.head("/decisions").status_code == 200
 
 
+@pytest.mark.parametrize(("url", "origin"), [
+    ("https://ledgerworld.example.com/", "https://ledgerworld.example.com"),
+    ("https://ledgerworld.example.com:443/overview", "https://ledgerworld.example.com"),
+    ("", "http://localhost"),
+    ("not a url", "http://localhost"),
+])
+def test_the_index_link_previews_name_the_public_origin(tmp_path, monkeypatch, url, origin):
+    monkeypatch.setenv("LEDGERWORLD_URL", url)
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "index.html").write_text(
+        '<meta property="og:image" content="__LEDGERWORLD_URL__/og-card.png" />'
+    )
+    import app.api.v1.hardening  # noqa: F401
+    from flask import Flask
+    from werkzeug.test import Client
+
+    monkeypatch.setitem(sys.modules, "app", types.SimpleNamespace(create_app=lambda: Flask("s")))
+    client = Client(runpy.run_path(str(DEPLOY / "serve.py"))["build"](tmp_path / "dist"))
+    for path in ("/", "/treasury"):
+        page = client.get(path)
+        assert page.get_data(as_text=True) == f'<meta property="og:image" content="{origin}/og-card.png" />'
+        assert page.headers["Content-Length"] == str(len(page.get_data()))
+
+
+def test_the_built_index_carries_the_origin_placeholder_serve_fills():
+    html = (ROOT / "frontend" / "index.html").read_text()
+    assert 'content="__LEDGERWORLD_URL__/og-card.png"' in html
+    assert (ROOT / "frontend" / "public" / "og-card.png").is_file()
+
+
 def test_a_missing_file_or_a_write_is_not_answered_with_the_index(served):
     assert served.get("/assets/index-old.js").status_code == 404
     assert served.get("/favicon.ico").status_code == 404
