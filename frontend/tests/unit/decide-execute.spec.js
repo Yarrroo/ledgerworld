@@ -955,7 +955,6 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
     const w = await open(Execution, '/execution')
     const lead = () => w.get('[data-test="hero-lead"] [role="tooltip"]').text().trim()
     expect(lead()).toBe('We could not read what the plan you sent moved yet; reload the page to try again.')
-    expect(lead()).not.toMatch(/refresh/i)
     expect(w.findAll('button').map((b) => b.text())).not.toContain('Refresh')
     expect(w.find('[data-test="read-status"]').exists()).toBe(false)
     answer = paid()
