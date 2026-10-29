@@ -31,6 +31,8 @@
               </span>
             </template>
           </Tip>
+          <span v-if="m.key === 'coverage' && floor !== 'kept'" :class="['lw-status', `lw-status--${STATES[floor].tone}`]"
+                data-test="floor-alert"><span aria-hidden="true">{{ STATES[floor].icon }}</span> {{ FLOOR_WORDS[floor] }}</span>
         </article>
       </section>
 
@@ -302,7 +304,11 @@ const world = computed(() => {
     if (r.source.entity_id === me && r.target) {
       const kind = r.kind === 'venue_exposure' ? 'venue' : r.kind === 'obligation' ? 'payee' : 'other'
       const node = party(r.target, kind)
-      node.sub = r.kind === 'obligation' ? `${amount} owed` : r.kind === 'venue_exposure' ? `${amount} held` : amount
+      node.links = (node.links ?? 0) + 1
+      // one relation reads its amount; several read their count, each amount in the tooltip
+      node.sub = node.links > 1
+        ? `${node.links} ${r.kind === 'obligation' ? 'obligations owed' : 'links'}`
+        : r.kind === 'obligation' ? `${amount} owed` : r.kind === 'venue_exposure' ? `${amount} held` : amount
       node.tip.push(r.kind === 'obligation' ? `You owe ${amount}: ${kindText(r.ref)}.` : `${capital(kindText(r.kind))} ${r.ref}: ${amount}.`)
     } else if (r.source.entity_id !== me) {
       const node = party(r.source, 'lender')
@@ -566,10 +572,18 @@ const preview = ref(false)
   border-color: var(--lw-brand);
 }
 
+.lw-ov-node__body > span:last-child {
+  min-width: 0;
+}
+
 .lw-ov-node__body b {
   display: block;
   font-weight: 600;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+}
+
+.lw-ov-node__icon {
+  flex: none;
 }
 
 .lw-ov-node__body small {

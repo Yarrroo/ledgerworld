@@ -114,3 +114,26 @@ describe('Overview panels on the baseline', () => {
     expect(w.get('[data-test="explore-why"] [role="tooltip"]').text()).toBe('No demonstration run is prepared')
   })
 })
+
+describe('Overview shows what a reader must not miss without a tooltip', () => {
+  it('a breached floor is on the page, beside Reserve headroom, not only in its tooltip', async () => {
+    const body = withRun()
+    body.coverage.headroom = { ...body.coverage.headroom, minor: -500000 }
+    body.coverage.min_projected = { ...body.coverage.min_projected, minor: 2500000 }
+    const w = await open(body)
+    const alert = w.get('[data-test="coverage"] [data-test="floor-alert"]')
+    expect(alert.element.closest('[role="tooltip"]')).toBeNull()
+    expect(alert.text()).toContain('Below your safety minimum')
+    w.unmount()
+  })
+
+  it('a payee owed two obligations reads their count, never only the last one\'s amount', async () => {
+    const body = withRun()
+    const owed = body.relations.find((r) => r.kind === 'obligation')
+    body.relations.push({ ...clone(owed), ref: 'payroll-2', amount: { ...owed.amount, minor: 100000 } })
+    const w = await open(body)
+    const node = w.findAll('[data-test="relation"]').find((n) => n.text().includes('payroll bureau'))
+    expect(node.get('small').text()).toBe('2 obligations owed')
+    w.unmount()
+  })
+})

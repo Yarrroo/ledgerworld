@@ -19,7 +19,7 @@
           <path :d="area" class="lw-outlook__area" aria-hidden="true" />
           <line v-if="floorY !== null" :x1="M.left" :x2="width - M.right" :y1="floorY" :y2="floorY"
                 class="lw-outlook__floor" aria-hidden="true" data-test="outlook-floor" />
-          <text v-if="floorY !== null" :x="width - M.right" :y="floorY - 6" text-anchor="end"
+          <text v-if="floorY !== null" :x="floorLabel.x" :y="floorY - 6" :text-anchor="floorLabel.anchor"
                 class="lw-outlook__floor-label" aria-hidden="true" data-test="outlook-floor-label">
             <tspan font-style="italic">Reserve floor</tspan> <tspan>{{ short(floor.minor) }}</tspan>
           </text>
@@ -198,6 +198,15 @@ const notes = computed(() => {
   })
 })
 
+/** The floor's label: at the plot's right end, or its left end when a point marker sits on it there. */
+const FLOOR_LABEL_W = 130
+const floorLabel = computed(() => {
+  const right = width.value - M.value.right
+  const fy = floorY.value
+  const hit = fy !== null && valued.value.some((p) => p.px > right - FLOOR_LABEL_W - 8 && p.py > fy - 26 && p.py < fy + 4)
+  return hit ? { x: M.value.left + 6, anchor: 'start', left: M.value.left + 6 } : { x: right, anchor: 'end', left: right - FLOOR_LABEL_W }
+})
+
 const meets = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
 /** A box around a stretch of the step line or a point marker, `pad` px out each way. */
 const around = (x1, y1, x2, y2, pad) =>
@@ -216,9 +225,8 @@ const marks = computed(() => {
   ]
   const fy = floorY.value
   if (fy !== null) {
-    const right = width.value - M.value.right
-    out.push(around(M.value.left, fy, right, fy, 3))
-    out.push({ left: right - 130, right, top: fy - 22, bottom: fy - 2 }) // "Reserve floor $30,000"
+    out.push(around(M.value.left, fy, width.value - M.value.right, fy, 3))
+    out.push({ left: floorLabel.value.left, right: floorLabel.value.left + FLOOR_LABEL_W, top: fy - 22, bottom: fy - 2 }) // "Reserve floor $30,000"
   }
   return out
 })
