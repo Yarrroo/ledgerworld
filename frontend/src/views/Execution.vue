@@ -897,19 +897,19 @@ const stageHeading = computed(() => ({
 const stageStatus = computed(() => {
   const id = flow.approval?.approval_id
   if (flow.submitting) return `Sending execution of approval ${id} once.`
+  // said once per change of state, never per poll: no read time of its own in this live text
+  const failure = pollError.value && (rereading.value
+    ? `Could not read the status of execution ${id}; reading again.`
+    : `Could not read the status of execution ${id}: ${pollError.value.replace(/\.$/, '')}. Read status to try again.`)
+  // a failed read is said beside a terminal stage or a held block: the stage and its last read stand
+  const beside = (said) => (failure ? `${said} ${failure}` : said)
   const body = sent.value
   if (stage.value === 'reconciled') {
-    return `Every leg reconciled as of ${formatTime(body.as_of).utc}; not final, a later read can open an incident.`
+    return beside(`Every leg reconciled as of ${formatTime(body.as_of).utc}; not final, a later read can open an incident.`)
   }
-  if (stage.value === 'incident') return `Read status stays available; nothing is resent or reversed.`
-  if (flow.blocked) return flow.blocked
-  // said once per change of state, never per poll: no read time in this live text
-  if (pollError.value) {
-    return rereading.value
-      ? `Could not read the status of execution ${id}; reading again.`
-      : `Could not read the status of execution ${id}: ${pollError.value.replace(/\.$/, '')}. Read status to try again.`
-  }
-  return `Execution ${id}: reading status.`
+  if (stage.value === 'incident') return beside('Read status stays available; nothing is resent or reversed.')
+  if (flow.blocked) return beside(flow.blocked)
+  return failure || `Execution ${id}: reading status.`
 })
 
 // ------------------------------------------------------------------ dialog mechanics

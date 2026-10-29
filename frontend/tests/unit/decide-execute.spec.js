@@ -2038,5 +2038,78 @@ describe('the approval dialog, one stage at a time (board item 133)', () => {
       expect(text(w, 'stage-status')).toBe(said)
     })
   })
+
+  describe('correction: a failed Read status is said after a terminal stage (board item 150)', () => {
+    const incident = () => {
+      const leg = paidPayout()
+      return executionBody({
+        legs: [leg],
+        incidents: [{ incident_id: 'inc-1', leg_id: leg.leg_id, kind: 'paid_then_failed', state: 'open', opened_at: '2026-11-05T10:05:00Z' }]
+      })
+    }
+
+    for (const [name, read, base] of [
+      ['reconciled', () => executionBody({ legs: [advance(), paidPayout()] }), 'Every leg reconciled as of'],
+      ['incident', incident, 'Read status stays available']
+    ]) {
+      it(`${name}: a refused read is said in the dialog, the stage and its last read time kept`, async () => {
+        let answer = read()
+        const { w } = await reviewReady({
+          'POST /executions': accepted(),
+          'GET /executions/apr-1': () => answer
+        })
+        await approve(w)
+        await w.get('[data-test="execute"]').trigger('click')
+        await flushPromises()
+        expect(stage(w)).toBe(name)
+        const kept = text(w, 'stage-status')
+        answer = refuse(403, 'forbidden', 'not allowed.')
+        await w.get('[data-test="read-status"]').trigger('click')
+        await flushPromises()
+        expect(stage(w)).toBe(name)
+        const said = text(w, 'stage-status')
+        expect(said).toContain(base)
+        expect(said).toContain(kept) // the last successful read's time is not dropped
+        expect(said).toContain('Could not read the status of execution apr-1: not allowed. Read status to try again.')
+        answer = read()
+        await w.get('[data-test="read-status"]').trigger('click')
+        await flushPromises()
+        expect(text(w, 'stage-status')).toBe(kept) // a later answer clears the error
+      })
+
+      it(`${name}: an unanswered read says it is reading again`, async () => {
+        fakeTimers()
+        let answer = read()
+        const { w } = await reviewReady({
+          'POST /executions': accepted(),
+          'GET /executions/apr-1': () => answer
+        })
+        await approve(w)
+        await w.get('[data-test="execute"]').trigger('click')
+        await flushPromises()
+        answer = timeout()
+        await w.get('[data-test="read-status"]').trigger('click')
+        await flushPromises()
+        expect(stage(w)).toBe(name)
+        expect(text(w, 'stage-status')).toContain(base)
+        expect(text(w, 'stage-status')).toContain('Could not read the status of execution apr-1; reading again.')
+      })
+    }
+
+    it('an unanswered execution POST: a failed read is said beside its unknown outcome', async () => {
+      const { w } = await reviewReady({
+        'POST /executions': timeout(),
+        'GET /executions/apr-1': refuse(403, 'forbidden', 'not allowed')
+      })
+      await approve(w)
+      await w.get('[data-test="execute"]').trigger('click')
+      await flushPromises()
+      expect(stage(w)).toBe('executing')
+      const said = text(w, 'stage-status')
+      expect(said).toContain('Execution outcome unknown; reading its status by approval id apr-1. Do not send again.')
+      // an execution this tab sent is read until a read shows it finished, refusals included
+      expect(said).toContain('Could not read the status of execution apr-1; reading again.')
+    })
+  })
 })
 

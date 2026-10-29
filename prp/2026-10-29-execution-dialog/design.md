@@ -33,6 +33,8 @@ review ──Confirm──▶ submitting ──201──▶ approved ──Execu
 * `reconciled` / `incident` read the same polled execution the page shows; no resend, no reversal.
   A leg whose outcome is unknown keeps the dialog in `executing` (it is still being read); the
   page lists it under Incidents with its evidence, as E6 asks.
+* A failed status read is said in the dialog's status line beside the stage's own text
+  (`reconciled`, `incident`) or a held block, never in place of it; the last read time stays.
 * A block held for the run while an approval is open shows `unknown`; a 4xx on Execute shows
   *Execution refused*. Escape and Tab are handled on the document while the dialog is open.
 * Copy buttons on approval id and plan hash announce *copied* (or why not) in a polite live region.
