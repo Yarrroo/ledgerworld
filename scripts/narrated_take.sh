@@ -2,9 +2,10 @@
 # The narrated machine take (goal g5): a voiced, labelled walkthrough of the deployed app in one
 # MP4, for upload when no human take exists. It publishes nothing and leaves docs/submission.md alone.
 #
-#   bash scripts/narrated_take.sh URL       record the take of the deployment at URL (~4:40)
-#   bash scripts/narrated_take.sh --dry-run build the plan, estimate the voice fit, print the card
-#                                           and the mux command; offline, no browser, no voice
+#   bash scripts/narrated_take.sh URL [--keep DIR]  record the take of the deployment at URL (~4:40)
+#   bash scripts/narrated_take.sh --dry-run         build the plan, estimate the voice fit, print the
+#                                                   card and the mux command, gate the plan's length;
+#                                                   offline, no browser, no voice
 #
 # A take runs checks/recording_ready.py URL first and stops unless it prints GO. Then it voices the
 # seven Voice lines (scripts/voiceover.py, edge-tts), records e2e/narrated-take.spec.ts (a 3-second
@@ -14,19 +15,24 @@
 # (fresh fork, approval request, interview) off-screen; without it the take is read-only and says so.
 # The token is never printed, passed on a command line or written to the output directory; only
 # the spec's process holds it, and only over https (or this machine's http://localhost).
-# Prints the MP4's path, size and sha256 and a per-beat table; the mktemp directory is kept.
+# Every beat ends at its planned time, counted from the take's start (e2e/clock.js); a stall
+# shortens the beat it hit. Prints the MP4's path, size and sha256 and a per-beat table, then fails
+# the take (exit 1) when the MP4 runs past 4:40 or a beat left its screen more than 2 s after its
+# planned end (scripts/voiceover.py gate). --keep DIR copies the MP4, its SRT and beats.json there,
+# from a failed take too, so they outlive the run's scratch; the mktemp directory is kept as well.
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 e2e="$root/e2e"
 ffmpeg=(--with imageio-ffmpeg==0.7.0)
 tts=(--with edge-tts==7.3.1 "${ffmpeg[@]}")
 
-usage() { echo "usage: bash scripts/narrated_take.sh URL | --dry-run" >&2; exit 2; }
+usage() { echo "usage: bash scripts/narrated_take.sh URL [--keep DIR] | --dry-run" >&2; exit 2; }
 
-url="" dry=0
+url="" dry=0 keep=""
 while (($#)); do
   case "$1" in
     --dry-run) dry=1; shift ;;
+    --keep) (($# > 1)) && [[ -n "$2" && "$2" != -* ]] || usage; keep="$2"; shift 2 ;;
     -h | --help | -*) usage ;;
     *) [[ -z "$url" ]] || usage; url="$1"; shift ;;
   esac
@@ -38,8 +44,22 @@ if ((!dry)) && [[ -n "${LEDGERWORLD_DEMO_TOKEN:-}" && ! "$url" =~ ^(https://|htt
   usage
 fi
 
+if ((!dry)) && [[ -n "$keep" ]]; then
+  mkdir -p "$keep" && keep="$(cd "$keep" && pwd)" || { echo "narrated-take: cannot write to $keep" >&2; exit 2; }
+fi
+
 out="$(mktemp -d "${TMPDIR:-/tmp}/narrated-take.XXXXXX")"
-fail() { echo "narrated-take: $1; output kept in $out" >&2; exit 1; }
+take="$out/ledgerworld-narrated-take.mp4"
+# the take's files that exist, copied where they outlive the scratch directory
+keep_take() {
+  [[ -n "$keep" ]] || return 0
+  local file
+  for file in "$take" "${take%.mp4}.srt" "$out/beats.json"; do
+    [[ -f "$file" ]] && cp "$file" "$keep/"
+  done
+  echo "kept: $keep" >&2
+}
+fail() { keep_take; echo "narrated-take: $1; output kept in $out" >&2; exit 1; }
 # every child but the take's own spec runs without the token
 voiceover() { (cd "$root" && env -u LEDGERWORLD_DEMO_TOKEN uv run "$@"); }
 
@@ -53,6 +73,8 @@ if ((dry)); then
   # the mux, as it would run over a take that kept to plan
   voiceover python scripts/voiceover.py mux --dry-run --video "$out/take.webm" --voice "$out/voice/voice.json" \
     --out "$out/take.mp4" >&2 || fail "the mux command could not be built"
+  voiceover python scripts/voiceover.py gate --dry-run --voice "$out/voice/voice.json" \
+    || fail "the plan itself does not fit the take's limits"
   if [[ -d "$e2e/node_modules/@playwright/test" ]]; then
     (cd "$e2e" && NARRATED_URL=http://localhost NARRATED_PLAN="$out/plan.json" NARRATED_OUT="$out" \
       NARRATED_LABEL="$out/label.json" npx --no-install playwright test --config narrated-take.config.ts --list >&2) \
@@ -89,9 +111,13 @@ video="$(find "$out/artifacts" -name '*.webm' 2>/dev/null | head -n 1)"
 ((status == 0)) && [[ -n "$video" ]] || fail "the take did not pass (playwright exit $status)"
 
 voiceover "${ffmpeg[@]}" python scripts/voiceover.py mux --video "$video" --voice "$out/voice/voice.json" \
-  --beats "$out/beats.json" --out "$out/ledgerworld-narrated-take.mp4" || fail "the mux failed"
-take="$out/ledgerworld-narrated-take.mp4"
-echo "take: $take"
+  --beats "$out/beats.json" --out "$take" || fail "the mux failed"
+keep_take
+shown="$take"
+[[ -n "$keep" ]] && shown="$keep/$(basename "$take")"
+echo "take: $shown"
 echo "size: $(stat -c %s "$take") bytes"
 echo "sha256: $(sha256sum "$take" | cut -d' ' -f1)"
-echo "subtitles: ${take%.mp4}.srt (each line where its voice plays in the MP4)"
+echo "subtitles: ${shown%.mp4}.srt (each line where its voice plays in the MP4)"
+voiceover "${ffmpeg[@]}" python scripts/voiceover.py gate --voice "$out/voice/voice.json" --beats "$out/beats.json" \
+  --video "$take" || { echo "narrated-take: the take is not the one to upload; output kept in $out" >&2; exit 1; }
