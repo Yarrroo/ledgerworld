@@ -27,7 +27,9 @@ const JUDGE = JSON.parse(readFileSync(join(UI, 'judge-path.json'), 'utf-8'))
 const A11Y = JSON.parse(readFileSync(join(UI, 'accessibility.json'), 'utf-8'))
 const CASE = Object.fromEntries(A11Y.cases.map((c: { id: string }) => [c.id, c]))
 const CLICKS: { n: number, name: string, route: string }[] = JUDGE.clicks
+/** The provider mode as a receipt names it, and as the context bar says it in plain words. */
 const MODES = ['Simulated provider', 'Airwallex sandbox']
+const BANNER = ['Simulated bank connection', 'Sandbox bank']
 const OUT = process.env.JUDGE_PATH_OUT
 
 interface Demo { run_id: string | null, execution_id: string | null }
@@ -51,7 +53,7 @@ async function overview (page: Page): Promise<Demo> {
   const reply = await answer
   expect(reply.status(), 'GET /api/v1/overview').toBe(200)
   const demo: Demo = (await reply.json()).demo ?? { run_id: null, execution_id: null }
-  await expect(test$(page, 'mode')).toHaveText(new RegExp(MODES.join('|')))
+  await expect(test$(page, 'mode')).toHaveText(new RegExp(BANNER.join('|')))
   await expect(test$(page, 'source')).not.toBeEmpty()
   await expect(test$(page, 'settled').locator('.lw-figure')).toHaveText(/\d/)
   // the payroll deadline in UTC and local time; once the demonstration's own execution has paid
@@ -293,7 +295,7 @@ test.describe('accessibility', () => {
       await page.locator('nav.lw-nav').getByRole('link', { name: screen, exact: true }).click()
       await expect(page).toHaveURL(new RegExp(`/${screen.toLowerCase()}$`))
       await expect(page.locator('h1')).toHaveText(screen)
-      await expect(test$(page, 'mode')).toHaveText(new RegExp(MODES.join('|')))
+      await expect(test$(page, 'mode')).toHaveText(new RegExp(BANNER.join('|')))
       await expect(test$(page, 'source')).not.toBeEmpty()
       await accessible(page, screen, phone)
       const drill = page.locator('details.lw-calc summary').first()

@@ -16,7 +16,7 @@ describe('CashOutlook', () => {
       props: props(body.outlook)
     })
     await w.findAll('[data-test="outlook-point"]')[4].trigger('pointerenter', { pointerType: 'mouse' })
-    expect(w.find('[data-test="outlook-tip"]').text()).toContain('t=72 h')
+    expect(w.find('[data-test="outlook-tip"]').text()).toContain('in 3 days')
     await w.setProps({ points: body.outlook.slice(0, 2) })
     expect(w.findAll('[data-test="outlook-point"]')).toHaveLength(2)
     expect(w.find('[data-test="outlook-tip"]').exists()).toBe(false)
@@ -41,12 +41,12 @@ describe('CashOutlook', () => {
     const point = w.findAll('[data-test="outlook-point"]')[1]
     await point.trigger('click')
     await point.trigger('pointerleave', { pointerType: 'touch' })
-    expect(w.find('[data-test="outlook-tip"]').text()).toContain('t=12 h')
+    expect(w.find('[data-test="outlook-tip"]').text()).toContain('in 12 hours')
   })
   it('shows the tip to a hovering pen as to a mouse', async () => {
     const w = mount(CashOutlook, { props: props(body.outlook) })
     await w.findAll('[data-test="outlook-point"]')[2].trigger('pointerenter', { pointerType: 'pen' })
-    expect(w.find('[data-test="outlook-tip"]').text()).toContain('t=40 h')
+    expect(w.find('[data-test="outlook-tip"]').text()).toContain('in 40 hours')
   })
 
   it('stops watching a frame that is gone', async () => {

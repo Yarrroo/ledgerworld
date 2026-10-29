@@ -66,7 +66,7 @@ describe('Overview panels on the baseline', () => {
     expect(w.get('[data-test="outlook-point"].is-low').classes()).toContain('is-ok')
     await w.get('[data-test="outlook-view-data"]').trigger('click')
     const rows = w.findAll('[data-test="outlook-table"] tbody tr').map((r) => r.text())
-    expect(rows.map((r) => r.match(/t=\d+ h/)[0])).toEqual(['t=0 h', 't=12 h', 't=40 h', 't=48 h', 't=72 h'])
+    expect(rows.map((r) => r.match(/^(now|in \d+ (hours?|days?))/)[0])).toEqual(['now', 'in 12 hours', 'in 40 hours', 'in 2 days', 'in 3 days'])
     expect(rows[2]).toContain('USD 40,000.00')
     expect(rows[2]).toContain('payroll-1 −USD 50,000.00')
   })
@@ -86,8 +86,16 @@ describe('Overview panels on the baseline', () => {
     expect(relations[1]).toContain('committed line line-b, limit USD 10,000.00')
     expect(text(w, 'scenario')).toContain('What if the USD 20,000.00 receivable arrives late?')
     await w.get('[data-test="preview-scenario"]').trigger('click')
-    expect(text(w, 'scenario-timing')).toBe('receivable-1 expected t=12 h, delayed 240 h')
+    expect(text(w, 'scenario-timing')).toBe('receivable-1 expected in 12 hours, delayed 10 days')
     expect(text(w, 'settled')).toContain('USD 70,000.00') // nothing observed changed
+  })
+
+  it('O6 says an early arrival as early, never as an unknown delay', async () => {
+    const body = withRun()
+    body.scenario.params.delay_h = -2
+    const w = await open(body)
+    await w.get('[data-test="preview-scenario"]').trigger('click')
+    expect(text(w, 'scenario-timing')).toBe('receivable-1 expected in 12 hours, early by 2 hours')
   })
 
   it('O6 shows a scenario amount in its currency, never as raw minor units', async () => {

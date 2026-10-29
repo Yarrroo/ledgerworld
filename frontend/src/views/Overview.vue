@@ -9,7 +9,7 @@
       <p v-if="leadSeen" class="lw-time" data-test="lead-stale">{{ leadSeen }}</p>
       <div class="lw-ov-labels" data-test="labels">
         <span class="lw-ov-tag" data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span>
-        <span v-if="PLAIN[model]" class="lw-ov-tag">{{ PLAIN[model] }}</span>
+        <span v-if="AGENTS[model]" class="lw-ov-tag">{{ AGENTS[model] }}</span>
       </div>
       <HowWeKnow test="how-context">
         <dl class="lw-ov-facts">
@@ -19,6 +19,7 @@
           <div><dt>Provider</dt><dd>{{ LABELS[body.mode] || body.mode }}</dd></div>
           <div><dt>Model</dt><dd>{{ model || 'Not reported' }}</dd></div>
           <div><dt>As of</dt><dd data-test="context-time">{{ formatTime(body.as_of).utc }} · {{ formatTime(body.as_of).local }}</dd></div>
+          <div v-if="body.completeness.accounts.length"><dt>Not current</dt><dd>{{ body.completeness.accounts.map((a) => a.account_id).join(', ') }}</dd></div>
         </dl>
       <p>The sentence above reads the API's figures: free to spend now is spendable S, the lowest
         point ahead is minimum projected cash P over the horizon, and the safety minimum is the reserve floor.</p>
@@ -95,9 +96,9 @@
           <div class="lw-tile__label">{{ kindText(next.kind) }}</div>
           <div class="lw-figure">{{ money(next.amount) }}</div>
           <dl class="lw-ov-facts lw-ov-facts--stack">
-            <div><dt>Due</dt><dd class="lw-time" data-test="due">due {{ due.utc }} · {{ due.local }} · {{ hoursFrom(body.as_of, next.due_at) }} from as of</dd></div>
+            <div><dt>Due</dt><dd class="lw-time" data-test="due">due {{ due.utc }} · {{ due.local }} · {{ hoursFrom(body.as_of, next.due_at) }}</dd></div>
             <div><dt>Set aside</dt><dd>{{ next.reserved ? 'Yes, the money is set aside' : 'Not set aside' }}</dd></div>
-            <div><dt>Paid from</dt><dd>{{ next.account || 'Not named by the API' }}</dd></div>
+            <div><dt>Paid from</dt><dd data-test="paid-from">{{ next.account ? accountName(next.account, { currency: next.amount.currency }) : 'Not named by the API' }}</dd></div>
           </dl>
           <HowWeKnow test="how-next">
             <dl class="lw-ov-facts lw-ov-facts--stack">
@@ -199,8 +200,8 @@ import { RouterLink, useRouter } from 'vue-router'
 import CashOutlook from '../components/CashOutlook.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
 import {
-  FLOOR_WORDS, LABELS, PLAIN, STATES, ScreenShell, amountWords, dayText, floorState, formatAmount, formatMoney,
-  formatTime, freshness, getOverview, hoursFrom, kindText, lastSeen, metricStatus, metricText, modelSource, money,
+  AGENTS, FLOOR_WORDS, LABELS, PLAIN, STATES, ScreenShell, accountName, amountWords, dayText, floorState, formatAmount, formatMoney,
+  formatTime, freshness, getOverview, hoursFrom, hoursWords, kindText, lastSeen, metricStatus, metricText, modelSource, money,
   pendingFlows, routeExists, rowLink, staleOf, useReading
 } from '../api/v1.js'
 
@@ -336,7 +337,7 @@ const inputs = computed(() => {
         rule: 'The earliest open obligation due from now.',
         lines: [
           { key: 'id', text: `${n.kind} ${n.obligation_id}: ${money(n.amount)}` },
-          { key: 'due', text: `due ${t.utc} · ${t.local} · ${hoursFrom(b.as_of, n.due_at)} from as of` },
+          { key: 'due', text: `due ${t.utc} · ${t.local} · ${hoursFrom(b.as_of, n.due_at)}` },
           { key: 'res', text: n.reserved ? `reserved by ${n.reservation_id || 'a hold'}` : 'not reserved' },
           { key: 'acct', text: `paid from ${n.account || 'an account the API does not name'}`, to: rowLink('/treasury', `obligation:${n.obligation_id}`, b.snapshot_id), link: 'Open on Treasury' }
         ],
@@ -389,7 +390,7 @@ const delayed = computed(() => {
   const hours = state.body?.scenario?.params?.delay_h
   if (!f || !Number.isInteger(hours)) return ''
   const from = hoursFrom(state.body.as_of, f.expected_at)
-  return `${f.flow_id} expected ${from}, delayed ${hours} h`
+  return `${f.flow_id} expected ${from}, ${hours < 0 ? `early by ${hoursWords(-hours)}` : `delayed ${hoursWords(hours)}`}`
 })
 /** The scenario's parameters as text: an `<x>_minor` amount in its currency, never raw units. */
 const scenarioParams = computed(() => {

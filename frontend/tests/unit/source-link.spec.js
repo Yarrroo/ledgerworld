@@ -56,14 +56,14 @@ describe('the source link', () => {
   it.each(SCREENS)('%s links the source from its footer under the image setting', async (name, path) => {
     const wrapper = await open(name, path, { VITE_SOURCE_URL: SOURCE })
     expect(wrapper.find('[data-test="error"]').exists()).toBe(false)
-    expect(wrapper.get('[data-test="mode"]').text()).toBe('Simulated provider')
+    expect(wrapper.get('[data-test="mode"]').text()).toBe('Simulated bank connection')
     const link = wrapper.get(`main a[href="${SOURCE}"]`)
     expect(link.text()).toBe('Source code (AGPL-3.0)')
   })
 
   it.each(SCREENS)('%s shows no dead link when built without one', async (name, path) => {
     const wrapper = await open(name, path, { VITE_SOURCE_URL: '' })
-    expect(wrapper.get('[data-test="mode"]').text()).toBe('Simulated provider')
+    expect(wrapper.get('[data-test="mode"]').text()).toBe('Simulated bank connection')
     expect(wrapper.findAll('a').filter((a) => a.text().startsWith('Source code'))).toEqual([])
   })
 })

@@ -257,7 +257,7 @@ describe('Execution: authority and the bounded approval', () => {
     const c = kase('public-read')
     const calls = serve({ 'GET /overview': overview(), 'GET /decisions/run-1': decisionsBody() })
     const w = await open(Execution, '/execution')
-    expect(text(w, 'mode')).toBe('Simulated provider')
+    expect(text(w, 'context-provider')).toBe('Simulated provider')
     expect(text(w, 'review-why')).toBe(c.expect.reason)
     expect(w.find('[data-test="token"]').exists()).toBe(false) // the read path never asks for it
     await w.get('[data-test="review-plan"]').trigger('click')
@@ -439,7 +439,7 @@ describe('Execution: provider state, receipts and reconciliation', () => {
   it('a fake-mode receipt is labelled simulated provider', async () => {
     const c = kase('fake').expect
     const w = await showing(executionBody({ legs: [advance()] }))
-    expect(text(w, 'mode')).toBe(c.banner_and_receipt)
+    expect(text(w, 'context-provider')).toBe(c.banner_and_receipt)
     expect(text(w, 'receipt-mode').toLowerCase()).toBe('simulated provider')
     expect(text(w, 'receipt')).toContain(c.banner_and_receipt)
     expect(w.text()).not.toMatch(/live checkpoint/i)
@@ -449,7 +449,7 @@ describe('Execution: provider state, receipts and reconciliation', () => {
     const c = kase('mode-b').expect
     const leg = { ...advance(), receipt: { ...advance().receipt, mode: 'sandbox' } }
     const w = await showing(executionBody({ legs: [leg], mode: 'sandbox' }))
-    expect(text(w, 'mode')).toBe(c.banner)
+    expect(text(w, 'context-provider')).toBe(c.banner)
     expect(text(w, 'leg-advance')).toContain(c.advance_label)
     expect(text(w, 'receipt-mode')).toBe('Airwallex sandbox')
   })

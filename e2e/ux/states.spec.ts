@@ -54,7 +54,7 @@ test('loading: skeletons and a polite Loading in place of amounts; navigation st
     await expect(page.locator('main .lw-figure')).toHaveCount(0)
     await expect(page.locator('main')).not.toContainText(/USD|\d+[.,]\d\d/)
     await expect($(page, 'refresh')).toBeDisabled()
-    await expect($(page, 'mode')).toHaveText('Provider mode not loaded')
+    await expect($(page, 'mode')).toHaveText('Bank connection not loaded')
     expect(await sideways(page), `${route.path} scrolls sideways while loading`).toBeLessThanOrEqual(0)
   }
   // navigation is not held by a read in flight
@@ -133,9 +133,9 @@ test('Overview: known zero, Unknown, Not assessed and Stale stay distinct, with 
 
   const band = $(page, 'stale-band')
   await expect(band).toContainText('◷ Stale')
-  await expect(band).toContainText(stale)
+  await expect(band).toContainText('Treasury reserve check account') // the account by name; its id is in How we know
   await expect(band).toContainText(UTC)
-  await expect($(page, 'partial')).toContainText(stale)
+  await expect($(page, 'partial')).toContainText('Treasury reserve check account')
   expect(await sideways(page), 'Overview scrolls sideways').toBeLessThanOrEqual(0)
   expect(writes).toEqual([])
 })
@@ -167,7 +167,7 @@ test('Treasury: S known at zero, stale with its as of, Unknown; the floor Not as
     await expect($(page, 'coverage')).not.toContainText(/Floor kept|Floor breached|Above your safety minimum|Below your safety minimum/)
     if (k.status === 'stale') {
       await expect($(page, 'stale-band')).toContainText('◷ Stale')
-      await expect($(page, 'stale-band')).toContainText(id!)
+      await expect($(page, 'stale-band')).toContainText(`${id!.split('/')[0].replace(/^./, (c) => c.toUpperCase())} ${id!.split('/')[1]} account`)
       await expect($(page, 'stale-band')).toContainText(UTC)
     } else {
       await expect($(page, 'stale-band')).toHaveCount(0)
@@ -193,10 +193,11 @@ test('Lending: K_p known at zero; a stale account is banded and not counted', as
   await settled(page)
   await expect($(page, 'capacity-value')).toHaveText(new RegExp(`^${c} 0\\.00`))
   await expect($(page, 'capacity-status')).toHaveText(/^● Known as of /)
-  await expect($(page, 'not-current')).toContainText(venue)
+  await expect($(page, 'not-current')).toContainText('Lender stale venue account')
   await expect($(page, 'not-current')).toContainText('◷')
+  await expect($(page, 'evidence')).toContainText(venue)
   await expect($(page, 'stale-band')).toContainText('◷ Stale')
-  await expect($(page, 'stale-band')).toContainText(venue)
+  await expect($(page, 'stale-band')).toContainText('Lender stale venue account')
   expect(writes).toEqual([])
 })
 

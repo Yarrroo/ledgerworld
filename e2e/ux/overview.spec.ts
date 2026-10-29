@@ -21,6 +21,8 @@ const BASELINE = JSON.parse(readFileSync(join(__dirname, '../../contracts/exampl
 
 /** "USD 70,000.00", as the screen formats integer minor units. */
 const usd = (minor: number) => `USD ${(minor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
+/** "10 days", "1 day", "36 hours": a whole-hour span as the screen says it. */
+const words = (h: number) => (h && h % 24 === 0 ? `${h / 24} day${h === 24 ? '' : 's'}` : `${h} hour${h === 1 ? '' : 's'}`)
 const metric = (m: { minor: number | null, status: string }) =>
   m.status === 'known' ? usd(m.minor!) : m.status === 'stale' ? `${usd(m.minor!)} · stale` : null
 
@@ -131,7 +133,7 @@ test('O3 cash outlook: the API points, each focusable with its time, amount and 
     await points.nth(n).focus()
     const tip = $(page, 'outlook-tip')
     await expect(tip).toContainText(metric(p.value)!)
-    await expect(tip).toContainText(/t=\d+ h simulated · \d{4}-\d\d-\d\d \d\d:\d\d UTC/)
+    await expect(tip).toContainText(/(now|in \d+ (hours?|days?)), simulated time · \d{4}-\d\d-\d\d \d\d:\d\d UTC/)
     for (const e of p.events) await expect(tip).toContainText(e.ref)
   }
   await page.keyboard.press('Tab') // focus leaves the last point: its tip goes
@@ -157,11 +159,11 @@ test('baseline: the handoff numbers, a green minimum, and the next payroll opens
   const writes = await readOnly(page, baseURL!)
   const body = await baseline(page)
   await open(page)
-  // O2: settled 70k, spendable 20k, payroll 50k due t=40 h, headroom 10k
+  // O2: settled 70k, spendable 20k, payroll 50k due in 40 hours, headroom 10k
   await expect($(page, 'settled').locator('.lw-figure')).toHaveText('USD 70,000.00')
   await expect($(page, 'spendable').locator('.lw-figure')).toHaveText('USD 20,000.00')
   await expect($(page, 'next-due').locator('.lw-figure')).toHaveText('USD 50,000.00')
-  await expect($(page, 'next-due-at')).toHaveText('due t=40 h')
+  await expect($(page, 'next-due-at')).toHaveText('due in 40 hours')
   await expect($(page, 'coverage').locator('.lw-figure')).toHaveText('USD 10,000.00')
   await expect($(page, 'floor-status')).toHaveText(/Above your safety minimum/)
   await $(page, 'pick-spendable').click()
@@ -171,10 +173,10 @@ test('baseline: the handoff numbers, a green minimum, and the next payroll opens
   // O3: P 70k, 90k, 40k, 55k, 55k at t = 0, 12, 40, 48, 72; the lowest, kept, is green
   await $(page, 'outlook-view-data').click()
   const rows = $(page, 'outlook-table').locator('tbody tr')
-  const want = [[0, 70_000], [12, 90_000], [40, 40_000], [48, 55_000], [72, 55_000]]
+  const want = [['now', 70_000], ['in 12 hours', 90_000], ['in 40 hours', 40_000], ['in 2 days', 55_000], ['in 3 days', 55_000]] as const
   await expect(rows).toHaveCount(want.length)
   for (const [n, [h, dollars]] of want.entries()) {
-    await expect(rows.nth(n).locator('td').first()).toHaveText(`t=${h} h`)
+    await expect(rows.nth(n).locator('td').first()).toHaveText(h)
     await expect(rows.nth(n)).toContainText(usd(dollars * 100))
   }
   await expect(rows.nth(1)).toContainText('receivable-1 +USD 20,000.00')
@@ -187,10 +189,11 @@ test('baseline: the handoff numbers, a green minimum, and the next payroll opens
   // O4: amount, exact deadline, reservation, state, funding account; Open Treasury → its row
   const next = $(page, 'next-obligation')
   await expect(next).toContainText('USD 50,000.00')
-  await expect($(page, 'due')).toHaveText(/^due 2026-01-02 16:00 UTC · local .* · t=40 h from as of$/)
+  await expect($(page, 'due')).toHaveText(/^due 2026-01-02 16:00 UTC · local .* · in 40 hours$/)
   await expect(next).toContainText('reserved · payroll-hold')
   await expect(next).toContainText('Open')
-  await expect(next).toContainText('treasury/operating')
+  await expect($(page, 'paid-from')).toHaveText('Operating account · USD')
+  await expect($(page, 'how-next')).toContainText('treasury/operating')
   await tall(page, '[data-test="open-treasury"]')
   // O6: the receivable the scenario delays, by its amount; nothing observed changes
   await expect($(page, 'scenario')).toContainText('What if the USD 20,000.00 receivable arrives late?')
@@ -232,7 +235,7 @@ test('O5 exposure and O6 scenario: text relationships, the prepared run, a read-
   await expect(shown).toContainText(body.scenario.about)
   await expect(shown).toContainText(body.demo.run_id)
   if (body.scenario.params.delay_h) {
-    await expect($(page, 'scenario-timing')).toContainText(`delayed ${body.scenario.params.delay_h} h`)
+    await expect($(page, 'scenario-timing')).toContainText(`delayed ${words(body.scenario.params.delay_h)}`)
   }
   expect(await $(page, 'settled').textContent()).toBe(before) // the preview changes no observed figure
   await tall(page, '[data-test="preview-scenario"], a[data-test="open-simulation"]')
