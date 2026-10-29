@@ -17,9 +17,9 @@
           </g>
           <path :d="area" class="lw-outlook__area" aria-hidden="true" />
           <line v-if="floorY !== null" :x1="M.left" :x2="width - M.right" :y1="floorY" :y2="floorY"
-                class="lw-outlook__floor" aria-hidden="true" />
+                class="lw-outlook__floor" aria-hidden="true" data-test="outlook-floor" />
           <text v-if="floorY !== null" :x="width - M.right" :y="floorY - 6" text-anchor="end"
-                class="lw-outlook__floor-label" aria-hidden="true">Reserve floor {{ short(floor.minor) }}</text>
+                class="lw-outlook__floor-label" aria-hidden="true" data-test="outlook-floor-label">{{ floorText }}</text>
           <path :d="line" class="lw-outlook__line" aria-hidden="true" />
           <g v-for="p in drawn" :key="p.t" class="lw-outlook__point"
              :class="{ 'is-low': p.low, [`is-${lowTone}`]: p.low, 'is-active': active === p.t }"
@@ -29,8 +29,8 @@
             <circle :cx="p.px" :cy="p.py" r="22" class="lw-outlook__hit" />
             <circle :cx="p.px" :cy="p.py" :r="p.low ? 7 : 5" class="lw-outlook__dot" />
           </g>
-          <text v-if="low" :x="lowLabel.x" :y="low.py + 24" :text-anchor="lowLabel.anchor"
-                class="lw-outlook__low-label" aria-hidden="true">Lowest {{ short(low.value.minor) }} · {{ low.h }}</text>
+          <text v-if="low" :x="lowLabel.x" :y="lowLabel.y" :text-anchor="lowLabel.anchor"
+                class="lw-outlook__low-label" aria-hidden="true" data-test="outlook-low-label">{{ lowLabel.text }}</text>
         </svg>
         <div v-if="tip" class="lw-outlook__tip" aria-hidden="true" data-test="outlook-tip"
              :style="tipStyle">
@@ -193,9 +193,35 @@ const drawn = computed(() => props.points.map((p) => {
   }
 }))
 const low = computed(() => drawn.value.find((p) => p.low) ?? null)
+const floorText = computed(() => (floorKnown.value ? `Reserve floor ${short(props.floor.minor)}` : ''))
+
+/** A label's box around its baseline y: 12 px text, a generous glyph width, 3 px to spare. */
+const GLYPH = 7.5
+function box (text, x, baseline, anchor) {
+  const w = text.length * GLYPH
+  const left = anchor === 'end' ? x - w : x
+  return { left: left - 3, right: left + w + 3, top: baseline - 16, bottom: baseline + 7 }
+}
+const meets = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+
+/** The lowest point's label: below the point unless that crosses the floor line or the floor
+ * label, then above it, then a line further out each way; below when nothing clears. */
 const lowLabel = computed(() => {
-  const right = low.value && low.value.px > width.value - 160
-  return { x: low.value ? low.value.px + (right ? -10 : 10) : 0, anchor: right ? 'end' : 'start' }
+  const p = low.value
+  if (!p) return { x: 0, y: 0, anchor: 'start', text: '' }
+  const text = `Lowest ${short(p.value.minor)} · ${p.h}`
+  const right = p.px > width.value - 160
+  const x = p.px + (right ? -10 : 10)
+  const anchor = right ? 'end' : 'start'
+  const fy = floorY.value
+  const floorBox = fy === null ? null : box(floorText.value, width.value - M.right, fy - 6, 'end')
+  const clears = (baseline) => {
+    if (fy === null) return true
+    const b = box(text, x, baseline, anchor)
+    return !(fy > b.top && fy < b.bottom) && !meets(b, floorBox)
+  }
+  const y = [p.py + 24, p.py - 14, p.py + 40, p.py - 30].find(clears) ?? p.py + 24
+  return { x, y, anchor, text }
 })
 
 const step = (pts) => pts.map((p, n) => (n ? `H${p.px}V${p.py}` : `M${p.px},${p.py}`)).join('')
