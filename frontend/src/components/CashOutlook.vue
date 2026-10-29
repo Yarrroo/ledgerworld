@@ -108,16 +108,20 @@ onMounted(() => {
   if (frame.value) observer?.observe(frame.value)
   measure()
 })
-watch(frame, (el) => { if (el) observer?.observe(el); measure() })
+watch(frame, (el, gone) => {
+  if (gone) observer?.unobserve(gone)
+  if (el) observer?.observe(el)
+  measure()
+})
 onBeforeUnmount(() => observer?.disconnect())
 
 const hoursOf = (t) => (Date.parse(t) - Date.parse(props.asOf)) / 3_600_000
 const known = computed(() => props.points.filter((p) => p.value.minor !== null))
 const floorKnown = computed(() => (props.floor?.minor ?? null) !== null)
 
-/** A round step for the y axis: 1, 2 or 5 × 10^k of the currency's minor units. */
+/** A round step for the y axis: 1, 2 or 5 × 10^k of the currency's minor units, at least 1. */
 function niceStep (span) {
-  const raw = Math.max(span, 1) / 4
+  const raw = Math.max(span / 4, 1)
   const mag = 10 ** Math.floor(Math.log10(raw))
   return [1, 2, 5, 10].map((k) => k * mag).find((s) => s >= raw)
 }
@@ -204,10 +208,10 @@ const area = computed(() => {
   return `${step(pts)}H${x(xEnd.value)}V${base}H${pts[0].px}Z`
 })
 
-/** A mouse shows the tip while over a point; a touch shows it by tapping (focus and click),
- * and its pointer leaving as the finger lifts does not take it away. */
+/** A mouse or a pen shows the tip while over a point; a touch shows it by tapping (focus and
+ * click), and its pointer leaving as the finger lifts does not take it away. */
 function hover (event, t) {
-  if (event.pointerType === 'mouse') active.value = t
+  if (event.pointerType !== 'touch') active.value = t
 }
 
 /** The tip's point, while a point at that time is still drawn. */

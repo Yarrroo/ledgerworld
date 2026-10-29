@@ -80,6 +80,8 @@ test('O2 cash strip: a metric opens its API inputs; cash and spendable open thei
   await expect($(page, 'spendable').locator('.lw-figure')).toHaveText(metric(body.spendable)!)
   await expect($(page, 'coverage').locator('.lw-figure')).toHaveText(metric(body.coverage.headroom)!)
   await expect($(page, 'settled')).toContainText(/Known|Stale/)
+  // the strip's figures are set in the heading serif, as the handoff draws them
+  expect(await $(page, 'settled').locator('.lw-figure').evaluate((e) => getComputedStyle(e).fontFamily)).toMatch(/Source Serif 4/)
   await tall(page, '.lw-ov-metric__pick')
 
   for (const key of ['settled', 'spendable', 'next-due', 'coverage']) {

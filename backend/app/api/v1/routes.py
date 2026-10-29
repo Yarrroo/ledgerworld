@@ -127,7 +127,8 @@ def _demo_scenario(run_id: str | None) -> dict | None:
     try:
         family = family_of(spec["scenario"])
         return {"family": family.id, "about": _family_about(family.id), "params": family.params}
-    except (OSError, KeyError, TypeError, ValueError):
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        log.warning("overview: run %s has a scenario that no longer loads: %s", run_id, error)
         return None
 
 
@@ -136,9 +137,7 @@ def overview():
     s = services()
     with s.lock:
         demo = s.demo()
-    scenario = _demo_scenario(demo["run_id"])
-    with s.lock:
-        body = views.overview(s.store, s.snapshot, s.now(), demo, scenario)
+        body = views.overview(s.store, s.snapshot, s.now(), demo, _demo_scenario(demo["run_id"]))
     return _reply(c6.OverviewResponse, body)
 
 

@@ -442,7 +442,6 @@ const preview = ref(false)
   cursor: pointer;
 }
 
-.lw-ov-metric__pick .lw-figure,
 .lw-ov-metric__sub {
   font-weight: 600;
 }
@@ -510,6 +509,7 @@ const preview = ref(false)
   margin-top: 0 !important;
 }
 
+.lw-ov-metric__pick .lw-figure,
 .lw-ov-next .lw-figure {
   font-family: var(--lw-font-heading);
   font-size: 30px;

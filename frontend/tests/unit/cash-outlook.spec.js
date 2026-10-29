@@ -43,4 +43,31 @@ describe('CashOutlook', () => {
     await point.trigger('pointerleave', { pointerType: 'touch' })
     expect(w.find('[data-test="outlook-tip"]').text()).toContain('t=12 h')
   })
+  it('shows the tip to a hovering pen as to a mouse', async () => {
+    const w = mount(CashOutlook, { props: props(body.outlook) })
+    await w.findAll('[data-test="outlook-point"]')[2].trigger('pointerenter', { pointerType: 'pen' })
+    expect(w.find('[data-test="outlook-tip"]').text()).toContain('t=40 h')
+  })
+
+  it('stops watching a frame that is gone', async () => {
+    const watched = new Set()
+    vi.stubGlobal('ResizeObserver', class {
+      observe (el) { watched.add(el) }
+      unobserve (el) { watched.delete(el) }
+      disconnect () {}
+    })
+    const w = mount(CashOutlook, { props: props(body.outlook) })
+    await w.setProps({ points: [] })
+    await w.setProps({ points: body.outlook })
+    expect(watched.size).toBe(1)
+    expect(watched.has(w.get('.lw-outlook__frame').element)).toBe(true)
+  })
+
+  it('labels the y axis with representable amounts when every P is zero', async () => {
+    const zero = body.outlook.map((p) => ({ ...p, value: { ...p.value, minor: 0 } }))
+    const w = mount(CashOutlook, { props: { ...props(zero), floor: null } })
+    const ticks = w.findAll('.lw-outlook__axis g text').map((t) => t.text())
+    expect(ticks.length).toBeGreaterThan(1)
+    for (const t of ticks) expect(t).toMatch(/^-?[\d,]+(\.\d+)?$/) // never 'Unrepresentable amount'
+  })
 })
