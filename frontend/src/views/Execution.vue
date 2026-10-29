@@ -80,8 +80,7 @@
                     :class="{ [`lw-steps__${step.mark}`]: step.mark !== 'todo', 'lw-steps__now': step.now }"
                     :aria-current="step.now ? 'step' : undefined">
                   <span aria-hidden="true">{{ STEP_MARK[step.mark] }}</span> {{ step.name }}<template
-                    v-if="step.now && leg.stepNote"> · {{ leg.stepNote }}</template><template
-                    v-if="step.mark === 'skipped'"> · not applicable</template><span
+                    v-if="step.note"> · {{ step.note }}</template><span
                     v-if="step.mark === 'done'" class="lw-visually-hidden">, reached</span>
                 </li>
               </ol>
@@ -829,11 +828,12 @@ const legs = computed(() => {
     // an open incident takes the leg back from Reconciled: the tracker never outruns the evidence
     const reconciled = leg.reconciled && leg.state === 'settled' && !open.length
     const step = reconciled ? 3 : local ? 0 : STEP[leg.state] ?? 0
-    const stepNote = local && reconciled ? 'ledger only' : { failed: 'failed', unknown: 'outcome unknown' }[leg.state] ?? ''
-    const steps = STEPS.map((name, n) => ({
-      name, now: n === step, mark: local && PROVIDER_STEPS.has(n) ? 'skipped' : n <= step ? 'done' : 'todo'
-    }))
-    return { ...leg, text, tone, icon, steps, stepNote, mode: local ? 'Ledger only (simulated)' : LABELS[mode] || mode }
+    const now = local && reconciled ? 'ledger only' : { failed: 'failed', unknown: 'outcome unknown' }[leg.state] ?? ''
+    const steps = STEPS.map((name, n) => {
+      const mark = local && PROVIDER_STEPS.has(n) ? 'skipped' : n <= step ? 'done' : 'todo'
+      return { name, mark, now: n === step, note: mark === 'skipped' ? 'not applicable' : n === step ? now : '' }
+    })
+    return { ...leg, text, tone, icon, steps, mode: local ? 'Ledger only (simulated)' : LABELS[mode] || mode }
   })
 })
 
