@@ -146,7 +146,7 @@
           <WorldMap :nodes="worldMap.nodes" :edges="worldMap.edges" :selected="mapSelected" :focus="actor"
                     label="Actors and their typed relationships at the selected round"
                     :empty="current ? 'No actor to draw' : 'Round not loaded'" @select="pickMap" />
-          <details class="lw-sim__evidence" :open="graphExpanded" @toggle="graphExpanded = $event.target.open">
+          <details class="lw-sim__evidence" :open="graphExpanded" @toggle="evidenceToggled">
             <summary>Evidence graph: posts and the citations behind each intent</summary>
             <div class="lw-live__graph-view">
               <LiveGraph ref="graphPanel" :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
@@ -542,6 +542,13 @@ const actor = ref(null)
 // moves neither keeps them.
 const graphPanel = ref(null)
 watch([runId, () => body.value?.run_id, display], () => graphPanel.value?.closeDetailPanel())
+
+// The graph is drawn while its disclosure is closed, at 0×0: opening it redraws the round on the
+// cursor at the size it now has.
+function evidenceToggled (event) {
+  graphExpanded.value = event.target.open
+  if (event.target.open) graphPanel.value?.redraw()
+}
 
 // ----------------------------------------------------------------------- local playback
 
