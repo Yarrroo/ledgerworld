@@ -107,10 +107,13 @@ const placed = computed(() => {
   const near = new Set(props.focus
     ? props.edges.filter((e) => e.from === props.focus || e.to === props.focus).flatMap((e) => [e.from, e.to])
     : [])
-  const at = (n, x, y, named = lines(n.label, max)) => ({
-    ...n, x, y, w: nodeW, lines: named, step: named.length > 2 ? 13 : 15, aria: `${n.label}${n.role ? `, ${n.role}` : ''}`,
-    dim: Boolean(props.focus) && !near.has(n.id)
-  })
+  const at = (n, x, y) => {
+    const named = lines(n.label, max)
+    return {
+      ...n, x, y, w: nodeW, lines: named, step: named.length > 2 ? 13 : 15,
+      aria: `${n.label}${n.role ? `, ${n.role}` : ''}`, dim: Boolean(props.focus) && !near.has(n.id)
+    }
+  }
   return [
     at(center, w / 2, h / 2),
     ...ring.map((n, i) => {
