@@ -174,7 +174,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import CashOutlook from '../components/CashOutlook.vue'
 import {
   LABELS, STATES, ScreenShell, floorState, formatAmount, formatMoney, formatTime, freshness, getOverview,
-  hoursFrom, metricText, modelSource, money, pendingFlows, routeExists, rowLink, stateOf, useReading
+  hoursFrom, kindText, metricText, modelSource, money, pendingFlows, routeExists, rowLink, stateOf, useReading
 } from '../api/v1.js'
 
 const router = useRouter()
@@ -327,7 +327,7 @@ const scenarioFlow = computed(() => {
 })
 const teaser = computed(() => {
   const f = scenarioFlow.value
-  if (f) return `What if the ${money(f.amount)} ${f.kind.replace(/_/g, ' ')} arrives late?`
+  if (f) return `What if the ${money(f.amount)} ${kindText(f.kind)} arrives late?`
   const s = state.body?.scenario
   return s ? `What if: ${s.family.replace(/-/g, ' ')}?` : 'What if a payment arrives late?'
 })

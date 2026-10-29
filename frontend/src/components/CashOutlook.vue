@@ -80,7 +80,7 @@
  * computes money: positions are geometry, figures are the API's.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { STATES, againstFloor, formatAmount, formatMoney, formatTime, hoursFrom, metricText } from '../api/v1.js'
+import { STATES, againstFloor, formatAmount, formatMoney, formatTime, hoursFrom, kindText, metricText } from '../api/v1.js'
 
 const props = defineProps({
   points: { type: Array, required: true },
@@ -168,7 +168,7 @@ const lowTone = computed(() => STATES[lowState.value]?.tone ?? 'muted')
 function eventText (p) {
   if (!p.events.length) return Date.parse(p.t) <= Date.parse(props.asOf) ? 'As of: settled cash' : 'Horizon end: nothing moves'
   return p.events.map((e) =>
-    `${e.kind.replace(/_/g, ' ')} ${e.ref} ${e.direction === 'in' ? '+' : '−'}${formatMoney(e.amount.minor, e.amount.currency)}`
+    `${kindText(e.kind)} ${e.ref} ${e.direction === 'in' ? '+' : '−'}${formatMoney(e.amount.minor, e.amount.currency)}`
   ).join('; ')
 }
 

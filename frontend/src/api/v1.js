@@ -131,6 +131,9 @@ export function formatMoney (minor, currency) {
 /** A C6 Money (`{minor, currency}`) as "USD 70,000.00". */
 export const money = (m) => formatMoney(m.minor, m.currency)
 
+/** A machine kind as words: "exchange_withdrawal" reads "exchange withdrawal". */
+export const kindText = (kind) => String(kind ?? '').replace(/_/g, ' ')
+
 /** A C6 metric as text: a value only when known or stale; unknown and unassessed say so. */
 export function metricText (metric) {
   if (!metric) return 'Unavailable'
@@ -236,8 +239,8 @@ export function projectionTerms (account, t, obligations, asOf) {
   const excluded = []
   const take = (flows, sign, direction) => {
     for (const f of flows) {
-      if (isDue(f.expected_at)) terms.push(`${sign} ${formatAmount(f.amount.minor, c)} ${f.kind}`)
-      else excluded.push(`${f.kind} ${f.flow_id} ${direction} (expected ${hoursFrom(asOf, f.expected_at)})`)
+      if (isDue(f.expected_at)) terms.push(`${sign} ${formatAmount(f.amount.minor, c)} ${kindText(f.kind)}`)
+      else excluded.push(`${kindText(f.kind)} ${f.flow_id} ${direction} (expected ${hoursFrom(asOf, f.expected_at)})`)
     }
   }
   take(b.pending_in, '+', 'in')
@@ -246,8 +249,8 @@ export function projectionTerms (account, t, obligations, asOf) {
   for (const o of obligations) {
     if (o.account !== account.id || !OWED.has(o.state ?? 'open')) continue
     if (o.reservation_id && carried.has(o.reservation_id)) continue // counted as its outflow
-    if (isDue(o.due_at)) terms.push(`- ${formatAmount(o.amount.minor, c)} ${o.kind}`)
-    else excluded.push(`${o.kind} ${o.obligation_id} due (${hoursFrom(asOf, o.due_at)})`)
+    if (isDue(o.due_at)) terms.push(`- ${formatAmount(o.amount.minor, c)} ${kindText(o.kind)}`)
+    else excluded.push(`${kindText(o.kind)} ${o.obligation_id} due (${hoursFrom(asOf, o.due_at)})`)
   }
   const result = account.projected.find((p) => p.t === t)?.value
   return {

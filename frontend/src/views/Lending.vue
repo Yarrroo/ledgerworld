@@ -239,7 +239,7 @@ import WorldMap from '../components/WorldMap.vue'
 import { FAMILIES, worldFor } from '../api/world.js'
 import {
   ApiError, ScreenShell, amountText, contextKey, formatTime, freshness, getLending, getOverview,
-  getTreasury, hoursFrom, metricText, money, routeExists, stateOf, useReading
+  getTreasury, hoursFrom, kindText, metricText, money, routeExists, stateOf, useReading
 } from '../api/v1.js'
 
 const router = useRouter()
@@ -266,7 +266,6 @@ const poolName = computed(() => {
   const name = nameOf(state.body.pool)
   return name === state.body.pool ? name : `${name} (${state.body.pool})`
 })
-const kindText = (kind) => String(kind).replace(/_/g, ' ')
 
 const capacityText = computed(() => {
   const text = metricText(capacity.value.K_p)
@@ -321,6 +320,7 @@ const map = computed(() => {
     node(f.borrower)
     edges.push({ id: `facility:${f.facility_id}`, from: body.pool, to: f.borrower, type: 'financial',
       label: `${f.facility_id} · ${kindText(f.kind)} · outstanding ${money(f.outstanding)}`,
+      tag: kindText(f.kind),
       facility: f.facility_id, source: 'facility, GET /api/v1/lending' })
   }
   for (const e of w?.edges ?? []) {

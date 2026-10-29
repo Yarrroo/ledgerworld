@@ -193,7 +193,7 @@ export function forgetTab () {
 import { computed, nextTick, onUnmounted, reactive, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
-  ApiError, LABELS, STATES, ScreenShell, formatMoney, formatTime, getOverview, latestOnly, money,
+  ApiError, LABELS, STATES, ScreenShell, formatMoney, formatTime, getOverview, kindText, latestOnly, money,
   request, useReading
 } from '../api/v1.js'
 
@@ -735,7 +735,7 @@ const incidents = computed(() => {
     ...body.legs.filter((l) => l.state === 'unknown').map((l) =>
       `${l.leg_id}: Outcome unknown; checking provider status. Do not send again.`),
     ...body.incidents.filter((i) => i.state === 'open').map((i) =>
-      `${i.kind.replace(/_/g, ' ')} on ${i.leg_id}, opened ${formatTime(i.opened_at).utc}`)
+      `${kindText(i.kind)} on ${i.leg_id}, opened ${formatTime(i.opened_at).utc}`)
   ]
 })
 </script>

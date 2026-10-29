@@ -9,7 +9,7 @@
         <div class="lw-cash__who">
           <span class="lw-cash__branch">{{ row.name }}</span>
           <span v-if="row.replay" class="lw-live-tag" data-test="cash-replay">Replay</span>
-          <span class="lw-cash__account">{{ row.account_id }} · Hypothetical branch</span>
+          <span class="lw-cash__account">{{ row.branch_id }} · {{ row.account_id }} · Hypothetical branch</span>
         </div>
         <div class="lw-cash__value" data-test="cash-value">{{ row.text }}</div>
         <svg v-if="row.line" class="lw-cash__spark" viewBox="0 0 100 24" preserveAspectRatio="none"
@@ -61,7 +61,7 @@ const rows = computed(() => {
     return {
       branch_id: path.branch_id,
       account_id: path.account_id,
-      name: b?.policy ? `${b.policy} · ${path.branch_id}` : path.branch_id,
+      name: b?.policy ?? (b && b.parent_branch_id === null ? 'Base run' : path.branch_id),
       replay: Boolean(b?.replay),
       text: point ? metricText(point.value) : `No point at round ${props.round}`,
       line: spark(known),
@@ -96,11 +96,12 @@ const rows = computed(() => {
   min-width: 0;
 }
 
-.lw-cash__branch { word-break: break-all; }
+.lw-cash__branch { font-weight: 600; overflow-wrap: anywhere; }
 
 .lw-cash__account {
   color: var(--live-muted);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .lw-cash__value {

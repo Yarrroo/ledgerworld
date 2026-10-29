@@ -91,7 +91,7 @@
                     :class="{ 'is-open': r.key === openRow, 'lw-row--focus': focus === (r.obligation ? `obligation:${r.id}` : `flow:${r.id}`) }">
                   <td data-label="Item">
                     <button type="button" class="lw-tre__open" :data-test="`row-${r.id}`" @click="openRow = r.key">
-                      {{ r.kind }} · {{ r.id }}{{ r.mandatory ? ' · mandatory' : '' }}
+                      {{ kindText(r.kind) }} · {{ r.id }}{{ r.mandatory ? ' · mandatory' : '' }}
                     </button>
                   </td>
                   <td data-label="Direction">{{ r.direction }}</td>
@@ -185,7 +185,7 @@
       </div>
     </div>
 
-    <DetailSheet :open="Boolean(detail)" :title="detail ? `${detail.kind} · ${detail.id}` : 'Details'" test="row-detail"
+    <DetailSheet :open="Boolean(detail)" :title="detail ? `${kindText(detail.kind)} · ${detail.id}` : 'Details'" test="row-detail"
                  @close="openRow = null">
       <template v-if="detail">
         <dl>
@@ -218,7 +218,7 @@ import CashChart from '../components/CashChart.vue'
 import DetailSheet from '../components/DetailSheet.vue'
 import {
   STATES, ScreenShell, againstFloor, contextKey, formatAmount, formatMoney, formatTime, getOverview,
-  getTreasury, hoursFrom, metricText, money, pendingFlows, projectionTerms, routeExists, useFocusTarget,
+  getTreasury, hoursFrom, kindText, metricText, money, pendingFlows, projectionTerms, routeExists, useFocusTarget,
   useReading
 } from '../api/v1.js'
 
@@ -322,8 +322,8 @@ const spend = computed(() => {
   const later = []
   for (const f of pendingFlows(a)) {
     const sign = f.direction === 'in' ? '+' : '-'
-    if (Date.parse(f.expected_at) <= now) terms.push(`${sign} ${formatAmount(f.amount.minor, c)} ${f.kind}`)
-    else later.push(`${f.kind} ${f.flow_id} ${f.direction} (expected ${hoursFrom(state.body.as_of, f.expected_at)})`)
+    if (Date.parse(f.expected_at) <= now) terms.push(`${sign} ${formatAmount(f.amount.minor, c)} ${kindText(f.kind)}`)
+    else later.push(`${kindText(f.kind)} ${f.flow_id} ${f.direction} (expected ${hoursFrom(state.body.as_of, f.expected_at)})`)
   }
   return {
     line: `${terms.join(' ')} = ${metricText(a.spendable)} (API)`,
@@ -332,7 +332,7 @@ const spend = computed(() => {
 })
 
 const flowList = (flows) => (flows.length
-  ? flows.map((f) => `${money(f.amount)} ${f.kind} (${hoursFrom(state.body.as_of, f.expected_at)})`).join('; ')
+  ? flows.map((f) => `${money(f.amount)} ${kindText(f.kind)} (${hoursFrom(state.body.as_of, f.expected_at)})`).join('; ')
   : 'None pending')
 
 // T2: the ledger's buckets; pending inflows are expected, never settled.
