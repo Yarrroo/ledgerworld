@@ -111,7 +111,7 @@ test('L4–L5: freeze is Unknown not zero; facility detail and repayments', asyn
   await open(page)
 
   const freeze = $(page, 'freeze')
-  await expect(freeze).toContainText(api.capacity.authority === 'full' ? 'Hypothetical until observed' : 'Observed now')
+  await expect(freeze).toContainText(api.capacity.authority === 'full' ? 'What-if' : 'Happening now')
   await expect(freeze).toContainText('Unknown')
   await expect(freeze).not.toContainText(/USD 0\.00/)
   const rehearse = $(page, 'rehearse-freeze')

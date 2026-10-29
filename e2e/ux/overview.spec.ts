@@ -163,7 +163,7 @@ test('baseline: the handoff numbers, a green minimum, and the next payroll opens
   await expect($(page, 'next-due').locator('.lw-figure')).toHaveText('USD 50,000.00')
   await expect($(page, 'next-due-at')).toHaveText('due t=40 h')
   await expect($(page, 'coverage').locator('.lw-figure')).toHaveText('USD 10,000.00')
-  await expect($(page, 'floor-status')).toHaveText(/Floor kept/)
+  await expect($(page, 'floor-status')).toHaveText(/Above your safety minimum/)
   await $(page, 'pick-spendable').click()
   await expect($(page, 'metric-inputs')).toContainText(
     'treasury/operating (USD): 70,000.00 settled − 50,000.00 reserved − 0.00 pledged = USD 20,000.00')
@@ -222,7 +222,7 @@ test('O5 exposure and O6 scenario: text relationships, the prepared run, a read-
   await expect($(page, 'explore-world')).toHaveAttribute('href', `/simulation?run_id=${body.demo.run_id}`)
   await tall(page, '[data-test="explore-world"], [data-test="lender-capacity"] a')
 
-  await expect($(page, 'hypothetical')).toHaveText(/hypothetical/i)
+  await expect($(page, 'hypothetical')).toHaveText(/what-if/i)
   const before = await $(page, 'settled').textContent()
   const preview = $(page, 'preview-scenario')
   await preview.click()

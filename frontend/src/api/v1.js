@@ -237,7 +237,7 @@ const byTime = (key) => (x, y) => Date.parse(x[key]) - Date.parse(y[key])
 // ---------------------------------------------------------------- the terms of projected cash
 
 /** Obligations P counts: open or missed (a missed obligation is still owed). */
-const OWED = new Set(['open', 'missed'])
+export const OWED = new Set(['open', 'missed'])
 
 /**
  * The terms the API's P[a, t] is made of, for display beside the API's own result. The rule is
@@ -290,6 +290,50 @@ export const LABELS = {
   branch: 'Hypothetical branch',
   replay: 'Replay',
   search: 'Search result, not a forecast'
+}
+
+/**
+ * The cash owner's words for the honesty labels and the floor (prp/2026-10-29-ux-pass/COPY.md);
+ * the technical term each replaces stays in the panel's How we know.
+ */
+export const PLAIN = {
+  fake: 'Simulated bank connection',
+  sandbox: 'Sandbox bank',
+  scripted: 'Scripted agents',
+  branch: 'What-if'
+}
+
+export const FLOOR_WORDS = {
+  kept: 'Above your safety minimum',
+  breached: 'Below your safety minimum',
+  unknown: 'Unknown',
+  unassessed: 'Not assessed'
+}
+
+/** "2 Jan", the UTC day of an instant, for a lead sentence. */
+export function dayText (iso) {
+  const d = iso ? new Date(iso) : null
+  if (!d || Number.isNaN(d.getTime())) return 'an unknown date'
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+}
+
+/**
+ * A metric as an amount in a lead sentence: its money, or "an unknown amount". A stale value
+ * carries no tag here; `lastSeen()` says it once after the sentence.
+ */
+export const amountWords = (metric) => (metric?.minor == null ? 'an unknown amount' : money(metric))
+
+/** "payroll", "payroll and rent", "payroll, rent and tax". */
+export function listWords (items) {
+  return items.length < 2 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
+}
+
+/** "Some figures were last seen 2026-01-05 12:00 UTC.", the oldest stale one, or '' when none is stale. */
+export function lastSeen (...metrics) {
+  const stale = metrics.filter((m) => m?.status === 'stale')
+  if (!stale.length) return ''
+  const at = stale.map((m) => m.as_of).filter(Boolean).sort()[0]
+  return `Some figures were last seen ${at ? formatTime(at).utc : 'at an unknown time'}.`
 }
 
 /** What a response's figures are: a replay, a hypothetical branch, or the observed snapshot. */
