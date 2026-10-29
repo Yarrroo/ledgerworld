@@ -464,3 +464,20 @@ def test_the_airwallex_secrets_reach_only_the_api_role():
     for name in host()["secrets"]["airwallex"]:
         holders = {s for s, svc in services.items() if name in environment(svc)}
         assert {environment(services[s])["LEDGERWORLD_ROLE"] for s in holders} == {"api"}
+
+
+def test_the_frontend_stage_copies_every_tree_the_frontend_imports():
+    """A frontend source that imports a file outside frontend/ (scenarios/world.json, a locale)
+    builds only when the frontend stage copied that tree beside it."""
+    copied = {s.split("/")[0] for w, r in stages()["frontend"] if w == "COPY" and not r.startswith("--from")
+              for s in shlex.split(r)[:-1] if not s.startswith("--")}
+    imported = set()
+    for source in (ROOT / "frontend" / "src").rglob("*"):
+        if source.suffix not in {".js", ".vue"}:
+            continue
+        for target in re.findall(r"""from\s+['"]((?:\.\./)+[^'"]+)['"]""", source.read_text()):
+            path = (source.parent / target).resolve()
+            if not path.is_relative_to(ROOT / "frontend"):
+                imported.add(path.relative_to(ROOT).parts[0])
+    assert imported, "no import outside frontend/ was found: the scan itself is broken"
+    assert imported <= copied, f"the frontend stage does not copy {sorted(imported - copied)}"
