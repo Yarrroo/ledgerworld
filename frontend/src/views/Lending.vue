@@ -270,7 +270,7 @@ import Tip from '../components/Tip.vue'
 import { FAMILIES, worldFor } from '../api/world.js'
 import {
   ApiError, ScreenShell, amountText, amountWords, contextKey, formatTime, freshness, getLending, getOverview,
-  getTreasury, hoursFrom, kindText, lastSeen, metricStatus, metricText, money, routeExists, staleOf, useReading
+  getTreasury, hoursFrom, kindText, lastSeen, listWords, metricStatus, metricText, money, routeExists, staleOf, useReading
 } from '../api/v1.js'
 
 const router = useRouter()
@@ -347,11 +347,12 @@ const PARTS = [
   ['obligations_due', 'Pool obligations', "The pool's own obligations due in the horizon."],
   ['floor', 'Reserve floor', "The pool's own safety minimum."]
 ]
-const partsOf = () => PARTS.map(([key, label, about]) => ({ key, label, about, metric: capacity.value.parts[key] }))
+const parts = computed(() => PARTS.map(([key, label, about], i) =>
+  ({ key, label, about, metric: capacity.value.parts[key], zero: i > 0 && capacity.value.parts[key].minor === 0 })))
 /** The bridge: settled known, then every part that takes something away (a $0 part sits in the breakdown). */
-const bridge = computed(() => partsOf().filter((p, i) => i === 0 || p.metric.minor !== 0))
-const hiddenZero = computed(() => partsOf().filter((p, i) => i > 0 && p.metric.minor === 0).map((p) => p.label))
-const breakdown = computed(() => partsOf().map((p, i) => ({ ...p, minus: i > 0 && p.metric.minor !== 0 && p.metric.minor !== null })))
+const bridge = computed(() => parts.value.filter((p) => !p.zero))
+const hiddenZero = computed(() => parts.value.filter((p) => p.zero).map((p) => p.label))
+const breakdown = computed(() => parts.value.map((p, i) => ({ ...p, minus: i > 0 && !p.zero && p.metric.minor !== null })))
 
 const calculation = computed(() => {
   const terms = PARTS.map(([key]) => amountText(capacity.value.parts[key]))
@@ -397,21 +398,37 @@ const map = computed(() => {
   }]
   const bottom = []
   const edges = []
-  for (const f of b.facilities) {
-    if (!bottom.some((n) => n.id === f.borrower)) {
-      bottom.push({ id: f.borrower, kind: 'borrower', name: plain(f.borrower), sub: 'Borrower', tip: [] })
+  // each party is one node, the treasury included when it is also a borrower
+  const treasuryNode = () => {
+    if (!bottom.some((n) => n.id === me)) {
+      const firm = strip(b.company?.name) || 'The treasury'
+      bottom.push({ id: me, kind: 'treasury', name: 'Treasury', sub: 'Settled cash', value: b.treasuryCash ? metricText(b.treasuryCash) : '',
+        tip: b.treasuryCash ? [`${firm}: settled cash ${metricText(b.treasuryCash)}.`, metricStatus(b.treasuryCash)] : [`${firm}.`] })
     }
-    bottom.find((n) => n.id === f.borrower).tip.push(`${f.facility_id}: ${kindText(f.kind)}, ${f.state}, outstanding ${money(f.outstanding)}.`)
-    edges.push({ id: `facility:${f.facility_id}`, from: pool, to: f.borrower, label: capital(kindText(f.kind)), amount: money(f.principal),
+    return bottom.find((n) => n.id === me)
+  }
+  const node = (id) => (id === me ? treasuryNode()
+    : bottom.find((n) => n.id === id) ?? bottom[bottom.push({ id, kind: 'borrower', name: plain(id), sub: 'Borrower', tip: [] }) - 1])
+  // one link per pair of parties: a second facility to the same borrower joins the first
+  const link = (e) => {
+    const same = edges.find((x) => x.from === e.from && x.to === e.to)
+    if (!same) return edges.push({ ...e, count: 1 })
+    same.count += 1
+    same.label = `${same.count} links`
+    same.amount = ''
+    same.tip.push(...e.tip)
+  }
+  for (const f of b.facilities) {
+    node(f.borrower).tip.push(`${f.facility_id}: ${kindText(f.kind)}, ${f.state}, outstanding ${money(f.outstanding)}.`)
+    link({ id: `facility:${f.facility_id}`, from: pool, to: f.borrower, label: capital(kindText(f.kind)), amount: money(f.principal),
       tip: [`${f.facility_id} · ${kindText(f.kind)} · ${f.state}`, `Principal ${money(f.principal)}, outstanding ${money(f.outstanding)}.`, 'Source: facility, GET /api/v1/lending.'] })
   }
   const venues = b.relations.filter((r) => r.kind === 'venue_exposure' && r.target)
   const treasuryRel = venues.find((r) => r.source.entity_id === me)
   if (b.treasuryCash || treasuryRel) {
-    bottom.push({ id: me, kind: 'treasury', name: 'Treasury', sub: 'Settled cash', value: b.treasuryCash ? metricText(b.treasuryCash) : '',
-      tip: [`${strip(b.company?.name) || 'The treasury'}: settled cash ${metricText(b.treasuryCash)}.`, b.treasuryCash ? metricStatus(b.treasuryCash) : ''].filter(Boolean) })
+    treasuryNode()
     if (b.lenderCapacity) {
-      edges.push({ id: `capacity:${me}`, from: pool, to: me, label: 'Can lend you', amount: '',
+      link({ id: `capacity:${me}`, from: pool, to: me, label: 'Can lend you', amount: '',
         tip: [`What ${plain(pool)} can still lend the treasury: ${metricText(b.lenderCapacity)}.`, 'A relationship is a dependency, not a payment. Source: GET /api/v1/overview.'] })
     }
   }
@@ -419,22 +436,24 @@ const map = computed(() => {
     const venue = r.target.entity_id
     if (!bottom.some((n) => n.id === venue)) {
       bottom.push({ id: venue, kind: 'venue', name: strip(r.target.name) || plain(venue), sub: 'Exchange venue',
-        tip: [`${strip(r.target.name) || venue}: the exchange venue shared by ${listOf(venues.filter((v) => v.target.entity_id === venue).map((v) => plain(v.source.entity_id)))}.`] })
+        tip: [`${strip(r.target.name) || venue}: the exchange venue shared by ${listWords(unique(venues.filter((v) => v.target.entity_id === venue).map((v) => plain(v.source.entity_id)))) || 'no party recorded'}.`] })
     }
     const from = r.source.entity_id
     if (from !== pool && from !== me) continue
     const amount = r.amount ? money(r.amount) : 'not observed'
     if (from === me) {
-      const flow = b.treasury?.accounts.flatMap((a) => a.buckets.pending_in).find((x) => x.kind === 'exchange_withdrawal')
-      edges.push({ id: `exposure:${r.ref}:${from}`, from, to: venue, label: flow ? 'Expected withdrawal' : 'Venue exposure',
+      // the overview's relation names no flow: an expected withdrawal is named only when there is exactly one
+      const withdrawals = (b.treasury?.accounts ?? []).flatMap((a) => a.buckets.pending_in).filter((x) => x.kind === 'exchange_withdrawal')
+      const flow = withdrawals.length === 1 ? withdrawals[0] : null
+      link({ id: `exposure:${r.ref}:${from}`, from, to: venue, label: flow ? 'Expected withdrawal' : 'Venue exposure',
         amount: flow ? money(flow.amount) : amount,
         tip: flow
           ? [`${flow.flow_id}: ${money(flow.amount)} expected ${hoursFrom(b.treasury.as_of, flow.expected_at)}.`, 'An expected venue withdrawal, not settled cash. Source: GET /api/v1/treasury.']
           : [`Exposure ${r.ref}: ${amount}.`, 'Source: GET /api/v1/overview.'] })
     } else {
-      const account = poolAccounts.value[0]
+      const account = venueAccount.value
       const unread = notCurrent.value.find((f) => f.id === account)
-      edges.push({ id: `exposure:${r.ref}:${from}`, from, to: venue, label: 'Venue balance',
+      link({ id: `exposure:${r.ref}:${from}`, from, to: venue, label: 'Venue balance',
         amount: unread ? `${unread.icon} ${unread.word}` : amount,
         tip: [`Exposure ${r.ref}${account ? ` on ${account}` : ''}: ${unread ? unread.text : amount}.`,
           unread ? 'An unknown balance is excluded from capacity, never counted as zero.' : 'Counted in available capacity.', 'Source: GET /api/v1/overview.'] })
@@ -471,10 +490,7 @@ const map = computed(() => {
   return { nodes: nodes.concat(bottom), edges, columns: cols.join(' ') || 'minmax(0, 1fr)' }
 })
 
-function listOf (items) {
-  const u = [...new Set(items)]
-  return u.length > 1 ? `${u.slice(0, -1).join(', ')} and ${u.at(-1)}` : (u[0] ?? 'no party recorded')
-}
+const unique = (items) => [...new Set(items)]
 
 // the arrows, measured from the drawn nodes
 const diagram = ref(null)
@@ -508,7 +524,7 @@ function measure () {
 let observer = null
 onMounted(() => {
   if (typeof ResizeObserver !== 'undefined') observer = new ResizeObserver(() => measure())
-  window.addEventListener('resize', measure)
+  else window.addEventListener('resize', measure)
 })
 watch(diagram, (el, old) => {
   if (old) observer?.unobserve(old)
@@ -573,11 +589,7 @@ const fundingTarget = computed(() => {
   border-left: 1px solid var(--lw-rule);
 }
 
-.lw-len__main > section + section {
-  padding-top: var(--lw-space-6);
-  border-top: 1px solid var(--lw-rule);
-}
-
+.lw-len__main > section + section,
 .lw-len__side > section + section {
   padding-top: var(--lw-space-6);
   border-top: 1px solid var(--lw-rule);
@@ -672,7 +684,6 @@ const fundingTarget = computed(() => {
   white-space: nowrap;
 }
 
-.lw-len__amount.is-minus,
 .is-minus { color: var(--lw-bad-text); }
 .lw-len__amount.is-total { color: var(--lw-brand); }
 
