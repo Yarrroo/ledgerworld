@@ -697,7 +697,7 @@ export const ScreenShell = defineComponent({
           `The provider mode or snapshot changed; every figure below was reloaded for ` +
           `${LABELS[body.mode] || body.mode}, ${sourceLabel(body)}.`)
       ]
-      const skeleton = () => h('article', { class: 'lw-tile', 'aria-hidden': 'true' }, [
+      const skeleton = () => h('article', { class: 'lw-tile' }, [
         h('span', { class: 'lw-skeleton lw-skeleton--label' }),
         h('span', { class: 'lw-skeleton lw-skeleton--figure' })
       ])
@@ -714,7 +714,7 @@ export const ScreenShell = defineComponent({
       } else {
         content = [
           busy && h('p', { class: 'lw-loading', role: 'status', 'data-test': 'loading' }, `Loading ${props.title}…`),
-          h('div', { class: 'lw-strip', 'data-test': 'skeleton', 'aria-label': busy ? 'Loading' : 'Not loaded' },
+          h('div', { class: 'lw-strip', 'data-test': 'skeleton', 'aria-hidden': 'true' },
             [skeleton(), skeleton(), skeleton(), skeleton()])
         ]
       }
