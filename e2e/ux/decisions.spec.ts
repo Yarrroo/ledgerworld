@@ -12,7 +12,7 @@ import { readOnly } from '../guard'
 import { demoRunId, settled, sideways } from './routes'
 
 const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
-const NAMES: Record<string, string> = { 'no-action': 'No action', 'fixed-reserve': 'Fixed reserve', integrated: 'Integrated' }
+const NAMES: Record<string, string> = { 'no-action': 'Do nothing', 'fixed-reserve': 'Keep a fixed buffer', integrated: 'Borrow just enough' }
 
 async function open (page: Page, runId: string): Promise<void> {
   await page.goto(`/decisions?run_id=${runId}`)
@@ -34,7 +34,7 @@ test('D1–D2: cohort context, the gap and its timing', async ({ page, baseURL, 
 
   const none = api.results.find((r: { policy: string }) => r.policy === 'no-action')
   const summary = $(page, 'gap-summary')
-  await expect(summary).toContainText('Minimum cash')
+  await expect(summary).toContainText('Lowest point')
   await expect(summary).toContainText(`${none.min_cash.currency} ${(none.min_cash.minor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`)
   if (!none.floor_kept) await expect(summary).toContainText('short')
   if (none.obligations_unmet === 0) await expect(summary).toContainText('Every obligation met')
@@ -83,7 +83,7 @@ test('D3: a radio group whose choice explains, highlights and approves nothing',
   await $(page, 'policy-no-action').getByRole('radio').focus()
   await page.keyboard.press('ArrowDown')
   await expect($(page, 'policy-fixed-reserve').getByRole('radio')).toBeChecked()
-  await expect($(page, 'explanation')).toContainText('With Fixed reserve')
+  await expect($(page, 'explanation')).toContainText('With Keep a fixed buffer')
   for (const head of await page.locator('.lw-dec__head').all()) {
     expect((await head.boundingBox())!.height).toBeGreaterThanOrEqual(43.5)
   }

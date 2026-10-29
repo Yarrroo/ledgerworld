@@ -46,7 +46,7 @@ test('S1: run context and the read-only scenario settings', async ({ page, baseU
   for (const id of ['delayed-receipt', 'fx-gap', 'stablecoin-depeg', 'redemption-spike', 'borrower-silence', 'confidence-rumour']) {
     await expect(sheet.locator(`[data-family="${id}"]`)).toBeVisible()
   }
-  const family = (await $(page, 'family').innerText()).trim()
+  const family = (await $(page, 'family').textContent())!.trim() // folded in How we know
   if (family !== 'not named by this run') await expect(sheet.locator(`[data-family="${family}"]`)).toContainText('this run')
   await expect(sheet).toContainText('Read-only')
   await page.keyboard.press('Escape')

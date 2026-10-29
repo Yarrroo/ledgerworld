@@ -298,6 +298,24 @@
   line-height: 28px;
 }
 
+/* The honesty labels under a lead ("Simulated bank connection", "What-if"): small, always visible. */
+.lw-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--lw-space-2);
+  margin: 0 0 var(--lw-space-3);
+}
+
+.lw-tag {
+  padding: var(--lw-space-1) var(--lw-space-2);
+  border: 1px solid var(--lw-rule);
+  border-radius: var(--lw-radius);
+  background: var(--lw-surface-raised);
+  color: var(--lw-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 /* Plain links take the theme's link colour; the browser's default blue fails contrast in dark. */
 .lw-main a:not(.lw-button) {
   color: var(--lw-link);

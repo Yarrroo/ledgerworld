@@ -1,22 +1,31 @@
 <template>
   <ScreenShell v-slot="{ body }" title="Execution" :reading="state" :refresh="refresh">
-    <section class="lw-exec__context" aria-labelledby="context-heading" data-panel="Execution context">
+    <section class="lw-exec__context" aria-labelledby="context-heading" data-panel="What moved">
       <h2 id="context-heading" class="lw-visually-hidden">Execution context</h2>
-      <p class="lw-source" data-test="context">
-        Run {{ body.run_id ?? 'unavailable' }} ·
-        <template v-if="activeId">execution {{ activeId }}</template>
-        <template v-else>no execution is linked to this run</template>
-        · the plan executed is the one the server bound on the observed snapshot, never a branch.
-      </p>
+      <p class="lw-lead" data-test="lead">{{ lead }}</p>
+      <div class="lw-labels" data-test="labels">
+        <span class="lw-tag" data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span>
+      </div>
+      <HowWeKnow test="how-execution">
+        <p class="lw-source" data-test="context">
+          Run {{ body.run_id ?? 'unavailable' }} ·
+          <template v-if="activeId">execution {{ activeId }}</template>
+          <template v-else>no execution is linked to this run</template>
+          · the plan executed is the one the server bound on the observed snapshot, never a branch.
+        </p>
+        <p>The amounts in the sentence above are the provider receipts of the advance (in) and the
+          payout and repayment legs (out); checked against your books means each leg is reconciled
+          to its ledger journal. Provider: {{ LABELS[body.mode] || body.mode }}.</p>
+      </HowWeKnow>
     </section>
 
-    <section class="lw-tile" aria-labelledby="authority-heading" data-test="authority" data-panel="Approval review">
-      <h2 id="authority-heading">Approval review</h2>
+    <section class="lw-tile" aria-labelledby="authority-heading" data-test="authority" data-panel="Approve, then send">
+      <h2 id="authority-heading">Approve, then send</h2>
       <p class="lw-time">Reading needs no operator access. Approving and executing take it, entered
         in the review; it stays in this tab's memory and is forgotten on reload.</p>
       <div class="lw-actions">
         <button ref="opener" type="button" class="lw-button" data-test="review-plan"
-                :disabled="!!reviewWhy" aria-describedby="review-why" @click="openReview">Review plan</button>
+                :disabled="!!reviewWhy" aria-describedby="review-why" @click="openReview">Review the plan</button>
         <button v-if="token" type="button" class="lw-button lw-button--quiet"
                 data-test="forget-token" @click="forgetAccess">Forget access</button>
         <span id="review-why" class="lw-time" data-test="review-why">{{ reviewWhy || authority }}</span>
@@ -35,8 +44,8 @@
 
     <div class="lw-exec">
       <section class="lw-exec__terms" aria-labelledby="summary-heading" data-test="summary"
-               data-panel="Approval summary">
-        <h2 id="summary-heading">Approval summary</h2>
+               data-panel="What you approved">
+        <h2 id="summary-heading">What you approved</h2>
         <template v-if="held">
           <p class="lw-time">Confirmed in this tab and not executed; kept in this tab's memory only.</p>
           <dl class="lw-terms" data-test="summary-held">
@@ -59,22 +68,29 @@
           </dl>
           <p v-if="execution" class="lw-time">The execution linked to this run:</p>
         </template>
-        <dl v-if="execution" class="lw-terms">
-          <dt>Approval</dt>
-          <dd class="lw-copyable">
-            <span class="lw-hash" data-test="summary-approval">{{ execution.approval_id }}</span>
-            <button type="button" class="lw-copy" data-test="copy-summary-approval"
-                    @click="copy('Approval id', execution.approval_id)">Copy<span class="lw-visually-hidden"> approval id</span></button>
-          </dd>
-          <dt>Observed snapshot</dt><dd>{{ execution.snapshot_id }}</dd>
-          <dt>Provider</dt><dd>{{ LABELS[execution.mode] || execution.mode }}</dd>
-          <dt>Status read</dt><dd data-test="summary-read">{{ formatTime(execution.as_of).utc }}</dd>
-        </dl>
+        <template v-if="execution">
+          <p data-test="summary-plain">{{ PLANS[policy] ?? 'The selected plan' }}, approved
+            and sent; last checked {{ formatTime(execution.as_of).utc }}.</p>
+          <HowWeKnow test="how-summary">
+            <dl class="lw-terms">
+              <dt>Approval</dt>
+              <dd class="lw-copyable">
+                <span class="lw-hash" data-test="summary-approval">{{ execution.approval_id }}</span>
+                <button type="button" class="lw-copy" data-test="copy-summary-approval"
+                        @click="copy('Approval id', execution.approval_id)">Copy<span class="lw-visually-hidden"> approval id</span></button>
+              </dd>
+              <dt>Policy</dt><dd>{{ policy ?? 'not read' }}</dd>
+              <dt>Observed snapshot</dt><dd>{{ execution.snapshot_id }}</dd>
+              <dt>Provider</dt><dd>{{ LABELS[execution.mode] || execution.mode }}</dd>
+              <dt>Status read</dt><dd data-test="summary-read">{{ formatTime(execution.as_of).utc }}</dd>
+            </dl>
+          </HowWeKnow>
+        </template>
         <p v-else-if="!held" class="lw-time">No approval to summarise: the linked execution has not been read.</p>
       </section>
 
-      <section class="lw-exec__legs" aria-labelledby="receipts-heading" data-test="receipts" data-panel="Leg tracker">
-        <h2 id="receipts-heading">Legs and receipts</h2>
+      <section class="lw-exec__legs" aria-labelledby="receipts-heading" data-test="receipts" data-panel="Money moved">
+        <h2 id="receipts-heading">Money moved, with receipts</h2>
         <p v-if="notFound" class="lw-note" role="status" data-test="not-found">
           <template v-if="followedId === activeId">
             No execution is recorded yet for {{ activeId }}; this does not mean it failed. Reading again.
@@ -125,8 +141,8 @@
               </details>
             </li>
           </ol>
-          <p class="lw-time">PAID means reconciled as of the time shown, not final: a later provider
-            event can still open an incident.</p>
+          <p class="lw-time">Checked against your books as of the time shown, not final: a later
+            word from the bank can still open an incident.</p>
         </template>
       </section>
 
@@ -170,8 +186,8 @@
               <dt>Bound on</dt><dd>the current observed snapshot, by the server when you confirm</dd>
               <dt>Approval lifetime</dt>
               <dd>15 minutes by default, set by the server; the absolute expiry is shown after confirmation</dd>
-              <dt>Funding cost per branch</dt><dd data-test="branch-fees">{{ branchFees }}</dd>
-              <dt>Scenario-set cost</dt><dd data-test="scenario-cost">{{ scenarioCost }}</dd>
+              <dt>Fee in each what-if</dt><dd data-test="branch-fees">{{ branchFees }}</dd>
+              <dt>Fees across what-ifs</dt><dd data-test="scenario-cost">{{ scenarioCost }}</dd>
             </dl>
             <p v-if="stage === 'unknown'" class="lw-alert" data-test="stage-blocked">{{ flow.blocked }}</p>
             <p v-else class="lw-note">
@@ -241,13 +257,13 @@
 
         <div class="lw-dialog__footer lw-actions">
           <button v-if="!flow.approval" type="button" class="lw-button" data-test="confirm" :disabled="!!confirmWhy"
-                  aria-describedby="confirm-why" @click="confirmApproval">Confirm approval</button>
+                  aria-describedby="confirm-why" @click="confirmApproval">Approve</button>
           <button v-else-if="!flow.executed || flow.invalid" type="button" class="lw-button"
                   data-test="execute" :disabled="!!executeWhy" aria-describedby="execute-why"
-                  @click="executePlan">Execute approved plan</button>
+                  @click="executePlan">Send</button>
           <button v-else type="button" class="lw-button" data-test="read-status"
                   :disabled="flow.submitting" :aria-disabled="readingNow || undefined"
-                  @click="readNow">Read status</button>
+                  @click="readNow">Check the status</button>
           <button type="button" class="lw-button lw-button--quiet" :disabled="flow.submitting"
                   @click="closeReview">{{ flow.approval ? 'Close' : 'Cancel' }}</button>
           <span v-if="!flow.approval" id="confirm-why" class="lw-time" data-test="confirm-why">{{ confirmWhy }}</span>
@@ -287,12 +303,15 @@ export function forgetTab () {
 <script setup>
 import { computed, nextTick, onUnmounted, reactive, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
+import HowWeKnow from '../components/HowWeKnow.vue'
 import {
-  ApiError, LABELS, STATES, ScreenShell, formatMoney, formatTime, getOverview, kindText, latestOnly, money, noDemoRun,
-  request, useReading
+  ApiError, LABELS, PLAIN, PLANS, STATES, ScreenShell, decimalMinor, formatMoney, formatTime, getOverview, kindText,
+  latestOnly, money, noDemoRun, request, useReading
 } from '../api/v1.js'
 
-const NAMES = { 'no-action': 'No action', 'fixed-reserve': 'Fixed reserve', integrated: 'Integrated' }
+/** The legs that bring money in and the ones that pay it out, for the lead sentence. */
+const INFLOW = new Set(['advance'])
+const OUTFLOW = new Set(['payout', 'repayment'])
 const WORD = { pending: 'Pending', submitted: 'Submitted', settled: 'Settled', failed: 'Failed', unknown: 'Unknown' }
 const UNSETTLED = new Set(['pending', 'submitted', 'unknown'])
 const POLL_MS = 5000
@@ -409,7 +428,8 @@ const scenarioCost = computed(() => {
   const currency = rows[0].funding_cost.currency
   if (rows.some((r) => r.funding_cost.currency !== currency)) return 'Mixed currencies; not summed'
   const total = rows.reduce((sum, r) => sum + r.funding_cost.minor, 0)
-  return `${formatMoney(total, currency)} across ${rows.length} scenarios; not the current execution fee`
+  return `${formatMoney(total, currency)} across ${rows.length} what-if${rows.length === 1 ? '' : 's'}; ` +
+    'the plan\'s own fee is set at review'
 })
 
 // ------------------------------------------------------------------ approve, then execute
@@ -920,6 +940,53 @@ const incidents = computed(() => {
   ]
 })
 
+/**
+ * Money a set of legs moved, from their provider receipts ("USD 10,000.00"), one sum per
+ * currency; '' when no leg of that kind is there, "an unknown amount" when a receipt is missing.
+ */
+function movedWords (legs) {
+  if (!legs.length) return ''
+  const sums = new Map()
+  for (const leg of legs) {
+    const r = leg.receipt
+    const minor = r ? decimalMinor(r.amount, r.currency) : null
+    if (minor === null) return 'an unknown amount'
+    sums.set(r.currency, (sums.get(r.currency) ?? 0) + minor)
+  }
+  return [...sums].map(([currency, minor]) => formatMoney(minor, currency)).join(' and ')
+}
+
+/**
+ * The finance lead's answer, first (COPY.md, Execution): what the approved plan moved in and
+ * paid out and whether it is checked against their books; before an execution, that nothing
+ * moves until they approve and then send. Amounts are the legs' provider receipts.
+ */
+const lead = computed(() => {
+  const body = execution.value
+  if (!body) {
+    if (activeId.value && !notFound.value) {
+      if (!pollError.value) return 'Reading what the plan you sent moved.'
+      return `We could not read what the plan you sent moved yet; ${rereading.value ? 'reading again' : 'refresh to try again'}.`
+    }
+    return held.value
+      ? 'You approved the plan; nothing moves until you send it.'
+      : 'Nothing moves until you approve and then send.'
+  }
+  if (incidents.value.length || body.legs.some((l) => l.state === 'failed')) {
+    const n = incidents.value.length
+    return `Something needs a look: ${n || 'a'} problem${n > 1 ? 's' : ''} on the plan you sent; nothing is resent.`
+  }
+  if (!body.legs.length) return 'The plan you approved is sent; its payments are not recorded yet.'
+  const n = body.legs.length
+  const checked = body.legs.filter((l) => l.reconciled && l.state === 'settled').length
+  if (checked < n) return `The plan you approved is under way: ${checked} of ${n} payments checked against your books so far.`
+  const moved = movedWords(body.legs.filter((l) => INFLOW.has(l.kind)))
+  const paid = movedWords(body.legs.filter((l) => OUTFLOW.has(l.kind)))
+  const parts = [moved && `moved ${moved} in`, paid && `paid ${paid} out`].filter(Boolean)
+  const what = parts.length ? parts.join(' and ') : `made its ${n === 1 ? 'payment' : 'payments'}`
+  return `The plan you approved ${what} — ${n === 2 ? 'both ' : n > 2 ? 'all ' : ''}checked against your books.`
+})
+
 // ------------------------------------------------------------------ the dialog's stage
 
 /** The execution this dialog sent, as last read; null until a read of it answered. */
@@ -950,7 +1017,7 @@ const stage = computed(() => {
 })
 
 const stageHeading = computed(() => ({
-  review: `Review plan · ${NAMES[policy.value]}`,
+  review: `Review the plan · ${PLANS[policy.value] ?? policy.value}`,
   submitting: 'Creating approval',
   unknown: flow.blocked === APPROVAL_UNKNOWN ? 'Approval outcome unknown' : 'Outcome unknown for this run',
   approved: 'Approved terms · not yet executed',
