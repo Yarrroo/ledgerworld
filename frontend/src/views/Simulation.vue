@@ -328,6 +328,13 @@ function selectActor (id) {
 const nameOf = (id) => world.value?.actors.find((a) => a.id === id)?.label ?? id
 
 const VERDICT_WORD = { accepted: ['Accepted', 'ok'], rejected: ['Rejected', 'bad'], pending: ['Pending', 'warn'] }
+
+/** A cleared action as the screen says it: its word and tone, the coordinator's reason, its journal. */
+function verdictOf (c) {
+  const [word, tone] = c ? VERDICT_WORD[c.status] ?? [c.status, 'muted'] : ['No verdict recorded', 'muted']
+  return { word, tone, accepted: c?.status === 'accepted', reason: c?.reason ?? null, journal: c?.journal_id ?? null }
+}
+
 const actorInfo = computed(() => {
   if (!actor.value || !current.value) return null
   const w = world.value?.actors.find((a) => a.id === actor.value)
@@ -336,11 +343,10 @@ const actorInfo = computed(() => {
     if (r > display.value) continue
     const verdicts = new Map(view.cleared.map((c) => [c.intent_id, c]))
     for (const i of view.intents.filter((x) => x.actor_id === actor.value)) {
-      const c = verdicts.get(i.intent_id)
-      const [word, tone] = c ? VERDICT_WORD[c.status] ?? [c.status, 'muted'] : ['No verdict recorded', 'muted']
+      const v = verdictOf(verdicts.get(i.intent_id))
       actions.push({
-        id: i.intent_id, round: r, type: i.type.replace(/_/g, ' '), tone,
-        verdict: `${word}${c?.reason ? ` · ${c.reason}` : ''}${c?.journal_id ? ` · journal ${c.journal_id}` : ''}`,
+        id: i.intent_id, round: r, type: i.type.replace(/_/g, ' '), tone: v.tone,
+        verdict: `${v.word}${v.reason ? ` · ${v.reason}` : ''}${v.journal ? ` · journal ${v.journal}` : ''}`,
         evidence: (i.evidence_ids ?? []).join(', ')
       })
     }
@@ -362,8 +368,10 @@ const shownOwners = computed(() => requestOwners(shownViews.value))
 /**
  * The map at the cursor: the world's actors and structural edges (contracts, obligations, shared
  * venues, prices), then what the rounds up to the cursor add — each request for funds, each post
- * an intent cites (information, never cash), each request a lender answers (a disbursement is
- * financial). Nothing after the cursor is drawn.
+ * an intent cites (information, never cash), each request a lender answers. A disbursement is
+ * financial only when it was accepted and journalled; a rejected, pending, unjournalled or
+ * unverdicted one is a proposal and is drawn as part of the request. Every intent edge carries its
+ * clearing verdict. Nothing after the cursor is drawn.
  */
 const worldMap = computed(() => {
   if (!current.value) return { nodes: [], edges: [] }
@@ -377,15 +385,18 @@ const worldMap = computed(() => {
     .filter((p) => p.round <= r && p.branch_id === base.value.branch_id).map((p) => [p.post_id, p.author]))
   const owners = shownOwners.value
   for (const v of views) {
+    const verdicts = new Map(v.cleared.map((c) => [c.intent_id, c]))
     for (const i of v.intents) {
       node(i.actor_id)
+      const verdict = verdictOf(verdicts.get(i.intent_id))
+      const moved = i.type === 'disburse' && verdict.accepted && Boolean(verdict.journal)
       const to = i.params?.from
       if (i.type === 'request_advance' && typeof to === 'string') {
         node(to)
         const amount = i.params.amount
         edges.set(`intent:${i.intent_id}`, { id: `intent:${i.intent_id}`, from: i.actor_id, to, type: 'request',
           label: `request advance${amount ? ` ${formatMoney(amount.minor, amount.currency)}` : ''} · round ${i.round}`,
-          source: `intent ${i.intent_id}` })
+          source: `intent ${i.intent_id}`, verdict })
       }
       for (const e of i.evidence_ids ?? []) {
         const author = authors.get(e)
@@ -397,8 +408,9 @@ const worldMap = computed(() => {
         const owner = owners.get(e)
         if (owner && owner !== i.actor_id) {
           edges.set(`cite:${i.intent_id}:${e}`, { id: `cite:${i.intent_id}:${e}`, from: i.actor_id, to: owner,
-            type: i.type === 'disburse' ? 'financial' : 'request',
-            label: `${i.type.replace(/_/g, ' ')} on ${e} · round ${i.round}`, source: `intent ${i.intent_id}` })
+            type: moved ? 'financial' : 'request',
+            label: `${i.type === 'disburse' && !moved ? 'proposed ' : ''}${i.type.replace(/_/g, ' ')} on ${e} · round ${i.round}`,
+            source: `intent ${i.intent_id}`, verdict })
         }
       }
     }
@@ -413,10 +425,14 @@ function pickMap ({ kind, id }) {
   if (kind === 'node') return selectActor(id)
   const e = worldMap.value.edges.find((x) => x.id === id)
   if (!e) return
+  const v = e.verdict
   evidence.value = {
     title: `${nameOf(e.from)} → ${nameOf(e.to)}`,
-    rows: [['Type', e.type], ['Relation', e.label], ['Source', e.source], ['Round', `up to round ${display.value}`]],
-    note: e.type === 'information' ? 'Information only: a post or a price never moves cash.' : ''
+    rows: [['Type', e.type], ['Relation', e.label], ['Source', e.source], ['Round', `up to round ${display.value}`],
+      ...(v ? [['Verdict', `${v.word}${v.reason ? ` · ${v.reason}` : ''}`], ['Journal', v.journal || 'no ledger change']] : [])],
+    note: e.type === 'information'
+      ? 'Information only: a post or a price never moves cash.'
+      : (v && !v.journal ? 'A proposal is not a ledger change until it is accepted and journalled.' : '')
   }
 }
 
