@@ -6,6 +6,7 @@
         {{ body.company ? body.company.name : 'Treasury' }} <span>/ your cash today</span>
       </h2>
       <p class="lw-lead" data-test="lead">{{ lead }}</p>
+      <p v-if="leadSeen" class="lw-time" data-test="lead-stale">{{ leadSeen }}</p>
       <div class="lw-ov-labels" data-test="labels">
         <span class="lw-ov-tag" data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span>
         <span v-if="PLAIN[model]" class="lw-ov-tag">{{ PLAIN[model] }}</span>
@@ -199,8 +200,8 @@ import CashOutlook from '../components/CashOutlook.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
 import {
   FLOOR_WORDS, LABELS, PLAIN, STATES, ScreenShell, amountWords, dayText, floorState, formatAmount, formatMoney,
-  formatTime, freshness, getOverview, hoursFrom, kindText, metricStatus, metricText, modelSource, money, pendingFlows, routeExists, rowLink, staleOf,
-  useReading
+  formatTime, freshness, getOverview, hoursFrom, kindText, lastSeen, metricStatus, metricText, modelSource, money,
+  pendingFlows, routeExists, rowLink, staleOf, useReading
 } from '../api/v1.js'
 
 const router = useRouter()
@@ -239,19 +240,27 @@ const lead = computed(() => {
   const b = state.body
   if (!b) return ''
   const cov = b.coverage
-  const minimum = metricText(cov.floor)
+  const minimum = amountWords(cov.floor)
   if (floor.value === 'breached') {
     const short = formatMoney(-cov.headroom.minor, cov.headroom.currency)
     return `Heads up: on ${dayText(cov.at)} you dip ${short} below your ${minimum} safety minimum.`
   }
-  const free = `${amountWords(b.spendable)} free now`
+  const s = b.spendable
+  const free = s.minor !== null && s.minor < 0
+    ? `nothing free now (${formatMoney(-s.minor, s.currency)} short)`
+    : `${amountWords(s)} free now`
   if (floor.value !== 'kept') {
-    return `${free}; whether you stay above your safety minimum is ${floor.value === 'unassessed' ? 'not assessed' : 'unknown'}.`
+    return `${floor.value === 'unassessed' ? 'Your safety minimum is not assessed yet' : "We can't tell yet whether you stay above your safety minimum"}; ${free}.`
   }
-  const ahead = `${free}, and your lowest point ahead is ${metricText(cov.min_projected)} — ` +
-    `${metricText(cov.headroom)} above your ${minimum} safety minimum.`
+  const ahead = `${free}, and your lowest point ahead is ${amountWords(cov.min_projected)} — ` +
+    `${amountWords(cov.headroom)} above your ${minimum} safety minimum.`
   const n = next.value
   return n ? `You're covered until ${kindText(n.kind)} on ${dayText(n.due_at)}: ${ahead}` : `Nothing falls due: ${ahead}`
+})
+
+const leadSeen = computed(() => {
+  const b = state.body
+  return b ? lastSeen(b.spendable, b.coverage.floor, b.coverage.min_projected, b.coverage.headroom) : ''
 })
 
 // --------------------------------------------------------------------------- O2 strip

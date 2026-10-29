@@ -128,7 +128,7 @@ test('Overview: known zero, Unknown, Not assessed and Stale stay distinct, with 
   await expect(line('spendable')).toHaveText('? Unknown')
   await expect($(page, 'coverage').locator('.lw-figure')).toHaveText('Not assessed')
   await expect($(page, 'floor-status')).toHaveText(/–\s*Not assessed/)
-  await expect($(page, 'coverage')).not.toContainText(/Floor kept|Floor breached/)
+  await expect($(page, 'coverage')).not.toContainText(/Floor kept|Floor breached|Above your safety minimum|Below your safety minimum/)
   await expect($(page, 'lender-capacity')).toContainText(`${c} 123,456.00 · stale`)
 
   const band = $(page, 'stale-band')
@@ -164,7 +164,7 @@ test('Treasury: S known at zero, stale with its as of, Unknown; the floor Not as
     await expect($(page, 'spendable').locator('.lw-figure')).toHaveText(k.figure(currency))
     await expect($(page, 'spendable-status')).toHaveText(k.line)
     await expect($(page, 'floor-status')).toHaveText(/–\s*Not assessed/)
-    await expect($(page, 'coverage')).not.toContainText(/Floor kept|Floor breached/)
+    await expect($(page, 'coverage')).not.toContainText(/Floor kept|Floor breached|Above your safety minimum|Below your safety minimum/)
     if (k.status === 'stale') {
       await expect($(page, 'stale-band')).toContainText('◷ Stale')
       await expect($(page, 'stale-band')).toContainText(id!)

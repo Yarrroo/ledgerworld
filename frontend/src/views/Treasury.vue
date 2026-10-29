@@ -1,6 +1,7 @@
 <template>
   <ScreenShell v-slot="{ body }" title="Treasury" :reading="state" :refresh="refresh" :stale="stale">
     <p class="lw-lead" data-test="lead">{{ lead }}</p>
+    <p v-if="leadSeen" class="lw-time" data-test="lead-stale">{{ leadSeen }}</p>
     <HowWeKnow test="how-treasury">
       <p>Snapshot {{ body.snapshot_id }}, GET /api/v1/treasury. Cash in the bank is the settled balance;
         set aside is reserved; free to spend now is spendable S; the lowest point ahead is projected
@@ -133,10 +134,10 @@
               <span>{{ FLOOR_WORDS[account.floorCheck.state] }}</span>
             </div>
             <div v-if="account.floorCheck.state === 'breached'" class="lw-figure" data-test="shortfall">
-              {{ formatMoney(-account.floorCheck.gap, account.currency) }} short on {{ dayText(account.low.t) }}
+              {{ formatMoney(-account.floorCheck.gap, account.currency) }} short on {{ dayText(account.low.t) }} ({{ hoursFrom(body.as_of, account.low.t) }})
             </div>
             <div v-else-if="account.low" class="lw-figure lw-figure--small" data-test="minimum">
-              lowest {{ metricText(account.low.value) }} on {{ dayText(account.low.t) }}
+              lowest {{ metricText(account.low.value) }} on {{ dayText(account.low.t) }} ({{ hoursFrom(body.as_of, account.low.t) }})
             </div>
             <div class="lw-time" data-test="floor-line">
               safety minimum {{ account.floor ? metricText(account.floor) : 'Not assessed' }}<template
@@ -235,8 +236,8 @@ import DetailSheet from '../components/DetailSheet.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
 import {
   FLOOR_WORDS, OWED, STATES, ScreenShell, againstFloor, amountWords, contextKey, dayText, formatAmount, formatMoney,
-  formatTime, getOverview, getTreasury, hoursFrom, kindText, metricStatus, metricText, money, pendingFlows, projectionTerms, routeExists, staleOf,
-  stateOf, useFocusTarget, useReading
+  formatTime, getOverview, getTreasury, hoursFrom, kindText, lastSeen, listWords, metricStatus, metricText, money,
+  pendingFlows, projectionTerms, routeExists, staleOf, stateOf, useFocusTarget, useReading
 } from '../api/v1.js'
 
 const route = useRoute()
@@ -400,14 +401,20 @@ const lead = computed(() => {
   if (!a) return 'There is no cash account to show for this snapshot.'
   const b = a.buckets
   const cash = b.settled ? money(b.settled) : 'An unknown amount'
-  const free = amountWords(a.spendable)
-  if (!b.reserved.minor) return `${cash} in the bank; nothing is set aside, so ${free} is free to spend.`
-  const kinds = [...new Set(state.body.obligations
-    .filter((o) => o.account === a.id && o.reservation_id && OWED.has(o.state ?? 'open'))
-    .map((o) => kindText(o.kind)))]
-  const purpose = kinds.length ? kinds.join(' and ') : 'upcoming bills'
-  return `${cash} in the bank; ${money(b.reserved)} is set aside for ${purpose}, so ${free} is free to spend.`
+  const s = a.spendable
+  const free = s.minor !== null && s.minor < 0
+    ? `so nothing is free to spend: you are ${formatMoney(-s.minor, s.currency)} short.`
+    : `so ${amountWords(s)} is free to spend.`
+  if (!b.reserved.minor) return `${cash} in the bank; nothing is set aside, ${free}`
+  // what the reservations hold money for: owed obligations, and pending outflows reserved on their own
+  const owed = state.body.obligations.filter((o) => o.account === a.id && o.reservation_id && OWED.has(o.state ?? 'open'))
+  const held = new Set(owed.map((o) => o.reservation_id))
+  const kinds = [...new Set([...owed, ...b.pending_out.filter((f) => f.reservation_id && !held.has(f.reservation_id))]
+    .map((x) => kindText(x.kind)))]
+  return `${cash} in the bank; ${money(b.reserved)} is set aside for ${kinds.length ? listWords(kinds) : 'upcoming bills'}, ${free}`
 })
+
+const leadSeen = computed(() => (account.value ? lastSeen(account.value.spendable) : ''))
 
 // T6: the prepared run, carrying the account and snapshot.
 const rehearse = computed(() => {

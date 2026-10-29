@@ -317,8 +317,24 @@ export function dayText (iso) {
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })
 }
 
-/** A metric as an amount in a sentence: its text when it has a value, else "an unknown amount". */
-export const amountWords = (metric) => (metric?.minor == null ? 'an unknown amount' : metricText(metric))
+/**
+ * A metric as an amount in a lead sentence: its money, or "an unknown amount". A stale value
+ * carries no tag here; `lastSeen()` says it once after the sentence.
+ */
+export const amountWords = (metric) => (metric?.minor == null ? 'an unknown amount' : money(metric))
+
+/** "payroll", "payroll and rent", "payroll, rent and tax". */
+export function listWords (items) {
+  return items.length < 2 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
+}
+
+/** "Some figures were last seen 2026-01-05 12:00 UTC.", the oldest stale one, or '' when none is stale. */
+export function lastSeen (...metrics) {
+  const stale = metrics.filter((m) => m?.status === 'stale')
+  if (!stale.length) return ''
+  const at = stale.map((m) => m.as_of).filter(Boolean).sort()[0]
+  return `Some figures were last seen ${at ? formatTime(at).utc : 'at an unknown time'}.`
+}
 
 /** What a response's figures are: a replay, a hypothetical branch, or the observed snapshot. */
 export function sourceLabel (body) {

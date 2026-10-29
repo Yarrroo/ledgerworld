@@ -158,14 +158,14 @@ test('Treasury: in the bank, set aside, free to spend, from the selected account
   const b = account.buckets
   if (b.settled) expect(text).toContain(`${fmt(b.settled)} in the bank`)
   if (b.reserved.minor) {
-    const kinds = body.obligations.filter((o: any) => o.account === account.id && o.reservation_id &&
-      ['open', 'missed'].includes(o.state ?? 'open')).map((o: any) => o.kind.replace(/_/g, ' '))
-    expect(text).toContain(`${fmt(b.reserved)} is set aside for ${kinds.length ? [...new Set(kinds)].join(' and ') : 'upcoming bills'}`)
+    expect(text).toContain(`${fmt(b.reserved)} is set aside for `)
   } else {
     expect(text).toContain('nothing is set aside')
   }
-  if (account.spendable.minor !== null) expect(text).toContain(`so ${fmt(account.spendable)}`)
-  expect(text).toMatch(/is free to spend\.$/)
+  if (account.spendable.minor !== null && account.spendable.minor >= 0) {
+    expect(text).toContain(`so ${fmt(account.spendable)}`)
+    expect(text).toMatch(/is free to spend\.$/)
+  }
   await expect(page.locator('#spend-heading')).toHaveText('Free to spend now')
   await expect($(page, 'bucket-settled').locator('summary')).toContainText('Cash in the bank')
   await expect($(page, 'bucket-reserved').locator('summary')).toContainText('Set aside')
@@ -199,5 +199,94 @@ test('Lending: what the lender can still lend, then how; K_p one click down', as
   for (const hook of ['pool', 'capacity-value', 'capacity-status', 'parts', 'expand-calculation', 'evidence', 'relations', 'fund']) {
     await expect($(page, hook)).toHaveCount(1)
   }
+  expect(writes).toEqual([])
+})
+
+/** The baseline overview with some of its figures replaced. */
+async function serveOverview (page: Page, change: (body: any) => any): Promise<void> {
+  const body = change(structuredClone(BASELINE))
+  await page.route('**/api/v1/overview', (route) => route.fulfill({ json: body }))
+}
+
+test('Overview: a shortfall is never free money, stale figures say when they were seen, unknown reads as words', async ({ page, baseURL }) => {
+  const writes = await readOnly(page, baseURL!)
+  // spendable below zero while the floor holds
+  await serveOverview(page, (b) => ({ ...b, spendable: { ...b.spendable, minor: -1_000_000 } }))
+  await open(page, '/overview')
+  let text = await leads(page)
+  expect(text).toContain('nothing free now (USD 10,000.00 short)')
+  expect(text).not.toMatch(/-[\d,]+\.\d\d|−/)
+  await page.unroute('**/api/v1/overview')
+
+  // every figure stale: no tag inside the sentence, one last-seen line after it
+  const at = '2026-01-01T00:00:00Z'
+  await serveOverview(page, (b) => {
+    const stale = (m: any) => ({ ...m, status: 'stale', as_of: at })
+    return { ...b, spendable: stale(b.spendable), coverage: { ...b.coverage, floor: stale(b.coverage.floor),
+      min_projected: stale(b.coverage.min_projected), headroom: stale(b.coverage.headroom) } }
+  })
+  await open(page, '/overview')
+  text = await leads(page)
+  expect(text).not.toContain('stale')
+  await expect($(page, 'lead-stale')).toHaveText('Some figures were last seen 2026-01-01 00:00 UTC.')
+  await page.unroute('**/api/v1/overview')
+
+  // a stale breach: the shortfall in words, the last-seen line beside it
+  await serveOverview(page, (b) => ({ ...b, coverage: { ...b.coverage,
+    headroom: { ...b.coverage.headroom, minor: -500_000, status: 'stale', as_of: at } } }))
+  await open(page, '/overview')
+  expect(await leads(page)).toBe('Heads up: on 2 Jan you dip USD 5,000.00 below your USD 30,000.00 safety minimum.')
+  await expect($(page, 'lead-stale')).toBeVisible()
+  await page.unroute('**/api/v1/overview')
+
+  // nothing known: a sentence that starts like one
+  await serveOverview(page, (b) => {
+    const unknown = (m: any) => ({ ...m, minor: null, status: 'unknown', as_of: null })
+    return { ...b, spendable: unknown(b.spendable), coverage: { ...b.coverage, headroom: unknown(b.coverage.headroom) } }
+  })
+  await open(page, '/overview')
+  text = await leads(page)
+  expect(text).toMatch(/^[A-Z]/)
+  expect(text).toContain('an unknown amount free now')
+  await expect($(page, 'lead-stale')).toHaveCount(0)
+  expect(writes).toEqual([])
+})
+
+test('Treasury: a shortfall is not free to spend; every reservation names what it is for', async ({ page, baseURL }) => {
+  const writes = await readOnly(page, baseURL!)
+  const body = await read(page, '/treasury')
+  const account = body.accounts.find((a: any) => a.id.endsWith('/operating')) ?? body.accounts[0]
+  const changed = structuredClone(body)
+  const mine = changed.accounts.find((a: any) => a.id === account.id)
+  const currency = account.currency
+  mine.spendable = { ...mine.spendable, minor: -1_000_000, status: 'known', currency }
+  mine.buckets.reserved = { currency, minor: 7_000_000 }
+  // two obligations and one pending outflow, each held by its own reservation
+  changed.obligations = [
+    ...changed.obligations.filter((o: any) => o.account !== account.id),
+    { account: account.id, amount: { currency, minor: 5_000_000 }, due_at: body.as_of, entity: 'x', kind: 'payroll',
+      mandatory: true, obligation_id: 'payroll-x', reservation_id: 'hold-payroll', state: 'open' },
+    { account: account.id, amount: { currency, minor: 1_000_000 }, due_at: body.as_of, entity: 'x', kind: 'rent',
+      mandatory: true, obligation_id: 'rent-x', reservation_id: 'hold-rent', state: 'open' }
+  ]
+  mine.buckets.pending_out = [{ amount: { currency, minor: 1_000_000 }, expected_at: body.as_of, flow_id: 'supplier-x',
+    kind: 'supplier_payment', reservation_id: 'hold-supplier' }]
+  await page.route('**/api/v1/treasury', (route) => route.fulfill({ json: changed }))
+  await open(page, '/treasury')
+  const text = await leads(page)
+  expect(text).toContain(`${currency} 70,000.00 is set aside for payroll, rent and supplier payment`)
+  expect(text).toMatch(new RegExp(`so nothing is free to spend: you are ${currency} 10,000\\.00 short\\.$`))
+  expect(text).not.toMatch(/-[\d,]+\.\d\d/)
+  expect(writes).toEqual([])
+})
+
+test('Lending: a capacity at or below zero says the lender cannot lend', async ({ page, baseURL }) => {
+  const writes = await readOnly(page, baseURL!)
+  const body = await read(page, '/lending')
+  const changed = structuredClone(body)
+  changed.capacity.K_p = { ...changed.capacity.K_p, minor: -500_000, status: 'known' }
+  await page.route('**/api/v1/lending', (route) => route.fulfill({ json: changed }))
+  await open(page, '/lending')
+  expect(await leads(page)).toBe('Your lender cannot lend you anything right now; here is how that number is worked out.')
   expect(writes).toEqual([])
 })

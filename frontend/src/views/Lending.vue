@@ -1,6 +1,7 @@
 <template>
   <ScreenShell v-slot="{ body }" title="Lending" :reading="state" :refresh="refresh" :stale="stale">
     <p class="lw-lead" data-test="lead">{{ lead }}</p>
+    <p v-if="leadSeen" class="lw-time" data-test="lead-stale">{{ leadSeen }}</p>
 
     <section class="lw-len__context" aria-label="Your lender" data-panel="Your lender" data-test="pool-context">
       <p>Lender: <b data-test="pool">{{ poolName }}</b></p>
@@ -246,8 +247,8 @@ import HowWeKnow from '../components/HowWeKnow.vue'
 import WorldMap from '../components/WorldMap.vue'
 import { FAMILIES, worldFor } from '../api/world.js'
 import {
-  ApiError, ScreenShell, amountText, contextKey, formatTime, freshness, getLending, getOverview,
-  getTreasury, hoursFrom, kindText, metricStatus, metricText, money, routeExists, staleOf, stateOf, useReading
+  ApiError, ScreenShell, amountText, amountWords, contextKey, formatTime, freshness, getLending, getOverview,
+  getTreasury, hoursFrom, kindText, lastSeen, metricStatus, metricText, money, routeExists, staleOf, stateOf, useReading
 } from '../api/v1.js'
 
 const router = useRouter()
@@ -281,9 +282,14 @@ const capacityText = computed(() => {
 })
 
 /** The finance lead's answer (COPY.md): the API's K_p, then how it is worked out. */
-const lead = computed(() => (capacity.value.K_p.minor === null
-  ? 'What your lender can still lend is unknown right now; here is what we can see.'
-  : `Your lender can still lend you up to ${capacityText.value}; here is how that number is worked out.`))
+const lead = computed(() => {
+  const kp = capacity.value.K_p
+  if (kp.minor === null) return 'What your lender can still lend is unknown right now; here is what we can see.'
+  if (kp.minor <= 0) return 'Your lender cannot lend you anything right now; here is how that number is worked out.'
+  const known = reduced.value ? ' from the money we can see' : ''
+  return `Your lender can still lend you up to ${amountWords(kp)}${known}; here is how that number is worked out.`
+})
+const leadSeen = computed(() => lastSeen(capacity.value.K_p))
 
 const PARTS = [
   ['settled_known', 'Cash the lender holds', '+'],
