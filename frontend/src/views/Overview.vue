@@ -70,7 +70,7 @@
       <section class="lw-ov-outlook" aria-labelledby="ov-outlook" data-panel="Cash outlook" data-test="outlook">
         <h2 id="ov-outlook">{{ horizon }}-hour cash outlook</h2>
         <p class="lw-time">Observed snapshot {{ body.snapshot_id }} · projected cash P from the API, no shock</p>
-        <CashOutlook :points="body.outlook || []" :floor="body.coverage.floor" :as-of="body.as_of"
+        <CashOutlook :points="body.outlook || []" :floor="body.coverage.floor" :low-at="body.coverage.at" :as-of="body.as_of"
                      :currency="body.cash.currency" />
       </section>
 
@@ -152,7 +152,7 @@
         <p>{{ body.scenario.about }}</p>
         <dl class="lw-ov-facts lw-ov-facts--stack">
           <div><dt>Family</dt><dd>{{ body.scenario.family }}</dd></div>
-          <div v-for="(value, name) in body.scenario.params" :key="name"><dt>{{ name }}</dt><dd>{{ value }}</dd></div>
+          <div v-for="p in scenarioParams" :key="p.name"><dt>{{ p.name }}</dt><dd>{{ p.value }}</dd></div>
           <div v-if="delayed"><dt>Timing</dt><dd data-test="scenario-timing">{{ delayed }}</dd></div>
           <div><dt>Run</dt><dd>{{ body.demo.run_id }} (prepared)</dd></div>
         </dl>
@@ -173,8 +173,8 @@ import { computed, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import CashOutlook from '../components/CashOutlook.vue'
 import {
-  LABELS, STATES, ScreenShell, floorState, formatAmount, formatTime, freshness, getOverview,
-  hoursFrom, metricText, modelSource, money, routeExists, rowLink, stateOf, useReading
+  LABELS, STATES, ScreenShell, floorState, formatAmount, formatMoney, formatTime, freshness, getOverview,
+  hoursFrom, metricText, modelSource, money, pendingFlows, routeExists, rowLink, stateOf, useReading
 } from '../api/v1.js'
 
 const router = useRouter()
@@ -188,8 +188,8 @@ const floor = computed(() => floorState(state.body?.coverage.headroom))
 const notCurrent = computed(() =>
   state.body?.completeness.accounts.map((a) => freshness(a).text).join('; '))
 const horizon = computed(() => {
-  const pts = state.body?.outlook ?? []
-  return pts.length ? hoursFrom(state.body.as_of, pts[pts.length - 1].t).replace(/^t=| h$/g, '') : '72'
+  const last = state.body?.outlook?.at(-1)
+  return last ? Math.round((Date.parse(last.t) - Date.parse(state.body.as_of)) / 3_600_000) : 72
 })
 
 const runId = computed(() => state.body?.demo.run_id ?? null)
@@ -323,11 +323,7 @@ const relations = computed(() => (state.body?.relations ?? []).map((r) => ({
 const scenarioFlow = computed(() => {
   const id = state.body?.scenario?.params?.flow_id
   if (!id) return null
-  for (const a of state.body.accounts ?? []) {
-    const f = [...a.buckets.pending_in, ...a.buckets.pending_out].find((x) => x.flow_id === id)
-    if (f) return f
-  }
-  return null
+  return (state.body.accounts ?? []).flatMap(pendingFlows).find((f) => f.flow_id === id) ?? null
 })
 const teaser = computed(() => {
   const f = scenarioFlow.value
@@ -341,6 +337,14 @@ const delayed = computed(() => {
   if (!f || !Number.isInteger(hours)) return ''
   const from = hoursFrom(state.body.as_of, f.expected_at)
   return `${f.flow_id} expected ${from}, delayed ${hours} h`
+})
+/** The scenario's parameters as text: an `<x>_minor` amount in its currency, never raw units. */
+const scenarioParams = computed(() => {
+  const params = state.body?.scenario?.params ?? {}
+  const currency = typeof params.currency === 'string' ? params.currency : state.body?.cash.currency
+  return Object.entries(params).map(([name, value]) => (name.endsWith('_minor') && Number.isSafeInteger(value)
+    ? { name: name.slice(0, -'_minor'.length), value: formatMoney(value, currency) }
+    : { name, value: typeof value === 'object' ? JSON.stringify(value) : String(value) }))
 })
 const preview = ref(false)
 </script>
@@ -438,12 +442,7 @@ const preview = ref(false)
   cursor: pointer;
 }
 
-.lw-ov-metric__pick .lw-figure {
-  font-family: var(--lw-font-heading);
-  font-size: 30px;
-  line-height: 36px;
-}
-
+.lw-ov-metric__pick .lw-figure,
 .lw-ov-metric__sub {
   font-weight: 600;
 }

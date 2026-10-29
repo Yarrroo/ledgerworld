@@ -90,6 +90,16 @@ describe('Overview panels on the baseline', () => {
     expect(text(w, 'settled')).toContain('USD 70,000.00') // nothing observed changed
   })
 
+  it('O6 shows a scenario amount in its currency, never as raw minor units', async () => {
+    const body = withRun()
+    body.scenario = { family: 'fx-gap', about: 'A currency gap.', params: { amount_minor: 1000000, currency: 'EUR' } }
+    const w = await open(body)
+    await w.get('[data-test="preview-scenario"]').trigger('click')
+    const amount = w.findAll('[data-test="scenario-preview"] dt').find((dt) => dt.text() === 'amount')
+    expect(amount.element.nextElementSibling.textContent).toBe('EUR 10,000.00')
+    expect(text(w, 'scenario-preview')).not.toContain('1000000')
+  })
+
   it('without a prepared run, the scenario cannot be previewed and says why', async () => {
     const w = await open(baseline.instance)
     expect(w.get('[data-test="preview-scenario"]').attributes('disabled')).toBeDefined()

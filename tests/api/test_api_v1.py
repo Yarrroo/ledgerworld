@@ -33,7 +33,7 @@ from app.execution.gateway import Gateway
 from app.finance import schemas as c6
 from app.finance.schemas import Snapshot
 from app.jobs import JobQueue, JobStore, Worker
-from app.jobs.runner import Runner, base_branch
+from app.jobs.runner import Runner, base_branch, new_run
 from app.simulation.scenarios import load_world
 from app.simulation.world import import_oasis
 from app.testing.scripted_model import ScriptedPlan
@@ -223,6 +223,28 @@ def test_the_baseline_example_is_what_the_api_answers():
     screen; it must stay the API's own answer on the demo world at its epoch."""
     path = ROOT / "contracts/examples/c6_api/valid-overview-demo-baseline.json"
     assert baseline_overview() == json.loads(path.read_text(encoding="utf-8"))["instance"]
+
+
+def test_an_overdue_flow_is_an_event_of_the_first_outlook_point():
+    """P(now) already counts a receivable expected before now; the first point says so."""
+    snap = observed()
+    acct = next(a for a in snap["accounts"] if a["id"] == "borrower-a/operating")
+    flow = next(f for f in acct["buckets"]["pending_in"] if f["flow_id"] == "rcv-1")
+    flow["expected_at"] = iso(T0 + timedelta(hours=6))  # 6 h before now, not yet arrived
+    body = check(client(build(snap)).get("/api/v1/overview"), "OverviewResponse")
+    first = body["outlook"][0]
+    assert first["value"]["minor"] == 9_000_000  # 70,000 settled + 20,000 overdue
+    assert [(e["ref"], e["direction"]) for e in first["events"]] == [("rcv-1", "in")]
+
+
+def test_a_scenario_that_no_longer_loads_leaves_the_overview_readable():
+    """A prepared run whose stored family is gone shows no scenario; Overview still answers."""
+    services = build()
+    services.jobs.put("run_spec", "run-gone", {"scenario": {"family": "retired-family"}})
+    services.jobs.put("run", "run-gone", new_run("run-gone", "obs-lf", NOW))
+    services.prepare_demo("run-gone")
+    body = check(client(services).get("/api/v1/overview"), "OverviewResponse")
+    assert body["demo"]["run_id"] == "run-gone" and body["scenario"] is None
 
 
 def test_venue_freeze_is_partial_and_unknown_is_never_zero():

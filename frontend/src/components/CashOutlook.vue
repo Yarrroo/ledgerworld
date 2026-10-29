@@ -21,22 +21,22 @@
           <text v-if="floorY !== null" :x="width - M.right" :y="floorY - 6" text-anchor="end"
                 class="lw-outlook__floor-label" aria-hidden="true">Reserve floor {{ short(floor.minor) }}</text>
           <path :d="line" class="lw-outlook__line" aria-hidden="true" />
-          <g v-for="(p, n) in drawn" :key="p.t" class="lw-outlook__point"
-             :class="{ 'is-low': p.low, [`is-${lowTone}`]: p.low, 'is-active': active === n }"
+          <g v-for="p in drawn" :key="p.t" class="lw-outlook__point"
+             :class="{ 'is-low': p.low, [`is-${lowTone}`]: p.low, 'is-active': active === p.t }"
              tabindex="0" role="img" :aria-label="p.text" data-test="outlook-point" :data-t="p.t"
-             @mouseenter="active = n" @mouseleave="active = null" @focus="active = n" @blur="active = null"
-             @click="active = n">
+             @pointerenter="hover($event, p.t)" @pointerleave="hover($event, null)"
+             @focus="active = p.t" @blur="active = null" @click="active = p.t">
             <circle :cx="p.px" :cy="p.py" r="22" class="lw-outlook__hit" />
             <circle :cx="p.px" :cy="p.py" :r="p.low ? 7 : 5" class="lw-outlook__dot" />
           </g>
           <text v-if="low" :x="lowLabel.x" :y="low.py + 24" :text-anchor="lowLabel.anchor"
                 class="lw-outlook__low-label" aria-hidden="true">Lowest {{ short(low.value.minor) }} · {{ low.h }}</text>
         </svg>
-        <div v-if="active !== null" class="lw-outlook__tip" aria-hidden="true" data-test="outlook-tip"
+        <div v-if="tip" class="lw-outlook__tip" aria-hidden="true" data-test="outlook-tip"
              :style="tipStyle">
-          <strong>{{ drawn[active].money }}</strong>
-          <span>{{ drawn[active].h }} simulated · {{ drawn[active].utc }}</span>
-          <span>{{ drawn[active].event }}</span>
+          <strong>{{ tip.money }}</strong>
+          <span>{{ tip.h }} simulated · {{ tip.utc }}</span>
+          <span>{{ tip.event }}</span>
         </div>
       </div>
       <ul class="lw-outlook__legend" aria-hidden="true">
@@ -85,13 +85,14 @@ import { STATES, againstFloor, formatAmount, formatMoney, formatTime, hoursFrom,
 const props = defineProps({
   points: { type: Array, required: true },
   floor: { type: Object, default: null },
+  lowAt: { type: String, default: null }, // the API's coverage.at: where P is lowest, first reached
   asOf: { type: String, required: true },
   currency: { type: String, required: true }
 })
 
 const frame = ref(null)
 const width = ref(640)
-const active = ref(null)
+const active = ref(null) // the time of the point whose tip shows
 const table = ref(false)
 const height = computed(() => (width.value < 520 ? 240 : 300))
 const M = { left: 64, right: 20, top: 24, bottom: 44 }
@@ -101,14 +102,13 @@ function measure () {
   const w = frame.value?.clientWidth
   if (w) width.value = Math.max(280, Math.floor(w))
 }
+// the frame exists only once there are points: observe it whenever it appears
 onMounted(() => {
+  if (window.ResizeObserver) observer = new ResizeObserver(measure)
+  if (frame.value) observer?.observe(frame.value)
   measure()
-  if (window.ResizeObserver && frame.value) {
-    observer = new ResizeObserver(measure)
-    observer.observe(frame.value)
-  }
 })
-watch(frame, (el) => { if (el && observer) observer.observe(el); measure() })
+watch(frame, (el) => { if (el) observer?.observe(el); measure() })
 onBeforeUnmount(() => observer?.disconnect())
 
 const hoursOf = (t) => (Date.parse(t) - Date.parse(props.asOf)) / 3_600_000
@@ -121,15 +121,24 @@ function niceStep (span) {
   const mag = 10 ** Math.floor(Math.log10(raw))
   return [1, 2, 5, 10].map((k) => k * mag).find((s) => s >= raw)
 }
-const yTop = computed(() => {
-  const top = Math.max(...known.value.map((p) => p.value.minor), floorKnown.value ? props.floor.minor : 0, 0)
-  const step = niceStep(top * 1.15)
-  return Math.max(step, Math.ceil((top * 1.15) / step) * step)
+/** The y range, from 0 or the lowest P below it to above the highest value, on round steps. */
+const yRange = computed(() => {
+  const values = [...known.value.map((p) => p.value.minor), floorKnown.value ? props.floor.minor : 0, 0]
+  const hi = Math.max(...values)
+  const lo = Math.min(...values)
+  const step = niceStep((hi - lo) * 1.15)
+  return {
+    step,
+    top: Math.max(step, Math.ceil((hi * 1.15) / step) * step),
+    bottom: lo < 0 ? Math.floor((lo * 1.15) / step) * step : 0
+  }
 })
+const yStep = computed(() => yRange.value.step)
+const yTop = computed(() => yRange.value.top)
+const yBottom = computed(() => yRange.value.bottom)
 const yTicks = computed(() => {
-  const step = niceStep(yTop.value)
   const ticks = []
-  for (let v = 0; v <= yTop.value; v += step) ticks.push(v)
+  for (let v = yBottom.value; v <= yTop.value; v += yStep.value) ticks.push(v)
   return ticks
 })
 const xEnd = computed(() => Math.max(1, ...props.points.map((p) => hoursOf(p.t))))
@@ -140,17 +149,15 @@ const xTicks = computed(() => {
   return ticks
 })
 const x = (h) => M.left + (h / xEnd.value) * (width.value - M.left - M.right)
-const y = (v) => height.value - M.bottom - (v / yTop.value) * (height.value - M.top - M.bottom)
+const y = (v) => height.value - M.bottom -
+  ((v - yBottom.value) / (yTop.value - yBottom.value)) * (height.value - M.top - M.bottom)
 const floorY = computed(() => (floorKnown.value ? y(props.floor.minor) : null))
 
 /** "70,000" on the axis: whole units, the currency named in the chart's label. */
 const short = (minor) => formatAmount(minor, props.currency).replace(/\.0+$/, '')
 
-/** The lowest API point, first reached; null when any point has no value. */
-const lowPoint = computed(() => {
-  if (known.value.length !== props.points.length) return null
-  return props.points.reduce((low, p) => (p.value.minor < low.value.minor ? p : low))
-})
+/** The point the API names as the lowest; none when it names none. */
+const lowPoint = computed(() => props.points.find((p) => p.t === props.lowAt) ?? null)
 const lowState = computed(() => againstFloor(lowPoint.value?.value, props.floor).state)
 const lowTone = computed(() => STATES[lowState.value]?.tone ?? 'muted')
 
@@ -188,16 +195,25 @@ const lowLabel = computed(() => {
 })
 
 const step = (pts) => pts.map((p, n) => (n ? `H${p.px}V${p.py}` : `M${p.px},${p.py}`)).join('')
-const line = computed(() => step(drawn.value.filter((p) => p.value.minor !== null)))
+const valued = computed(() => drawn.value.filter((p) => p.value.minor !== null))
+const line = computed(() => step(valued.value))
 const area = computed(() => {
-  const pts = drawn.value.filter((p) => p.value.minor !== null)
+  const pts = valued.value
   if (!pts.length) return ''
-  const base = y(0)
+  const base = y(yBottom.value)
   return `${step(pts)}H${x(xEnd.value)}V${base}H${pts[0].px}Z`
 })
 
+/** A mouse shows the tip while over a point; a touch shows it by tapping (focus and click),
+ * and its pointer leaving as the finger lifts does not take it away. */
+function hover (event, t) {
+  if (event.pointerType === 'mouse') active.value = t
+}
+
+/** The tip's point, while a point at that time is still drawn. */
+const tip = computed(() => drawn.value.find((p) => p.t === active.value) ?? null)
 const tipStyle = computed(() => {
-  const p = drawn.value[active.value]
+  const p = tip.value
   const left = Math.min(Math.max(p.px, 90), width.value - 90)
   const above = p.py > 90
   return { left: `${left}px`, top: `${above ? p.py - 12 : p.py + 16}px`, transform: `translate(-50%, ${above ? '-100%' : '0'})` }

@@ -115,17 +115,20 @@ def health():
 
 @functools.cache
 def _family_about(family_id: str) -> str:
-    raw = json.loads((FAMILIES_DIR / f"{family_id}.json").read_text(encoding="utf-8"))
-    return raw["about"]
+    return json.loads((FAMILIES_DIR / f"{family_id}.json").read_text(encoding="utf-8"))["about"]
 
 
 def _demo_scenario(run_id: str | None) -> dict | None:
-    """The prepared run's scenario as it was run, read-only; None when there is no such run."""
+    """The prepared run's scenario as it was run, read-only; None when there is no such run or
+    its family no longer loads (Overview stays readable either way)."""
     spec = services().jobs.get("run_spec", run_id) if run_id else None
     if spec is None:
         return None
-    family = family_of(spec["scenario"])
-    return {"family": family.id, "about": _family_about(family.id), "params": family.params}
+    try:
+        family = family_of(spec["scenario"])
+        return {"family": family.id, "about": _family_about(family.id), "params": family.params}
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
 
 
 @bp.get("/overview")
@@ -133,7 +136,9 @@ def overview():
     s = services()
     with s.lock:
         demo = s.demo()
-        body = views.overview(s.store, s.snapshot, s.now(), demo, _demo_scenario(demo["run_id"]))
+    scenario = _demo_scenario(demo["run_id"])
+    with s.lock:
+        body = views.overview(s.store, s.snapshot, s.now(), demo, scenario)
     return _reply(c6.OverviewResponse, body)
 
 
