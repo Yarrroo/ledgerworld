@@ -901,14 +901,14 @@ const stageStatus = computed(() => {
   const failure = pollError.value && (rereading.value
     ? `Could not read the status of execution ${id}; reading again.`
     : `Could not read the status of execution ${id}: ${pollError.value.replace(/\.$/, '')}. Read status to try again.`)
-  // a failed read after a terminal stage is said beside it: the stage and its last read stand
+  // a failed read is said beside a terminal stage or a held block: the stage and its last read stand
   const beside = (said) => (failure ? `${said} ${failure}` : said)
   const body = sent.value
   if (stage.value === 'reconciled') {
     return beside(`Every leg reconciled as of ${formatTime(body.as_of).utc}; not final, a later read can open an incident.`)
   }
   if (stage.value === 'incident') return beside('Read status stays available; nothing is resent or reversed.')
-  if (flow.blocked) return flow.blocked
+  if (flow.blocked) return beside(flow.blocked)
   return failure || `Execution ${id}: reading status.`
 })
 

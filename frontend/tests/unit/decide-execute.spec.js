@@ -2095,6 +2095,21 @@ describe('the approval dialog, one stage at a time (board item 133)', () => {
         expect(text(w, 'stage-status')).toContain('Could not read the status of execution apr-1; reading again.')
       })
     }
+
+    it('an unanswered execution POST: a failed read is said beside its unknown outcome', async () => {
+      const { w } = await reviewReady({
+        'POST /executions': timeout(),
+        'GET /executions/apr-1': refuse(403, 'forbidden', 'not allowed')
+      })
+      await approve(w)
+      await w.get('[data-test="execute"]').trigger('click')
+      await flushPromises()
+      expect(stage(w)).toBe('executing')
+      const said = text(w, 'stage-status')
+      expect(said).toContain('Execution outcome unknown; reading its status by approval id apr-1. Do not send again.')
+      // an execution this tab sent is read until a read shows it finished, refusals included
+      expect(said).toContain('Could not read the status of execution apr-1; reading again.')
+    })
   })
 })
 
