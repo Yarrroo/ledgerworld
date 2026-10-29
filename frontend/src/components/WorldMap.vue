@@ -79,11 +79,16 @@ const showLabels = computed(() => width.value >= 600)
 const isSel = (kind, id) => props.selected?.kind === kind && props.selected?.id === id
 const pick = (kind, id) => emit('select', { kind, id })
 
-/** The label, else its first word, else cut with an ellipsis: a node never draws past its box. */
-function short (text, max) {
+/**
+ * The label, else its first two words (two parties often share a first word), else the short
+ * id it was given, else cut with an ellipsis: a label never draws past its box.
+ */
+function short (text, max, id = '') {
   if (text.length <= max) return text
-  const word = text.split(' ')[0]
-  return word.length <= max ? word : `${text.slice(0, max - 1)}…`
+  const two = text.split(' ').slice(0, 2).join(' ')
+  if (two.length <= max) return two
+  if (id && id.length <= max) return id
+  return `${text.slice(0, max - 1)}…`
 }
 
 const placed = computed(() => {
@@ -98,7 +103,7 @@ const placed = computed(() => {
     ? props.edges.filter((e) => e.from === props.focus || e.to === props.focus).flatMap((e) => [e.from, e.to])
     : [])
   const at = (n, x, y) => ({
-    ...n, x, y, w: nodeW, short: short(n.label, max), aria: `${n.label}${n.role ? `, ${n.role}` : ''}`,
+    ...n, x, y, w: nodeW, short: short(n.label, max, n.id), aria: `${n.label}${n.role ? `, ${n.role}` : ''}`,
     dim: Boolean(props.focus) && !near.has(n.id)
   })
   return [
