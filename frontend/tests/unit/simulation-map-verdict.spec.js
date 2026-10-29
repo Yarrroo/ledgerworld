@@ -1,9 +1,10 @@
-// The Live Simulation world map draws a lender's disbursement as a financial edge only when the
-// coordinator accepted it and posted a journal: a rejected, pending, unjournalled or unverdicted
-// disbursement is a proposal, never a movement. Every intent edge's evidence names the clearing
-// verdict, its reason and the journal state. No request leaves the test.
+// The Live Simulation world map draws an intent's edge as financial only when the coordinator
+// accepted it and posted a journal: a rejected, pending, unjournalled or unverdicted disbursement
+// is a proposal, never a movement. Every intent edge's evidence, and every feed item's, names the
+// clearing verdict, its reason and the journal state, and says why nothing moved when nothing did.
+// No request leaves the test.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { h } from 'vue'
+import { defineComponent, h } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
@@ -19,7 +20,8 @@ function intent (id, round, actor, type, evidence) {
 }
 
 // Round 1: borrower-c asks (accepted, no journal: the message req:borrower-c:r1). Round 2: the
-// lender answers it five ways, one per clearing outcome.
+// lender answers it five ways, one per clearing outcome, and accepts it twice: once posting a
+// journal, once not.
 const DISBURSALS = [
   ['d-accepted', { status: 'accepted', journal_id: 'j-1' }],
   ['d-rejected', { status: 'rejected', reason: 'floor would break', journal_id: null }],
@@ -28,22 +30,37 @@ const DISBURSALS = [
   ['d-missing', null]
 ]
 
+const ACCEPTS = [
+  ['a-journalled', { status: 'accepted', journal_id: 'j-2' }],
+  ['a-plain', { status: 'accepted', journal_id: null }]
+]
+
 function run () {
   const ask = intent('ask', 1, 'borrower-c', 'request_advance', [])
-  const pays = DISBURSALS.map(([id]) => intent(id, 2, 'lender', 'disburse', ['req:borrower-c:r1']))
-  const cleared = DISBURSALS.filter(([, c]) => c).map(([id, c]) => ({ intent_id: id, round: 2, ...c }))
+  const pays = [...DISBURSALS.map(([id]) => intent(id, 2, 'lender', 'disburse', ['req:borrower-c:r1'])),
+    ...ACCEPTS.map(([id]) => intent(id, 2, 'lender', 'accept', ['req:borrower-c:r1']))]
+  const cleared = [...DISBURSALS, ...ACCEPTS].filter(([, c]) => c).map(([id, c]) => ({ intent_id: id, round: 2, ...c }))
   return {
     as_of: '2026-01-05T08:00:00Z', mode: 'fake', run_id: RUN, snapshot_id: 'lf2', status: 'done', committed_round: 2,
     rounds: [
       { round: 1, branch_id: BRANCH, t_hours: 4, intents: [ask], journal_ids: [],
         cleared: [{ intent_id: 'ask', round: 1, status: 'accepted', journal_id: null }] },
-      { round: 2, branch_id: BRANCH, t_hours: 8, intents: pays, cleared, journal_ids: ['j-1'] }
+      { round: 2, branch_id: BRANCH, t_hours: 8, intents: pays, cleared, journal_ids: ['j-1', 'j-2'] }
     ],
     feed: [],
     cash_paths: [],
     branches: [{ branch_id: BRANCH, parent_branch_id: null, checkpoint_round: null, policy: null, replay: false }]
   }
 }
+
+/** The upstream graph view, standing in with the one method the screen calls on it. */
+const GraphStub = defineComponent({
+  name: 'GraphPanel',
+  setup (_, { expose }) {
+    expose({ closeDetailPanel: () => {} })
+    return () => h('div')
+  }
+})
 
 const mounted = []
 afterEach(() => {
@@ -63,11 +80,14 @@ async function open (body) {
   })
   await router.push(`/simulation?run_id=${RUN}`)
   await router.isReady()
-  const w = mount(Simulation, { attachTo: document.body, global: { plugins: [router], stubs: { GraphPanel: { render: () => h('div') } } } })
+  const w = mount(Simulation, { attachTo: document.body, global: { plugins: [router], stubs: { GraphPanel: GraphStub } } })
   await flushPromises()
   mounted.push(w)
   return w
 }
+
+const PROPOSAL = 'A proposal is not a ledger change until it is accepted and journalled.'
+const ACCEPTED_NO_JOURNAL = 'Accepted with no journal: it changed no ledger.'
 
 const edge = (w, id) => w.get(`[data-test="map-edge"][data-edge="${id}"]`)
 
@@ -106,15 +126,43 @@ describe('a disbursement edge carries its clearing verdict', () => {
     const rejected = await read('d-rejected')
     expect(rejected).toMatchObject({ Type: 'request', Verdict: 'Rejected · floor would break', Journal: 'no ledger change' })
     expect(rejected.Relation).toContain('proposed disburse')
-    expect(rejected.note).toContain('not a ledger change')
+    expect(rejected.note).toBe(PROPOSAL)
 
     expect(await read('d-pending')).toMatchObject({ Verdict: 'Pending', Journal: 'no ledger change' })
     expect(await read('d-unjournalled')).toMatchObject({ Verdict: 'Accepted', Journal: 'no ledger change' })
     expect(await read('d-missing')).toMatchObject({ Verdict: 'No verdict recorded', Journal: 'no ledger change' })
   })
 
-  it('a request for funds carries its own verdict too', async () => {
+  it('any accepted, journalled intent is financial; an accepted one with no journal says it moved nothing', async () => {
     const w = await open(run())
-    expect(await evidenceOf(w, 'intent:ask')).toMatchObject({ Type: 'request', Verdict: 'Accepted', Journal: 'no ledger change' })
+    const journalled = await evidenceOf(w, 'cite:a-journalled:req:borrower-c:r1')
+    expect(journalled).toMatchObject({ Type: 'financial', Verdict: 'Accepted', Journal: 'j-2' })
+    expect(journalled.note).toBe('')
+    const plain = await evidenceOf(w, 'cite:a-plain:req:borrower-c:r1')
+    expect(plain).toMatchObject({ Type: 'request', Relation: 'accept on req:borrower-c:r1 · round 2', Journal: 'no ledger change' })
+    expect(plain.note).toBe(ACCEPTED_NO_JOURNAL)
+  })
+
+  it('a request for funds carries its own verdict, and is not told it awaits a journal', async () => {
+    const w = await open(run())
+    const ask = await evidenceOf(w, 'intent:ask')
+    expect(ask).toMatchObject({ Type: 'request', Verdict: 'Accepted', Journal: 'no ledger change' })
+    expect(ask.note).toBe(ACCEPTED_NO_JOURNAL)
+  })
+})
+
+describe('a feed item\'s evidence says the same as the map\'s', () => {
+  const pickFeed = async (w, id) => {
+    await w.get(`[data-test="feed"] [data-id="${id}"] [data-test="feed-open"]`).trigger('click')
+    await flushPromises()
+    return w.get('[data-test="evidence-sheet"]').find('p.lw-time').text()
+  }
+
+  it('an accepted request and a rejected disbursement each get their own note', async () => {
+    const w = await open(run())
+    expect(await pickFeed(w, 'd-rejected')).toBe(PROPOSAL)
+    await w.get('[data-test="tick-1"]').trigger('click')
+    await flushPromises()
+    expect(await pickFeed(w, 'ask')).toBe(ACCEPTED_NO_JOURNAL)
   })
 })
