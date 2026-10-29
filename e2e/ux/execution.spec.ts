@@ -248,7 +248,7 @@ test('an approval closed unexecuted is summarised with its terms, then as expire
 })
 
 for (const step of ['reconciled', 'incident'] as const) {
-  test(`a failed Read status after ${step} is said in the dialog, the stage kept`, async ({ page }) => {
+  test(`a failed Check the status after ${step} is said in the dialog, the stage kept`, async ({ page }) => {
     const posts = await mock(page, { executions: [executionAt(step)] })
     await review(page)
     await $(page, 'confirm').click()
@@ -260,7 +260,7 @@ for (const step of ['reconciled', 'incident'] as const) {
       r.fulfill({ status: 403, json: { error: { code: 'forbidden', detail: 'not allowed' } } }))
     await $(page, 'read-status').click()
     await expect($(page, 'stage-status')).toContainText(
-      `Could not read the status of execution ${APPROVAL.approval_id}: not allowed. Read status to try again.`)
+      `Could not read the status of execution ${APPROVAL.approval_id}: not allowed. Check the status to try again.`)
     await expect($(page, 'stage-status')).toContainText(kept)
     await expect(dialog(page)).toHaveAttribute('data-stage', step)
     await footed(page)

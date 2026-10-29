@@ -943,6 +943,28 @@ describe('a successful POST whose answer cannot be read is an unknown outcome', 
     expect(gets(calls, '/executions/apr-1')).toHaveLength(1)
   })
 
+  // board item 167: the header has no Refresh button, and Check the status lives only in the
+  // review of an execution this tab sent; the lead names the action that reads again here
+  it('a read refused outright names a working way to try again in the lead, and that way reads again', async () => {
+    let answer = refuse(403, 'forbidden', 'not yours')
+    const calls = serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': () => answer
+    })
+    const w = await open(Execution, '/execution')
+    const lead = () => w.get('[data-test="hero-lead"] [role="tooltip"]').text().trim()
+    expect(lead()).toBe('We could not read what the plan you sent moved yet; reload the page to try again.')
+    expect(lead()).not.toMatch(/refresh/i)
+    expect(w.findAll('button').map((b) => b.text())).not.toContain('Refresh')
+    expect(w.find('[data-test="read-status"]').exists()).toBe(false)
+    answer = paid()
+    await reread() // the screen reads its execution again when shown again, as on a reload
+    await flushPromises()
+    expect(gets(calls, '/executions/apr-1')).toHaveLength(2)
+    expect(w.find('[data-test="poll-error"]').exists()).toBe(false)
+  })
+
   it('a failed read of the linked execution is not shown against the one this tab then sends', async () => {
     const { w } = await reviewReady({
       'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-0' }),
@@ -2097,7 +2119,7 @@ describe('the approval dialog, one stage at a time (board item 133)', () => {
 
     for (const [name, read, base] of [
       ['reconciled', () => executionBody({ legs: [advance(), paidPayout()] }), 'Every leg reconciled as of'],
-      ['incident', incident, 'Read status stays available']
+      ['incident', incident, 'Check the status stays available']
     ]) {
       it(`${name}: a refused read is said in the dialog, the stage and its last read time kept`, async () => {
         let answer = read()
@@ -2117,7 +2139,8 @@ describe('the approval dialog, one stage at a time (board item 133)', () => {
         const said = text(w, 'stage-status')
         expect(said).toContain(base)
         expect(said).toContain(kept) // the last successful read's time is not dropped
-        expect(said).toContain('Could not read the status of execution apr-1: not allowed. Read status to try again.')
+        expect(said).toContain('Could not read the status of execution apr-1: not allowed. Check the status to try again.')
+        expect(said).toContain(`${text(w, 'read-status')} to try again`) // names the button as it is labelled (item 167)
         answer = read()
         await w.get('[data-test="read-status"]').trigger('click')
         await flushPromises()

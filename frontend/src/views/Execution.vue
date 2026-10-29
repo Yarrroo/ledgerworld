@@ -266,7 +266,7 @@
                   @click="executePlan">Send</button>
           <button v-else type="button" class="lw-button" data-test="read-status"
                   :disabled="flow.submitting" :aria-disabled="readingNow || undefined"
-                  @click="readNow">Check the status</button>
+                  @click="readNow">{{ CHECK }}</button>
           <button type="button" class="lw-button lw-button--quiet" :disabled="flow.submitting"
                   @click="closeReview">{{ flow.approval ? 'Close' : 'Cancel' }}</button>
           <span v-if="!flow.approval" id="confirm-why" class="lw-time" data-test="confirm-why">{{ confirmWhy }}</span>
@@ -323,6 +323,8 @@ const UNSETTLED = new Set(['pending', 'submitted', 'unknown'])
 const POLL_MS = 5000
 const POST_TIMEOUT_MS = 30000
 const APPROVAL_UNKNOWN = 'Approval outcome unknown; operator resolution required'
+/** The review's read-again button, as its label and as the status lines name it. */
+const CHECK = 'Check the status'
 const REFUSALS = {
   snapshot_moved: 'Observed state changed; reload and review a new plan',
   approval_expired: 'Approval expired',
@@ -971,7 +973,9 @@ const lead = computed(() => {
     }
     if (activeId.value && !notFound.value) {
       if (!pollError.value) return 'Reading what the plan you sent moved.'
-      return `We could not read what the plan you sent moved yet; ${rereading.value ? 'reading again' : 'refresh to try again'}.`
+      // not reading again: an execution this tab sent always is, so Check the status (its review's)
+      // is not on screen here, and the header has no Refresh; a reload reads it again
+      return `We could not read what the plan you sent moved yet; ${rereading.value ? 'reading again' : 'reload the page to try again'}.`
     }
     return held.value
       ? 'You approved the plan; nothing moves until you send it.'
@@ -1060,14 +1064,14 @@ const stageStatus = computed(() => {
   // said once per change of state, never per poll: no read time of its own in this live text
   const failure = pollError.value && (rereading.value
     ? `Could not read the status of execution ${id}; reading again.`
-    : `Could not read the status of execution ${id}: ${pollError.value.replace(/\.$/, '')}. Read status to try again.`)
+    : `Could not read the status of execution ${id}: ${pollError.value.replace(/\.$/, '')}. ${CHECK} to try again.`)
   // a failed read is said beside a terminal stage or a held block: the stage and its last read stand
   const beside = (said) => (failure ? `${said} ${failure}` : said)
   const body = sent.value
   if (stage.value === 'reconciled') {
     return beside(`Every leg reconciled as of ${formatTime(body.as_of).utc}; not final, a later read can open an incident.`)
   }
-  if (stage.value === 'incident') return beside('Read status stays available; nothing is resent or reversed.')
+  if (stage.value === 'incident') return beside(`${CHECK} stays available; nothing is resent or reversed.`)
   if (flow.blocked) return beside(flow.blocked)
   return failure || `Execution ${id}: reading status.`
 })
