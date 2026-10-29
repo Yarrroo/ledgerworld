@@ -1,7 +1,18 @@
 <template>
-  <ScreenShell v-slot="{ body }" title="Treasury" :reading="state" :refresh="refresh" :stale="stale">
-    <p class="lw-lead" data-test="lead">{{ lead }}</p>
-    <p v-if="leadSeen" class="lw-time" data-test="lead-stale">{{ leadSeen }}</p>
+  <ScreenShell title="Treasury" headline="Every dollar, accounted for." :subtitle="subtitle" :lead="lead"
+               :reading="state" :refresh="refresh" :stale="stale">
+    <template #action="{ body }">
+      <Tip v-if="rehearse" test="rehearse-tip">
+        <RouterLink class="lw-button" :to="rehearse" data-test="rehearse">Rehearse a cash shock<Arrow /></RouterLink>
+        <template #tip>What if a payment arrives late? See how it ripples through your partners; it changes no
+          figure here. Opens the prepared run in Simulation with the
+          {{ accountName(account.id).toLowerCase() }} and snapshot {{ body.snapshot_id }}.</template>
+      </Tip>
+      <Tip v-else :text="rehearseWhy" test="rehearse-why">
+        <button type="button" class="lw-button" disabled data-test="rehearse">Rehearse a cash shock</button>
+      </Tip>
+    </template>
+    <template #default="{ body }">
     <HowWeKnow test="how-treasury">
       <p>Snapshot {{ body.snapshot_id }}, GET /api/v1/treasury. Cash in the bank is the settled balance;
         set aside is reserved; free to spend now is spendable S; the lowest point ahead is projected
@@ -24,9 +35,9 @@
                :data-test="`account-${a.id}`" :data-focus="`account:${a.id}`" tabindex="-1">
           <input type="radio" name="treasury-account" :value="a.id" :checked="a.id === account?.id"
                  @change="chosen = a.id">
-          <span class="lw-tre__choice-id">{{ accountName(a.id) }}</span>
-          <span class="lw-time">{{ a.currency }} · {{ a.observability === 'known' ? 'observed' : 'balance not observable' }}
-            · as of {{ formatTime(a.as_of).utc }}</span>
+          <Tip :text="`${a.currency} · ${a.observability === 'known' ? 'observed' : 'balance not observable'} · as of ${formatTime(a.as_of).utc}`">
+            <span class="lw-tre__choice-id">{{ accountName(a.id) }}</span>
+          </Tip>
         </label>
       </div>
       <p v-if="currencies > 1" class="lw-time" data-test="mixed">
@@ -40,10 +51,17 @@
         <h2 id="spend-heading">Free to spend now</h2>
         <article class="lw-tile" data-test="spendable">
           <div class="lw-tile__label">{{ accountName(account.id, { currency: account.currency }) }}</div>
-          <div class="lw-figure">{{ metricText(account.spendable) }}</div>
-          <div :class="['lw-status', `lw-status--${stateOf(account.spendable.status).tone}`]" data-test="spendable-status">
-            {{ metricStatus(account.spendable) }}
-          </div>
+          <Tip>
+            <div class="lw-figure">{{ metricText(account.spendable) }}</div>
+            <template #tip>Settled − reserved − pledged − pending out due by now + pending in arrived by now, as
+              served by the API · as of {{ formatTime(account.spendable.as_of || account.as_of).utc }}<span
+                v-if="leadSeen" data-test="lead-stale"> · {{ leadSeen }}</span></template>
+          </Tip>
+          <Tip :text="metricStatus(account.spendable)">
+            <div :class="['lw-status', `lw-status--${stateOf(account.spendable.status).tone}`]" data-test="spendable-status">
+              {{ stateOf(account.spendable.status).icon }} {{ stateOf(account.spendable.status).word }}
+            </div>
+          </Tip>
           <p v-if="account.observability !== 'known'" class="lw-note">
             We can't read this account's balance right now: cash in the bank reads Unknown and adds nothing.
           </p>
@@ -94,30 +112,39 @@
             <table class="lw-table lw-tre__rows" data-test="obligations">
               <thead>
                 <tr><th scope="col">Item</th><th scope="col">Direction</th><th scope="col">Amount</th>
-                  <th scope="col">When (UTC)</th><th scope="col">Set aside</th><th scope="col">Status</th></tr>
+                  <th scope="col">When</th><th scope="col">Set aside</th><th scope="col">Status</th></tr>
               </thead>
               <tbody>
                 <tr v-for="r in rows" :key="r.key" :data-row="r.id" :data-test="r.obligation ? `obligation-${r.id}` : undefined"
                     :data-focus="r.obligation ? `obligation:${r.id}` : `flow:${r.id}`" tabindex="-1"
                     :class="{ 'is-open': r.key === openRow, 'lw-row--focus': focus === (r.obligation ? `obligation:${r.id}` : `flow:${r.id}`) }">
                   <td data-label="Item">
-                    <button type="button" class="lw-tre__open" :data-test="`row-${r.id}`" @click="openRow = r.key">
-                      {{ kindText(r.kind) }} · {{ r.id }}{{ r.mandatory ? ' · mandatory' : '' }}
-                    </button>
+                    <Tip :text="`${r.what} ${r.id}${r.mandatory ? ' · mandatory' : ''} · ${r.source}. Opens its details; it pays nothing.`">
+                      <button type="button" class="lw-tre__open" :data-test="`row-${r.id}`" @click="openRow = r.key">
+                        {{ kindText(r.kind) }}
+                      </button>
+                    </Tip>
                   </td>
                   <td data-label="Direction">{{ r.direction }}</td>
-                  <td data-label="Amount" class="lw-num">{{ money(r.amount) }}</td>
-                  <td data-label="When">{{ formatTime(r.at).utc }} ({{ hoursFrom(body.as_of, r.at) }})</td>
-                  <td data-label="Set aside">{{ r.reservation || 'not set aside' }}</td>
-                  <td data-label="Status">{{ r.status }}</td>
+                  <td data-label="Amount" class="lw-num">
+                    <Tip :text="`${r.direction === 'in' ? 'Arrives' : 'Pays out'}; amount as served by the API`">{{ money(r.amount) }}</Tip>
+                  </td>
+                  <td data-label="When">
+                    <Tip :text="`${formatTime(r.at).utc} · ${formatTime(r.at).local}`">{{ hoursFrom(body.as_of, r.at) }}</Tip>
+                  </td>
+                  <td data-label="Set aside">
+                    <Tip v-if="r.reservation" :text="`Reservation ${r.reservation}`">set aside</Tip>
+                    <template v-else>not set aside</template>
+                  </td>
+                  <td data-label="Status"><Tip :text="`Ledger state: ${r.status}`">{{ r.status }}</Tip></td>
                 </tr>
                 <tr v-if="!rows.length"><td colspan="6">No bill or money coming in on the {{ accountName(account.id).toLowerCase() }}</td></tr>
               </tbody>
             </table>
           </div>
-          <p class="lw-time">A row opens its details; it pays nothing.</p>
           <HowWeKnow test="how-rows">
             <p>Ledger obligations and pending flows of {{ account.id }}; set aside is the reservation id.
+              A row opens its details; it pays nothing.
               "In 40 hours" counts whole hours from the snapshot's as of; deadlines are simulated time.</p>
           </HowWeKnow>
         </section>
@@ -128,21 +155,30 @@
         <section aria-labelledby="cover-heading" data-panel="Safety minimum" data-test="coverage">
           <h2 id="cover-heading">Will you stay above your safety minimum?</h2>
           <article class="lw-tile" data-test="floor">
-            <div class="lw-tile__label">Lowest point ahead · not spendable now</div>
-            <div :class="['lw-status', `lw-status--${STATES[account.floorCheck.state].tone}`]" data-test="floor-status">
-              <span aria-hidden="true">{{ STATES[account.floorCheck.state].icon }}</span>
-              <span>{{ FLOOR_WORDS[account.floorCheck.state] }}</span>
-            </div>
-            <div v-if="account.floorCheck.state === 'breached'" class="lw-figure" data-test="shortfall">
-              {{ formatMoney(-account.floorCheck.gap, account.currency) }} short on {{ dayText(account.low.t) }} ({{ hoursFrom(body.as_of, account.low.t) }})
-            </div>
-            <div v-else-if="account.low" class="lw-figure lw-figure--small" data-test="minimum">
-              lowest {{ metricText(account.low.value) }} on {{ dayText(account.low.t) }} ({{ hoursFrom(body.as_of, account.low.t) }})
-            </div>
-            <div class="lw-time" data-test="floor-line">
-              safety minimum {{ account.floor ? metricText(account.floor) : 'Not assessed' }}<template
-                v-if="account.floorCheck.state === 'kept'"> · room {{ formatMoney(account.floorCheck.gap, account.currency) }}</template>
-            </div>
+            <div class="lw-tile__label">Lowest point ahead</div>
+            <Tip :text="`Lowest projected cash P checked against the reserve floor: ${account.floorCheck.state}`">
+              <div :class="['lw-status', `lw-status--${STATES[account.floorCheck.state].tone}`]" data-test="floor-status">
+                <span aria-hidden="true">{{ STATES[account.floorCheck.state].icon }}</span>
+                <span>{{ FLOOR_WORDS[account.floorCheck.state] }}</span>
+              </div>
+            </Tip>
+            <Tip v-if="account.floorCheck.state === 'breached'"
+                 :text="`P at ${formatTime(account.low.t).utc} minus the reserve floor, from the API's points`">
+              <div class="lw-figure" data-test="shortfall">
+                {{ formatMoney(-account.floorCheck.gap, account.currency) }} short on {{ dayText(account.low.t) }} ({{ hoursFrom(body.as_of, account.low.t) }})
+              </div>
+            </Tip>
+            <Tip v-else-if="account.low" :text="`Lowest API point P, at ${formatTime(account.low.t).utc}`">
+              <div class="lw-figure lw-figure--small" data-test="minimum">
+                lowest {{ metricText(account.low.value) }} on {{ dayText(account.low.t) }} ({{ hoursFrom(body.as_of, account.low.t) }})
+              </div>
+            </Tip>
+            <Tip :text="account.floor ? `Reserve floor of the ${accountName(account.id).toLowerCase()}; room is the lowest point less the floor` : 'No reserve floor assessed for this account'">
+              <div class="lw-time" data-test="floor-line">
+                safety minimum {{ account.floor ? metricText(account.floor) : 'Not assessed' }}<template
+                  v-if="account.floorCheck.state === 'kept'"> · room {{ formatMoney(account.floorCheck.gap, account.currency) }}</template>
+              </div>
+            </Tip>
             <details v-if="account.low" class="lw-calc">
               <summary>How the lowest point is worked out</summary>
               <div class="lw-calc__body" data-test="calculation">
@@ -167,37 +203,23 @@
           <div class="lw-table-wrap" tabindex="0" role="region" :aria-label="`Projected cash, ${accountName(account.id, { currency: account.currency })}`">
             <table class="lw-table" data-test="timeline">
               <caption class="lw-visually-hidden">Projected cash at each flow or deadline, against the reserve floor; the chart draws these points</caption>
-              <thead><tr><th scope="col">When</th><th scope="col">UTC</th><th scope="col">Cash</th><th scope="col">Against your safety minimum</th></tr></thead>
+              <thead><tr><th scope="col">When</th><th scope="col">Cash</th><th scope="col">Against the floor</th></tr></thead>
               <tbody>
                 <tr v-for="p in account.points" :key="p.t" :class="{ 'lw-row--floor': p.lowest, 'is-selected': p.t === pointT }">
                   <td>
-                    <button type="button" class="lw-tre__open" :aria-pressed="p.t === pointT ? 'true' : 'false'"
-                            data-test="timeline-point" @click="pointT = p.t">{{ hoursFrom(body.as_of, p.t) }}</button>
+                    <Tip :text="`${formatTime(p.t).utc} · ${formatTime(p.t).local}`">
+                      <button type="button" class="lw-tre__open" :aria-pressed="p.t === pointT ? 'true' : 'false'"
+                              data-test="timeline-point" @click="pointT = p.t">{{ hoursFrom(body.as_of, p.t) }}</button>
+                    </Tip>
                   </td>
-                  <td>{{ formatTime(p.t).utc }}</td>
-                  <td class="lw-num">{{ metricText(p.value) }}</td>
+                  <td class="lw-num">
+                    <Tip :text="`Projected cash P ${p.value.status ? `(${p.value.status}) ` : ''}from the API's point`">{{ metricText(p.value) }}</Tip>
+                  </td>
                   <td>{{ p.against }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
-        </section>
-
-        <section aria-labelledby="handoff-heading" data-panel="Try a shock">
-          <h2 id="handoff-heading">What if a payment arrives late?</h2>
-          <p class="lw-time">See how it ripples through your partners. It changes no figure here.</p>
-          <div class="lw-actions">
-            <RouterLink v-if="rehearse" class="lw-button" :to="rehearse" data-test="rehearse">Rehearse a cash shock</RouterLink>
-            <template v-else>
-              <button type="button" class="lw-button" disabled aria-describedby="rehearse-why" data-test="rehearse">
-                Rehearse a cash shock
-              </button>
-              <span id="rehearse-why" class="lw-time" data-test="rehearse-why">{{ rehearseWhy }}</span>
-            </template>
-          </div>
-          <HowWeKnow test="how-handoff">
-            <p>Opens the prepared run in Live simulation with {{ account.id }} and snapshot {{ body.snapshot_id }}.</p>
-          </HowWeKnow>
         </section>
       </div>
     </div>
@@ -218,6 +240,7 @@
         <p class="lw-time">Read-only: this screen makes no payment, edit or import.</p>
       </template>
     </DetailSheet>
+    </template>
   </ScreenShell>
 </template>
 
@@ -231,11 +254,13 @@
  */
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import Arrow from '../components/Arrow.vue'
 import CashChart from '../components/CashChart.vue'
 import DetailSheet from '../components/DetailSheet.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
+import Tip from '../components/Tip.vue'
 import {
-  FLOOR_WORDS, OWED, STATES, ScreenShell, accountName, againstFloor, amountWords, contextKey, dayText, formatAmount, formatMoney,
+  FLOOR_WORDS, OWED, STATES, ScreenShell, accountName, againstFloor, amountWords, contextKey, dataKind, dayText, formatAmount, formatMoney,
   formatTime, getOverview, getTreasury, hoursFrom, kindText, lastSeen, listWords, metricStatus, metricText, money,
   pendingFlows, projectionTerms, routeExists, staleOf, stateOf, useFocusTarget, useReading
 } from '../api/v1.js'
@@ -416,15 +441,22 @@ const lead = computed(() => {
 
 const leadSeen = computed(() => (account.value ? lastSeen(account.value.spendable) : ''))
 
+/** The hero's one line: what this page holds, and which reading it is (the header names the data kind). */
+const subtitle = computed(() => {
+  const kind = dataKind(state.body)
+  return `Cash, commitments and deadlines / ${kind === 'Synthetic data' ? 'Observed snapshot' : kind}`
+})
+
 // T6: the prepared run, carrying the account and snapshot.
 const rehearse = computed(() => {
   const body = state.body
-  if (state.status !== 'loaded' || !body.demo.run_id || !routeExists(router, '/simulation')) return null
+  if (state.status !== 'loaded' || !account.value || !body.demo.run_id || !routeExists(router, '/simulation')) return null
   return { path: '/simulation', query: { run_id: body.demo.run_id, account: account.value.id, snapshot: body.snapshot_id } }
 })
 const rehearseWhy = computed(() => {
   if (state.status === 'loading') return 'Loading'
   if (state.status === 'error') return 'Last loaded, not current; Refresh first'
+  if (!account.value) return 'There is no cash account to carry into the simulation'
   if (!state.body.demo.run_id) return state.body.demo.why
   return 'The simulation screen is not part of this build'
 })
@@ -452,7 +484,6 @@ const rehearseWhy = computed(() => {
 }
 
 .lw-tre__choice input { width: 20px; height: 20px; margin: 0; accent-color: var(--lw-brand); }
-.lw-tre__choice .lw-time { grid-column: 2; }
 .lw-tre__choice.is-selected { background: var(--lw-selected); border-color: var(--lw-brand); }
 .lw-tre__choice:focus-within { outline: 3px solid var(--lw-focus); outline-offset: 2px; }
 .lw-tre__choice-id { font-weight: 700; overflow-wrap: anywhere; }

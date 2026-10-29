@@ -1,37 +1,18 @@
 <template>
-  <ScreenShell v-slot="{ body, busy }" title="Overview" :reading="state" :refresh="refresh" :stale="stale">
-    <!-- O1 context -->
-    <section class="lw-ov-context" aria-labelledby="ov-context" data-panel="Your cash" data-test="context-panel">
-      <h2 id="ov-context" class="lw-ov-lead">
-        {{ body.company ? body.company.name : 'Treasury' }} <span>/ your cash today</span>
-      </h2>
-      <p class="lw-lead" data-test="lead">{{ lead }}</p>
-      <p v-if="leadSeen" class="lw-time" data-test="lead-stale">{{ leadSeen }}</p>
-      <div class="lw-ov-labels" data-test="labels">
-        <span class="lw-ov-tag" data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span>
-        <span v-if="AGENTS[model]" class="lw-ov-tag">{{ AGENTS[model] }}</span>
-      </div>
-      <HowWeKnow test="how-context">
-        <dl class="lw-ov-facts">
-          <div><dt>Snapshot</dt><dd data-test="context-snapshot">{{ body.snapshot_id }}</dd></div>
-          <div><dt>Currency</dt><dd data-test="context-currency">{{ body.cash.currency }}</dd></div>
-          <div><dt>Company</dt><dd>{{ body.company ? body.company.name : 'Not named by the API' }}</dd></div>
-          <div><dt>Provider</dt><dd>{{ LABELS[body.mode] || body.mode }}</dd></div>
-          <div><dt>Model</dt><dd>{{ model || 'Not reported' }}</dd></div>
-          <div><dt>As of</dt><dd data-test="context-time">{{ formatTime(body.as_of).utc }} · {{ formatTime(body.as_of).local }}</dd></div>
-          <div v-if="body.completeness.accounts.length"><dt>Not current</dt><dd>{{ body.completeness.accounts.map((a) => a.account_id).join(', ') }}</dd></div>
-        </dl>
-      <p>The sentence above reads the API's figures: free to spend now is spendable S, the lowest
-        point ahead is minimum projected cash P over the horizon, and the safety minimum is the reserve floor.</p>
-      </HowWeKnow>
-      <button type="button" class="lw-button lw-button--quiet" data-test="context-refresh" :disabled="busy"
-              @click="refresh()">Check again</button>
-      <p v-if="body.completeness.status === 'partial'" class="lw-note" data-test="partial">
-        Partial: not current — {{ notCurrent }}.
-        A stale account was observed and keeps its last value, and the figures that include it
-        say Stale; an unknown one has no value. Lender capacity counts known balances only.
-      </p>
-    </section>
+  <ScreenShell title="Overview" headline="Know your cash. Rehearse the risk."
+               :subtitle="subtitle" :lead="lead" :reading="state" :refresh="refresh" :stale="stale">
+    <template #action>
+      <RouterLink v-if="simulationTarget" class="lw-button" :to="simulationTarget" data-test="open-simulation">
+        Open simulation<Arrow />
+      </RouterLink>
+      <Tip v-else :text="simulationWhy" test="open-simulation-why">
+        <button type="button" class="lw-button" disabled data-test="open-simulation">Open simulation</button>
+      </Tip>
+    </template>
+    <template #default="{ body }">
+    <p v-if="body.completeness.status === 'partial'" class="lw-note" data-test="partial">
+      Partial: not current — {{ notCurrent }}.
+    </p>
 
     <!-- O2 cash strip -->
     <section class="lw-ov-strip-panel" aria-labelledby="ov-strip" data-panel="Cash today">
@@ -165,13 +146,6 @@
           {{ preview ? 'Hide the what-if' : 'Preview the what-if' }}
         </button>
         <span v-if="!body.scenario" id="preview-why" class="lw-time" data-test="preview-why">No prepared run, so no what-if to preview</span>
-        <RouterLink v-if="simulationTarget" class="lw-button" :to="simulationTarget"
-                    data-test="open-simulation">Open simulation</RouterLink>
-        <template v-else>
-          <button type="button" class="lw-button" disabled data-test="open-simulation"
-                  aria-describedby="open-simulation-why">Open simulation</button>
-          <span id="open-simulation-why" class="lw-time" data-test="open-simulation-why">{{ simulationWhy }}</span>
-        </template>
       </div>
       <div v-if="preview && body.scenario" id="scenario-preview" class="lw-ov-preview" role="region"
            aria-label="Scenario, read-only" data-test="scenario-preview">
@@ -185,6 +159,7 @@
         <p class="lw-time">Read-only. Starting a new run is an operator action on Simulation.</p>
       </div>
     </section>
+    </template>
   </ScreenShell>
 </template>
 
@@ -197,10 +172,12 @@
  */
 import { computed, ref } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
+import Arrow from '../components/Arrow.vue'
 import CashOutlook from '../components/CashOutlook.vue'
 import HowWeKnow from '../components/HowWeKnow.vue'
+import Tip from '../components/Tip.vue'
 import {
-  AGENTS, FLOOR_WORDS, LABELS, PLAIN, STATES, ScreenShell, accountName, amountWords, dayText, floorState, formatAmount, formatMoney,
+  AGENTS, FLOOR_WORDS, companyName, LABELS, PLAIN, STATES, ScreenShell, accountName, amountWords, dayText, floorState, formatAmount, formatMoney,
   formatTime, freshness, getOverview, hoursFrom, hoursWords, kindText, lastSeen, metricStatus, metricText, modelSource, money,
   pendingFlows, routeExists, rowLink, staleOf, useReading
 } from '../api/v1.js'
@@ -257,6 +234,11 @@ const lead = computed(() => {
     `${amountWords(cov.headroom)} above your ${minimum} safety minimum.`
   const n = next.value
   return n ? `You're covered until ${kindText(n.kind)} on ${dayText(n.due_at)}: ${ahead}` : `Nothing falls due: ${ahead}`
+})
+
+const subtitle = computed(() => {
+  const firm = companyName(state.body?.company)
+  return `${firm ? firm.treasury : 'Treasury'} / Observed snapshot`
 })
 
 const leadSeen = computed(() => {

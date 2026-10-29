@@ -8,10 +8,11 @@
           :data-branch="row.branch_id">
         <div class="lw-cash__who">
           <span class="lw-cash__branch">{{ row.name }}</span>
-          <span v-if="row.replay" class="lw-live-tag" data-test="cash-replay">Replay</span>
-          <span class="lw-cash__account">{{ row.branch_id }} · {{ accountName(row.account_id, { owner: true }) }} · {{ PLAIN.branch }}</span>
         </div>
-        <div class="lw-cash__value" data-test="cash-value">{{ row.text }}</div>
+        <Tip class="lw-cash__value"
+             :text="`${row.branch_id} · ${accountName(row.account_id, { owner: true })} · ${PLAIN.branch}${row.replay ? ` · ${PLAIN.replay}` : ''} · cash at round ${round}`">
+          <span data-test="cash-value">{{ row.text }}</span>
+        </Tip>
         <svg v-if="row.line" class="lw-cash__spark" viewBox="0 0 100 24" preserveAspectRatio="none"
              role="img" :aria-label="`${row.name}: ${row.count} known points up to round ${round}`">
           <polyline :points="row.line" fill="none" stroke="currentColor" stroke-width="1.5"
@@ -30,6 +31,7 @@
  */
 import { computed } from 'vue'
 import { PLAIN, PLANS, accountName, metricText } from '../api/v1.js'
+import Tip from './Tip.vue'
 
 const props = defineProps({
   round: { type: Number, default: null },
@@ -97,12 +99,6 @@ const rows = computed(() => {
 }
 
 .lw-cash__branch { font-weight: 600; overflow-wrap: anywhere; }
-
-.lw-cash__account {
-  color: var(--live-muted);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
 
 .lw-cash__value {
   font-family: var(--lw-font-figure);

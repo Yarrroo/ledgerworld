@@ -1,13 +1,16 @@
-/** The six finance routes and the steps every interaction check shares. */
+/**
+ * The six finance routes and the steps every interaction check shares. `title` is the breadcrumb's
+ * and the sidebar's name; `headline` is the page hero's (prp/2026-10-29-ux-pass/MATCH.md, item 1).
+ */
 import { expect, type APIRequestContext, type Page } from '@playwright/test'
 
 export const ROUTES = [
-  { path: '/overview', title: 'Overview', run: false },
-  { path: '/treasury', title: 'Treasury', run: false },
-  { path: '/lending', title: 'Lending', run: false },
-  { path: '/simulation', title: 'Live simulation', run: true },
-  { path: '/decisions', title: 'Decisions', run: true },
-  { path: '/execution', title: 'Execution', run: true }
+  { path: '/overview', title: 'Overview', headline: 'Know your cash. Rehearse the risk.', run: false },
+  { path: '/treasury', title: 'Treasury', headline: 'Every dollar, accounted for.', run: false },
+  { path: '/lending', title: 'Lending', headline: 'Capacity you can rely on.', run: false },
+  { path: '/simulation', title: 'Simulation', headline: 'See the crisis before it spreads.', run: true },
+  { path: '/decisions', title: 'Decisions', headline: 'Protect payroll. Preserve your reserve.', run: true },
+  { path: '/execution', title: 'Execution', headline: 'From approved plan to proof.', run: true }
 ] as const
 
 export type Route = typeof ROUTES[number]
@@ -33,3 +36,6 @@ export async function settled (page: Page): Promise<void> {
 /** How far the page scrolls sideways; 0 or less when it does not. */
 export const sideways = (page: Page): Promise<number> =>
   page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+
+/** The screen the page is on: the breadcrumb's current item. */
+export const crumb = (page: Page) => page.locator('[data-test="breadcrumb"] [aria-current="page"]')

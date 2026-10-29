@@ -14,10 +14,11 @@
  */
 
 import {
-  computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, shallowReactive, shallowRef, watch
+  computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref, shallowReactive, watch
 } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import HowWeKnow from '../components/HowWeKnow.vue'
+import PageHero from '../components/PageHero.vue'
+import Tip from '../components/Tip.vue'
 import { logoMark } from '../components/logo.js'
 import '@fontsource-variable/inter'
 import '@fontsource-variable/source-serif-4'
@@ -128,12 +129,22 @@ export function formatAmount (minor, currency) {
   return `${minor < 0 ? '-' : ''}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${fraction}`
 }
 
-/** "USD 70,000.00". */
+const SYMBOL = { USD: '$', EUR: '€', GBP: '£' }
+
+/**
+ * "$70,000", "$1,234.50", "-$50,000", "CHF 12.30": the mockups' figure (prp/2026-10-29-ux-pass/
+ * MATCH.md, item 5) — the currency's symbol where it has one, else its code, and whole units
+ * when the minor part is zero.
+ */
 export function formatMoney (minor, currency) {
-  return `${currency} ${formatAmount(minor, currency)}`
+  const amount = formatAmount(minor, currency)
+  if (!Number.isSafeInteger(minor)) return amount
+  const plain = amount.replace(/^-/, '').replace(/\.0+$/, '')
+  const sign = minor < 0 ? '-' : ''
+  return SYMBOL[currency] ? `${sign}${SYMBOL[currency]}${plain}` : `${sign}${currency} ${plain}`
 }
 
-/** A C6 Money (`{minor, currency}`) as "USD 70,000.00". */
+/** A C6 Money (`{minor, currency}`) as "$70,000". */
 export const money = (m) => formatMoney(m.minor, m.currency)
 
 /** A machine kind as words: "exchange_withdrawal" reads "exchange withdrawal". */
@@ -387,8 +398,7 @@ export function feesAcross (rows) {
   const currency = rows[0].funding_cost.currency
   if (rows.some((r) => r.funding_cost.currency !== currency)) return 'Mixed currencies; not summed'
   const total = rows.reduce((sum, r) => sum + r.funding_cost.minor, 0)
-  return `${formatMoney(total, currency)} across ${rows.length} what-if${rows.length === 1 ? '' : 's'}; ` +
-    'the plan\'s own fee is set at review'
+  return `${formatMoney(total, currency)} across ${rows.length} what-if${rows.length === 1 ? '' : 's'}`
 }
 
 /** "240 h" as words for a sentence: "10 days" when it is whole days, else "240 hours". */
@@ -421,14 +431,14 @@ export function sourceLabel (body) {
   return `${LABELS.synthetic} ${body.snapshot_id}`
 }
 
-/** The six screens, in reading order; the shell links each one whose route is registered. */
+/** The six screens, in reading order, with the mockups' icons; the shell links each one whose route is registered. */
 export const SCREENS = [
-  { path: '/overview', label: 'Overview', icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z' },
-  { path: '/treasury', label: 'Treasury', icon: 'M3 10l9-6 9 6M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18' },
-  { path: '/lending', label: 'Lending', icon: 'M4 8h15l-4-4M20 16H5l4 4' },
-  { path: '/simulation', label: 'Live simulation', icon: 'M3 12h4l3-7 4 14 3-7h4' },
-  { path: '/decisions', label: 'Decisions', icon: 'M6 4v6a4 4 0 0 0 4 4h9M15 10l4 4-4 4M6 20v-4' },
-  { path: '/execution', label: 'Execution', icon: 'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zM8 12.5l2.7 2.7L16 9.5' }
+  { path: '/overview', label: 'Overview', icon: 'M3 11l9-7 9 7M5 9.5V20h5v-6h4v6h5V9.5' },
+  { path: '/treasury', label: 'Treasury', icon: 'M6 20v-8M12 20V5M18 20v-11' },
+  { path: '/lending', label: 'Lending', icon: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3' },
+  { path: '/simulation', label: 'Simulation', icon: 'M3 12h4l3-7 4 14 3-7h4' },
+  { path: '/decisions', label: 'Decisions', icon: 'M6 3h12v18H6zM9 8h6M9 12h6M9 16h4' },
+  { path: '/execution', label: 'Execution', icon: 'M7 4l13 8-13 8z' }
 ]
 
 /** Whether the app has a route for ``path`` (a screen another build step adds may be absent). */
@@ -502,6 +512,7 @@ export function useFocusTarget (reading) {
   return { focus: wanted, moved }
 }
 
+
 // ------------------------------------------------------------------------------ the shell
 
 function icon (d) {
@@ -524,52 +535,94 @@ export function modelSource () {
   return health
 }
 
-/** A panel's element id from its label: stable, unique on the page. */
-function panelId (label, taken) {
-  const base = `panel-${String(label).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`
-  let id = base
-  for (let n = 2; taken.has(id); n++) id = `${base}-${n}`
-  taken.add(id)
-  return id
+let company = null
+/**
+ * The company the treasury belongs to, from /overview's `company`, for the sidebar's company
+ * block: read once per page load, again by the next screen when it did not answer; null while
+ * unknown, and the block is left out.
+ */
+export function companySource () {
+  company ??= getOverview().then((b) => b?.company ?? null).catch(() => {
+    company = null
+    return null
+  })
+  return company
+}
+
+/**
+ * "Northwind Parts treasury (synthetic)" as the mockups' company block: the company's name
+ * ("Northwind Parts") and whether the API marks it synthetic.
+ */
+export function companyName (party) {
+  const raw = String(party?.name ?? '').trim()
+  if (!raw) return null
+  const synthetic = /\(synthetic\)\s*$/i.test(raw)
+  const name = raw.replace(/\s*\(synthetic\)\s*$/i, '').replace(/\s+treasury$/i, '')
+  return { name, treasury: `${name} treasury`, synthetic }
+}
+
+/** "January 1, 2026": the header's date, the UTC day of the reading's as_of. */
+export function longDate (iso) {
+  const d = iso ? new Date(iso) : null
+  if (!d || Number.isNaN(d.getTime())) return 'Date unavailable'
+  return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+}
+
+/** The reading's currency: the first one its figures name; '' when none does. */
+export function currencyOf (body) {
+  const seen = new Set()
+  const find = (v, depth) => {
+    if (!v || typeof v !== 'object' || depth > 4 || seen.has(v)) return ''
+    seen.add(v)
+    if (typeof v.currency === 'string') return v.currency
+    for (const child of Array.isArray(v) ? v : Object.values(v)) {
+      const c = find(child, depth + 1)
+      if (c) return c
+    }
+    return ''
+  }
+  return find(body, 0)
+}
+
+/** The figures' kind for the header's second line: the observed snapshot is synthetic data. */
+export function dataKind (body) {
+  if (body?.replay) return PLAIN.replay
+  if (body?.branch_id) return 'What-if branch'
+  return 'Synthetic data'
 }
 
 const PHONE = '(max-width: 767px)'
-const SETTLE = 150 // ms: with no scrollend, a choice's scroll not moving by then, or no longer moving, is over
-const LONGEST = 2000 // ms: where the browser sends scrollend, the longest a choice's scroll goes without one
-const INTENT = 250 // ms: a page scroll this soon after the reader's wheel, touch, pointer or scroll key is theirs
-const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '])
-
 
 /**
- * One screen, in the handoff's shell (prp/2026-10-29-ux-shell/design.md): the logo and six
- * labelled links with the current one marked (a 208 px sidebar, a 72 px icon rail below 1200 px,
- * a 48 px header with a menu drawer below 768 px); then the main region — breadcrumb and context
- * bar (mode, model, as of, snapshot, Refresh; kept in view while scrolling), the title, the panel
- * index, the reading's error and context notices, and the screen itself, rendered only once there
- * is a body. The mode label is shown only from a loaded answer: nothing inherits an authoritative
- * badge from an earlier render. The bar speaks the cash owner's words (prp/2026-10-29-ux-pass/
- * COPY.md): "Simulated bank connection · Scripted agents · As of 1 Jan, 00:00 UTC", a What-if or
- * Replay tag when the figures are one; the provider mode, model, full time, snapshot and run sit
- * in its How we know.
+ * One screen, in the mockups' shell (prp/2026-10-29-ux-pass/MATCH.md, items 1–3): the logo, six
+ * links with the mockups' icons and the current one marked, and the company block at the bottom
+ * (a 208 px sidebar, a 72 px icon rail below 1200 px, a 48 px header with a menu drawer below
+ * 768 px); then the main region — the header, the page hero, the reading's notices and the
+ * screen itself, rendered only once there is a body.
  *
- * The handoff's loading, empty and failure states, the same on every screen: before the first
- * answer, skeleton tiles where the figures go and one polite "Loading"; a reading refused because
- * no run is prepared (`noDemoRun()`) is an inline explanation of what is missing, not an
- * error and not a chart; a failed first read says Could not load with Retry; a failed refresh
- * keeps the last body, labelled last loaded and not current, with Retry; `stale` (the screen's
- * stale accounts, `staleOf()`) draws a warning band naming each one and its as of.
+ * The header reads as the mockups do: "LedgerWorld / Page" left; "Simulated provider · Scripted
+ * agents" and the reading's date right; a second line "Snapshot <id> · USD · Synthetic data".
+ * Provider, model, full time, source and run sit in tooltips (`Tip`), never on the page. There is
+ * no Refresh button: a screen reads again, silently, when its tab becomes visible again; a failed
+ * read still says Could not load, with Retry. The hero (`PageHero`) carries the screen's
+ * headline, subtitle and lead tooltip, and the `action` slot is its one primary button.
+ *
+ * Loading, empty and failure states are the same on every screen: before the first answer,
+ * skeleton tiles and one polite "Loading"; a reading refused because no run is prepared
+ * (`noDemoRun()`) is an inline explanation with the one action that fixes it; a failed refresh
+ * keeps the last body, labelled not current, with Retry; `stale` (`staleOf()`) draws a warning
+ * band naming each stale account and its as of.
  *
  * The drawer is modal while open: the page behind it is inert, Escape, the scrim or any link
- * closes it, and leaving the phone width closes it. The panel index lists every element the
- * screen marks `data-panel="<name>"`; the one at the top of the view carries aria-current while
- * the page scrolls. Choosing one scrolls to it and leaves focus where it was; it stays marked through
- * that scroll, and after it while in view, until the reader moves the page themselves (a scroll
- * right after their wheel, touch, scrollbar press or scroll key) or the route changes.
+ * closes it, and leaving the phone width closes it.
  */
 export const ScreenShell = defineComponent({
   name: 'ScreenShell',
   props: {
     title: { type: String, required: true },
+    headline: { type: String, default: '' },
+    subtitle: { type: String, default: '' },
+    lead: { type: String, default: '' },
     reading: { type: Object, required: true },
     refresh: { type: Function, required: true },
     stale: { type: Array, default: () => [] }
@@ -579,134 +632,10 @@ export const ScreenShell = defineComponent({
     const router = useRouter()
     const screens = computed(() => SCREENS.filter((s) => routeExists(router, s.path)))
     const model = ref(null)
+    const party = ref(null)
     const menu = ref(false)
-    const panels = shallowRef([])
-    const active = ref(null)
-    const pageEl = ref(null)
-    const mainEl = ref(null)
-    const contextEl = ref(null)
-    const indexEl = ref(null)
     const menuButton = ref(null)
-    let elements = [] // the panels' elements, in page order
-    let pinned = null // the panel last chosen from the index
-    let flight = 0 // the timer that ends the scroll a choice started; 0 once that scroll is over
-    let ends = false // whether the browser says when that scroll stops (scrollend)
-    let reached = -Infinity // when the reader last reached for the page: wheel, touch, pointer, scroll key
-    let stickyH = 0
-    let frame = 0
-    let stale = { panels: true, size: true }
-    let mutations = null
-    let resizes = null
     let phone = null
-
-    /** The sticky context bar's height, and the bottom of the sticky header the panels scroll under. */
-    function measure () {
-      const page = pageEl.value
-      if (!page) return
-      const ctx = contextEl.value
-      const contextH = ctx && getComputedStyle(ctx).position === 'sticky' ? ctx.offsetHeight : 0
-      page.style.setProperty('--lw-context-h', `${contextH}px`)
-      const index = indexEl.value
-      stickyH = index ? (parseFloat(getComputedStyle(index).top) || 0) + index.offsetHeight : 0
-      page.style.setProperty('--lw-sticky-h', `${stickyH}px`)
-    }
-
-    /**
-     * The panels as drawn: top to bottom, then left to right within a row. A screen's grid may
-     * place them out of DOM order (Simulation at two columns), so the reading order is read off
-     * their boxes, never off the markup.
-     */
-    function drawn () {
-      return elements.map((el) => {
-        const box = el.getBoundingClientRect()
-        return { el, top: Math.round(box.top), left: box.left }
-      }).sort((a, b) => a.top - b.top || a.left - b.left)
-    }
-
-    /**
-     * The panel at the top of the view: the chosen one while the scroll it started is under way;
-     * else the first in the lowest drawn row whose top has reached the sticky header; at the
-     * page's end, the chosen one while it is in view, else the first in the bottom row.
-     */
-    function track () {
-      if (!elements.length) return
-      if (flight && elements.some((el) => el.id === pinned)) {
-        active.value = pinned // its target may still be below the view
-        return
-      }
-      const order = drawn()
-      const chosen = pinned && order.find((p) => p.el.id === pinned)
-      let current = order[0]
-      for (const p of order) {
-        if (p.top <= stickyH + 16 && p.top > current.top) current = p
-      }
-      if (!chosen || chosen.top < 0 || chosen.top >= window.innerHeight) pinned = null
-      const atEnd = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2
-      if (atEnd && window.scrollY > 0) {
-        current = pinned ? chosen : order.find((p) => p.top === order[order.length - 1].top)
-      }
-      active.value = current.el.id
-    }
-
-    /** Whether the marked panels changed since the last look. */
-    function collect () {
-      const taken = new Set()
-      const found = mainEl.value ? [...mainEl.value.querySelectorAll('[data-panel]')] : []
-      for (const el of found) {
-        if (!el.id || taken.has(el.id)) el.id = panelId(el.dataset.panel, taken)
-        else taken.add(el.id)
-      }
-      const same = found.length === elements.length &&
-        found.every((el, n) => el === elements[n] && el.dataset.panel === panels.value[n].label)
-      elements = found
-      if (!same) panels.value = found.map((el) => ({ id: el.id, label: el.dataset.panel }))
-      return !same
-    }
-
-    /** Batch the work into one frame: re-read the panels or the sizes only when they may have changed. */
-    function schedule (what) {
-      if (what) stale = { ...stale, [what]: true }
-      if (frame) return
-      frame = requestAnimationFrame(async () => {
-        frame = 0
-        const { panels: rescan, size } = stale
-        stale = { panels: false, size: false }
-        if (rescan && collect()) await nextTick() // the index renders before it is measured
-        if (rescan || size) measure()
-        track()
-      })
-    }
-    /** A choice's scroll is over. */
-    function ground () {
-      clearTimeout(flight)
-      flight = 0
-    }
-    /** It stopped: from here the page decides, the chosen panel kept while in view. */
-    function land () {
-      ground()
-      schedule()
-    }
-    /** It is over once a while passes with no scroll event: SETTLE, or LONGEST where scrollend says so first. */
-    function hold () {
-      clearTimeout(flight)
-      flight = setTimeout(land, ends ? LONGEST : SETTLE)
-    }
-    /** The reader moved the page themselves: the choice is over, and the index follows the page again. */
-    function release () {
-      ground()
-      pinned = null
-    }
-    const reach = () => { reached = performance.now() }
-    /** A press on the page's own scrollbar; a click on anything in the page is not a scroll. */
-    const onPointer = (event) => { if (event.target === document.documentElement) reach() }
-
-    const onScroll = () => {
-      if (performance.now() - reached < INTENT) release()
-      else if (flight) hold()
-      schedule()
-    }
-    const onScrollEnd = () => { if (flight) land() }
-    const onResize = () => schedule('size')
 
     function closeMenu (refocus) {
       if (!menu.value) return
@@ -714,21 +643,14 @@ export const ScreenShell = defineComponent({
       // the page stops being inert on the next render; only then can Menu take focus
       if (refocus) nextTick(() => menuButton.value?.focus())
     }
-
-    function onKey (event) {
-      if (event.key === 'Escape') closeMenu(true)
-      else if (SCROLL_KEYS.has(event.key) && !event.target?.closest?.('input, textarea, select, [contenteditable]')) reach()
+    const onKey = (event) => { if (event.key === 'Escape') closeMenu(true) }
+    const onPhone = (event) => { if (!event.matches) closeMenu(false) }
+    /** Back on the tab: read again, quietly, unless a read is under way. */
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && props.reading.status !== 'loading') props.refresh()
     }
 
-    function onPhone (event) {
-      if (!event.matches) closeMenu(false)
-    }
-
-    watch(() => route.fullPath, () => {
-      closeMenu(false)
-      release()
-      schedule()
-    })
+    watch(() => route.fullPath, () => closeMenu(false))
     watch(menu, async (open) => {
       if (!open) return
       await nextTick()
@@ -738,36 +660,16 @@ export const ScreenShell = defineComponent({
 
     onMounted(() => {
       modelSource().then((m) => { model.value = m })
-      mutations = new MutationObserver(() => schedule('panels'))
-      mutations.observe(mainEl.value, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-panel'] })
-      if (window.ResizeObserver) {
-        resizes = new ResizeObserver(onResize)
-        resizes.observe(contextEl.value)
-      }
+      companySource().then((c) => { party.value = c })
       phone = window.matchMedia?.(PHONE)
       phone?.addEventListener?.('change', onPhone)
-      window.addEventListener('scroll', onScroll, { passive: true })
-      window.addEventListener('scrollend', onScrollEnd)
-      window.addEventListener('wheel', reach, { passive: true })
-      window.addEventListener('touchmove', reach, { passive: true })
-      window.addEventListener('pointerdown', onPointer, { passive: true })
-      window.addEventListener('resize', onResize)
       window.addEventListener('keydown', onKey)
-      schedule('panels')
+      document.addEventListener('visibilitychange', onVisible)
     })
     onBeforeUnmount(() => {
-      mutations?.disconnect()
-      resizes?.disconnect()
       phone?.removeEventListener?.('change', onPhone)
-      if (frame) cancelAnimationFrame(frame)
-      ground()
-      window.removeEventListener('scroll', onScroll)
-      window.removeEventListener('scrollend', onScrollEnd)
-      window.removeEventListener('wheel', reach)
-      window.removeEventListener('touchmove', reach)
-      window.removeEventListener('pointerdown', onPointer)
-      window.removeEventListener('resize', onResize)
       window.removeEventListener('keydown', onKey)
+      document.removeEventListener('visibilitychange', onVisible)
     })
 
     /** A link to Overview that is never marked current: the nav link and the crumb say where you are. */
@@ -781,19 +683,6 @@ export const ScreenShell = defineComponent({
       })
     }
 
-    function jump (event, id) {
-      event.preventDefault()
-      const el = document.getElementById(id)
-      if (!el) return
-      const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-      reached = -Infinity // the click that chose it is not the reader scrolling
-      pinned = id
-      active.value = id
-      ends = 'onscrollend' in window
-      hold()
-      el.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' })
-    }
-
     return () => {
       const { status, error, contextChanged } = props.reading
       // nothing prepared to read, now or since the last answer: explained in place of the screen
@@ -803,7 +692,9 @@ export const ScreenShell = defineComponent({
       const busy = status === 'loading'
       const time = formatTime(body?.as_of)
       const tag = body ? contextTag(body) : ''
-      const mode = body ? (PLAIN[body.mode] || LABELS[body.mode] || body.mode) : 'Bank connection not loaded'
+      const mode = body ? (LABELS[body.mode] || PLAIN[body.mode] || body.mode) : 'Provider not loaded'
+      const agents = model.value ? (AGENTS[model.value] || `Agents on ${model.value}`) : ''
+      const firm = companyName(body?.company ?? party.value)
       const brand = (attrs) => home({ class: 'lw-brand', 'aria-label': 'LedgerWorld, Overview', ...attrs },
         [logoMark(), h('span', 'LedgerWorld')])
 
@@ -825,7 +716,11 @@ export const ScreenShell = defineComponent({
             'aria-current': route.path === s.path ? 'page' : undefined,
             onClick: () => closeMenu(false)
           }, () => [icon(s.icon), h('span', s.label)])
-        ])))
+        ]))),
+        firm && h('div', { class: 'lw-nav__company', 'data-test': 'company' }, [
+          h('b', firm.name),
+          firm.synthetic && h('span', 'Synthetic company')
+        ])
       ])
       const scrim = menu.value && h('div', { class: 'lw-scrim', 'aria-hidden': 'true', onClick: () => closeMenu(true) })
 
@@ -834,43 +729,36 @@ export const ScreenShell = defineComponent({
       const crumbs = h('nav', { class: 'lw-crumbs', 'aria-label': 'Breadcrumb', 'data-test': 'breadcrumb' }, [
         h('ol', [
           h('li', [home({}, 'LedgerWorld')]),
-          h('li', { 'aria-current': run ? undefined : 'page' }, props.title),
-          run && h('li', { 'aria-current': 'page' }, `Run ${run}`)
+          h('li', { 'aria-current': 'page' }, props.title)
         ])
       ])
-      const context = h('div', { class: 'lw-context', ref: contextEl, 'data-test': 'banner' }, [
-        crumbs,
-        h('div', { class: 'lw-context__bar' }, [
-          h('span', { class: 'lw-context__mode', 'data-test': 'mode' }, mode),
-          model.value && h('span', { class: 'lw-context__item', 'data-test': 'model' }, AGENTS[model.value] || `Agents on ${model.value}`),
-          body && h('span', { class: 'lw-context__item', 'data-test': 'context-as-of' }, ['As of ', h('b', asOfText(body.as_of))]),
-          tag && h('span', { class: 'lw-tag', 'data-test': 'context-what-if' }, tag),
-          body && h(HowWeKnow, { test: 'how-context-bar' }, () => h('dl', { class: 'lw-context__facts' }, [
-            h('div', [h('dt', 'Provider'), h('dd', { 'data-test': 'context-provider' }, LABELS[body.mode] || body.mode)]),
-            h('div', [h('dt', 'Model'), h('dd', model.value || 'Not reported')]),
-            h('div', [h('dt', 'As of'), h('dd', `${time.utc} · ${time.local}`)]),
-            h('div', [h('dt', 'Figures'), h('dd', { 'data-test': 'source' }, sourceLabel(body))]),
-            h('div', [h('dt', 'Snapshot'), h('dd', { 'data-test': 'context-bar-snapshot' }, body.snapshot_id ?? 'Not named by the API')]),
-            run && h('div', [h('dt', 'Run'), h('dd', run)])
-          ])),
-          h('button', {
-            type: 'button', class: 'lw-button lw-button--quiet', 'data-test': 'refresh',
-            disabled: busy, onClick: () => props.refresh()
-          }, error && !absent ? 'Retry' : 'Refresh')
-        ])
+      const facts = body && h('dl', { class: 'lw-context__facts' }, [
+        h('div', [h('dt', 'Provider'), h('dd', { 'data-test': 'context-provider' }, LABELS[body.mode] || body.mode)]),
+        h('div', [h('dt', 'Agents'), h('dd', model.value || 'Not reported')]),
+        h('div', [h('dt', 'As of'), h('dd', `${time.utc} · ${time.local}`)]),
+        h('div', [h('dt', 'Figures'), h('dd', { 'data-test': 'source' }, sourceLabel(body))]),
+        h('div', [h('dt', 'Snapshot'), h('dd', { 'data-test': 'context-bar-snapshot' }, body.snapshot_id ?? 'Not named by the API')]),
+        run && h('div', [h('dt', 'Run'), h('dd', { 'data-test': 'context-run' }, run)])
+      ])
+      const context = h('div', { class: 'lw-context', 'data-test': 'banner' }, [
+        h('div', { class: 'lw-context__row' }, [
+          crumbs,
+          h('div', { class: 'lw-context__bar' }, [
+            h(Tip, { test: 'how-context-bar' }, {
+              default: () => h('span', { class: 'lw-context__item', 'data-test': 'mode' },
+                [mode, agents && ` · ${agents}`, tag && ` · ${tag}`]),
+              tip: () => facts || 'The provider is named once this page has loaded.'
+            }),
+            body && h(Tip, { class: 'lw-context__date', text: `As of ${time.utc} · ${time.local}` },
+              () => h('span', { 'data-test': 'context-as-of' }, longDate(body.as_of)))
+          ])
+        ]),
+        body && h('p', { class: 'lw-context__line', 'data-test': 'context-line' },
+          [body.snapshot_id && `Snapshot ${body.snapshot_id}`, currencyOf(body), dataKind(body)].filter(Boolean).join(' · '))
       ])
 
-      const index = panels.value.length > 0 && h('nav', {
-        class: 'lw-panels', ref: indexEl, 'aria-label': 'Panels on this page', 'data-test': 'panel-index'
-      }, [
-        h('ol', panels.value.map((p) => h('li', { key: p.id }, [
-          h('a', {
-            href: `#${p.id}`, 'data-test': 'panel-link',
-            'aria-current': active.value === p.id ? 'true' : undefined,
-            onClick: (event) => jump(event, p.id)
-          }, p.label)
-        ])))
-      ])
+      const hero = h(PageHero, { headline: props.headline || props.title, subtitle: body ? props.subtitle : '', lead: body ? props.lead : '' },
+        body && slots.action ? () => slots.action({ body, busy }) : undefined)
 
       const retry = h('button', {
         type: 'button', class: 'lw-button lw-button--quiet', 'data-test': 'retry',
@@ -890,8 +778,7 @@ export const ScreenShell = defineComponent({
         ]),
         stale,
         contextChanged && body && h('p', { class: 'lw-note', role: 'status', 'data-test': 'context-changed' },
-          `The bank connection or the data behind this page changed; every figure below was reloaded ` +
-          `for ${mode}${body.branch_id ? `, ${PLAIN.branch}` : ''}. How we know, above, names the source.`)
+          `The bank connection or the data behind this page changed; every figure below was reloaded for ${mode}.`)
       ]
       const skeleton = () => h('article', { class: 'lw-tile' }, [
         h('span', { class: 'lw-skeleton lw-skeleton--label' }),
@@ -901,10 +788,8 @@ export const ScreenShell = defineComponent({
       if (body) content = slots.default?.({ body, busy })
       else if (absent) {
         content = h('section', { class: 'lw-empty', 'aria-labelledby': 'lw-empty-heading', 'data-test': 'empty' }, [
-          h('h2', { id: 'lw-empty-heading' }, 'No prepared run'),
-          h('p', `${error.message}. ${props.title} reads a prepared run; there is none to show, so nothing is drawn here.`),
-          h('p', { class: 'lw-time' },
-            'An operator prepares one with the demo command, then Refresh. The browser never starts a run or shows a receipt on its own.'),
+          h('h2', { id: 'lw-empty-heading' }, 'No prepared run yet'),
+          h('p', `${props.title} reads a prepared run, and there is none. An operator prepares one with the demo command.`),
           home({ class: 'lw-button lw-button--quiet', 'data-test': 'empty-overview' }, 'Open Overview')
         ])
       } else {
@@ -919,10 +804,10 @@ export const ScreenShell = defineComponent({
       const footer = SOURCE_URL && h('p', { class: 'lw-source' }, [
         h('a', { href: SOURCE_URL }, 'Source code (AGPL-3.0)')
       ])
-      const main = h('main', { class: 'lw-main', ref: mainEl, inert: menu.value, 'aria-busy': busy ? 'true' : 'false' }, [
-        context, h('h1', props.title), index, ...notices, content, footer
+      const main = h('main', { class: 'lw-main', inert: menu.value, 'aria-busy': busy ? 'true' : 'false' }, [
+        context, hero, ...notices, content, footer
       ])
-      return h('div', { class: 'lw-page', ref: pageEl }, [topbar, nav, scrim, main])
+      return h('div', { class: 'lw-page' }, [topbar, nav, scrim, main])
     }
   }
 })

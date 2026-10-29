@@ -46,7 +46,7 @@ const routes = [
   { path: '/overview', name: 'Overview', meta: { title: 'Overview' }, component: () => import('../views/Overview.vue') },
   { path: '/treasury', name: 'Treasury', meta: { title: 'Treasury' }, component: () => import('../views/Treasury.vue') },
   { path: '/lending', name: 'Lending', meta: { title: 'Lending' }, component: () => import('../views/Lending.vue') },
-  { path: '/simulation', name: 'LiveSimulation', meta: { title: 'Live simulation' }, component: () => import('../views/Simulation.vue') },
+  { path: '/simulation', name: 'LiveSimulation', meta: { title: 'Simulation' }, component: () => import('../views/Simulation.vue') },
   { path: '/decisions', name: 'Decisions', meta: { title: 'Decisions' }, component: () => import('../views/Decisions.vue') },
   { path: '/execution', name: 'Execution', meta: { title: 'Execution' }, component: () => import('../views/Execution.vue') }
 ]
