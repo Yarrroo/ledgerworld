@@ -1,7 +1,7 @@
 # Narrated machine take — what the first takes produced
 
 > A voiced, labelled walkthrough built by `bash scripts/narrated_take.sh URL`. Not the human take,
-> and not uploaded: the file stays on the recording machine.
+> and not uploaded.
 
 **Verdict:** the pipeline works end to end. Against the Demo URL it produced one MP4 with a
 synthetic voice, an opening card and every beat reached. The operator beats were **not**
@@ -19,8 +19,9 @@ so this file is **not the one to submit**: re-run on a quiet machine, with the t
 - File: `ledgerworld-narrated-take.mp4`, H.264 1280 × 720 25 fps + AAC, 4:49.04, 6,302,588 bytes,
   sha256 `4f5a277b8814cf9ec2c3b6a17f79fff27d5df77aab7c3f0ee60da5333adabd9e`. The `.srt` beside it times each
   line where its voice plays.
-- Where: `/tmp/pocket-run-…/final/narrated-take.c1lrAE/` on the recording machine. Not committed,
-  not uploaded, not on the hub: publishing stays a separate decision.
+- Where: nowhere now. It was made in a scratch directory that was removed with the run; it was not
+  committed, uploaded or put on the hub, since sending a file out is a separate decision. The
+  hashes above identify this take; `bash scripts/narrated_take.sh <Demo URL>` makes the next one.
 
 | Beat | Planned | Began | Screen ready | Left | Line ends | Operator action |
 |---|---|---|---|---|---|---|

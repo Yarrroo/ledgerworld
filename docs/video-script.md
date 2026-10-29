@@ -29,6 +29,12 @@ deployed app read-only through the seven beats below in real time with each Shot
 records a silent labelled webm with an SRT of the Voice lines, and prints planned against actual
 seconds per beat. It performs no operator action, so it is a rehearsal, never the take.
 
+If no human take exists, `bash scripts/narrated_take.sh "$LEDGERWORLD_URL"` records a machine
+take: a 3-second card naming the voice as synthetic, the same beats voiced with each Voice line,
+and, with `LEDGERWORLD_DEMO_TOKEN` set, the fresh fork, an approval request and the interview sent
+off-screen, their answers on the caption. It stops unless the check above prints `GO`, never
+executes, and leaves one MP4 and its SRT in a temporary directory; uploading it is a separate step.
+
 ## 00:00-00:15 State
 
 **Shot:** Overview with the mode banner, `as_of`, snapshot, cash buckets and next obligation. Name
