@@ -1,0 +1,6 @@
+tier: Brief
+thresholds: 2
+state: approved-unattended
+reviewer: none
+skipped: [mirror, 9, 10, 11, reviewer-sim, 13-publish]
+artifacts: [design.md, HANDOFF.md]

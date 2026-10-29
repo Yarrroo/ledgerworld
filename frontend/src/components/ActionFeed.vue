@@ -11,7 +11,9 @@
           :class="{ 'is-highlight': item.actor === highlight }" :data-id="item.id">
         <div class="lw-feed__head">
           <span class="lw-feed__kind">{{ item.kind }}</span>
-          <strong>{{ item.actor }}</strong>
+          <button type="button" class="lw-feed__open" data-test="feed-open"
+                  :aria-label="`${item.kind} ${item.id} by ${item.actor}: open its evidence`"
+                  @click="emit('pick', item)">{{ item.actor }}</button>
           <code class="lw-feed__id">{{ item.id }}</code>
         </div>
         <p v-if="item.text" class="lw-feed__text">{{ item.text }}</p>
@@ -30,7 +32,9 @@
 <script setup>
 /**
  * One round's public posts and actor intents, each intent with the coordinator's verdict (C2).
- * Only the round handed in is shown; an unloaded round says so and lists nothing.
+ * Only the round handed in is shown; an unloaded round says so and lists nothing. An intent is
+ * a proposal; only an accepted one with a journal changed the ledger, and each says which it is.
+ * Choosing an item emits `pick` with it, for the screen to highlight its actor and open its evidence.
  */
 import { computed } from 'vue'
 import { formatMoney } from '../api/v1.js'
@@ -44,6 +48,7 @@ const props = defineProps({
   replay: { type: Boolean, default: false },
   highlight: { type: String, default: null }
 })
+const emit = defineEmits(['pick'])
 
 const VERDICT = {
   accepted: { icon: '✓', word: 'Accepted', tone: 'ok' },
@@ -61,7 +66,7 @@ const items = computed(() => {
     const amount = i.params?.amount
     return {
       id: i.intent_id,
-      kind: 'Intent',
+      kind: c?.journal_id ? 'Intent · ledger change' : 'Intent · proposed',
       actor: i.actor_id,
       text: `${i.type.replace(/_/g, ' ')}${amount ? ` ${formatMoney(amount.minor, amount.currency)}` : ''}`,
       status: c ? VERDICT[c.status] : { icon: '–', word: 'No verdict recorded', tone: 'muted' },
@@ -89,7 +94,22 @@ const items = computed(() => {
   background: var(--live-raised);
 }
 
-.lw-feed__item.is-highlight { border-left-color: var(--live-brand); }
+.lw-feed__item.is-highlight {
+  border-left: 5px solid var(--live-brand);
+  background: var(--lw-selected, var(--live-raised));
+}
+
+.lw-feed__open {
+  min-height: var(--lw-target);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--live-brand);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
 
 .lw-feed__head {
   display: flex;

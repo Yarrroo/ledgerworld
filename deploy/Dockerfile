@@ -12,6 +12,8 @@ WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./frontend/
 RUN --mount=type=cache,target=/root/.npm npm ci --prefix frontend
 COPY locales ./locales
+# the world map and scenario families the screens read (frontend/src/api/world.js)
+COPY scenarios ./scenarios
 COPY frontend ./frontend
 # "/" makes every API call relative to the page's own origin
 ENV VITE_API_BASE_URL=/
