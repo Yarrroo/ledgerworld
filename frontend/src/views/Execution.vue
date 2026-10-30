@@ -47,7 +47,6 @@
                data-panel="What you approved">
         <h2 id="summary-heading">Bound approval</h2>
         <dl v-if="execution" class="lw-terms lw-summary-terms" data-test="approval-summary">
-          <dt>Policy</dt><dd>{{ PLANS[policy] ?? 'Unavailable' }}</dd>
           <dt>Provider</dt><dd>{{ LABELS[execution.mode] || execution.mode }}</dd>
           <dt>Status</dt><dd>{{ allReconciled ? 'Reconciled' : 'Read execution legs' }}</dd>
         </dl>
@@ -216,7 +215,7 @@
             <h3 id="create-heading"><span class="lw-review-number">1</span> Create approval</h3>
             <dl class="lw-terms lw-review-context">
               <dt>Policy</dt><dd>{{ PLANS[policy] ?? policy }}</dd>
-              <dt>Scenario-set</dt><dd>{{ decisions.cohort }} · {{ decisions.weight_kind }}</dd>
+              <dt>Scenario-set</dt><dd>{{ decisions?.cohort ?? 'Unavailable' }} · {{ decisions?.weight_kind ?? 'Unavailable' }}</dd>
               <dt>Facility fee</dt><dd><Tip :text="`Scenario-set cost, not a current-plan quote: ${scenarioCost}`" data-test="fee-context">
                 <span data-test="branch-fees">{{ branchFees }}</span>
                 <template #tip><span data-test="scenario-cost">{{ scenarioCost }}</span>. Scenario-set cost, not a current-plan quote.</template>
@@ -924,6 +923,10 @@ onUnmounted(() => {
   clearInterval(clock)
 })
 
+/** The same evidence threshold feeds leg status, trackers and both hero readings. */
+const isReconciledLeg = (leg, incidents) => leg.state === 'settled' && leg.reconciled && !!leg.journal_id &&
+  !incidents.some((i) => i.leg_id === leg.leg_id && i.state === 'open')
+
 /** One row per leg: C4 state and reconciliation as the API reports it, never inferred. */
 const legs = computed(() => {
   const body = execution.value
@@ -941,14 +944,14 @@ const legs = computed(() => {
       [text, tone, icon] = [`${WORD[leg.state]} · ${status} · incident open`, 'bad', '!']
     } else if (leg.state === 'failed') {
       [text, tone, icon] = [`Failed · ${status}`, 'bad', '✕']
-    } else if (leg.reconciled && leg.state === 'settled' && leg.journal_id) {
+    } else if (isReconciledLeg(leg, body.incidents)) {
       [text, tone, icon] = [`${status} · reconciled as of ${formatTime(body.as_of).utc}`, 'ok', '✓']
     } else {
       [text, tone, icon] = [`${WORD[leg.state] ?? leg.state} · ${status} · not reconciled`, 'warn', '◷']
     }
     const mode = leg.receipt?.mode ?? body.mode
     // an open incident takes the leg back from Reconciled: the tracker never outruns the evidence
-    const reconciled = leg.reconciled && leg.state === 'settled' && !!leg.journal_id && !open.length
+    const reconciled = isReconciledLeg(leg, body.incidents)
     const step = reconciled ? 3 : local ? 0 : STEP[leg.state] ?? 0
     const now = local && reconciled ? 'ledger only' : { failed: 'failed', unknown: 'outcome unknown' }[leg.state] ?? ''
     const steps = STEPS.map((name, n) => {
@@ -959,7 +962,7 @@ const legs = computed(() => {
   })
 })
 
-const legTitle = (leg) => ({ advance: 'Advance inflow', payout: 'Payroll payout', repayment: 'Repayment', fx: 'FX conversion' }[leg.kind] ?? leg.label ?? leg.kind)
+const legTitle = (leg) => leg.label || kindText(leg.kind)
 const legPill = (leg) => leg.state === 'unknown' ? 'Outcome unknown' :
   `${leg.receipt?.status ?? WORD[leg.state]}${leg.tone === 'ok' ? ' · Reconciled' : leg.tone === 'bad' ? ' · Needs review' : ' · Not reconciled'}`
 const legIds = (leg) => [
@@ -998,14 +1001,14 @@ const incidents = computed(() => {
 
 /** Aggregate progress cannot outrun any leg; ledger-only entries skip provider steps. */
 const allReconciled = computed(() => !!legs.value.length && !incidents.value.length &&
-  legs.value.every((l) => l.state === 'settled' && l.reconciled && l.journal_id))
+  legs.value.every((l) => isReconciledLeg(l, execution.value.incidents)))
 const progress = computed(() => {
   const provider = legs.value.filter((l) => !(l.state === 'settled' && !l.provider_id))
-  const submitted = !!provider.length && provider.every((l) => ['submitted', 'settled', 'failed', 'unknown'].includes(l.state))
+  const submitted = !!provider.length && provider.every((l) => !!(l.provider_id || l.receipt?.provider_id))
   const confirmed = !!provider.length && provider.every((l) => l.state === 'settled' && l.provider_id && l.receipt)
   return [
     { name: 'Approved', done: !!execution.value?.approval_id, note: 'Plan authorized' },
-    { name: 'Submitted', done: submitted, note: provider.length ? submitted ? 'Sent to provider' : 'Awaiting submission' : 'No provider operation' },
+    { name: 'Submitted', done: submitted, note: provider.length ? submitted ? 'Sent to provider' : 'Submission unconfirmed' : 'No provider operation' },
     { name: 'Provider confirmed', done: confirmed, note: provider.length ? 'Provider evidence' : 'Not applicable' },
     { name: 'Reconciled', done: allReconciled.value, note: 'Matched in ledger' }
   ]
@@ -1058,7 +1061,7 @@ const lead = computed(() => {
   }
   if (!body.legs.length) return 'The plan you approved is sent; its payments are not recorded yet.'
   const n = body.legs.length
-  const checked = body.legs.filter((l) => l.reconciled && l.state === 'settled' && l.journal_id).length
+  const checked = body.legs.filter((l) => isReconciledLeg(l, body.incidents)).length
   if (checked < n) return `The plan you approved is under way: ${checked} of ${n} payments checked against your books so far.`
   const moved = movedWords(body.legs.filter((l) => INFLOW.has(l.kind)))
   const paid = movedWords(body.legs.filter((l) => OUTFLOW.has(l.kind)))
@@ -1079,8 +1082,8 @@ const subtitle = computed(() => {
   const plan = PLANS[policy.value] ?? 'Approved plan'
   if (!body) return held.value ? `${plan} · approved, not sent` : 'No execution recorded yet'
   const n = body.legs.length
-  const checked = body.legs.filter((l) => l.reconciled && l.state === 'settled' && l.journal_id).length
-  return `${plan} · ${checked} of ${n} legs reconciled`
+  const checked = body.legs.filter((l) => isReconciledLeg(l, body.incidents)).length
+  return `Observed execution record · ${checked} of ${n} legs reconciled`
 })
 
 /** A receipt's amount in the page's money style; as the provider wrote it when it does not read. */

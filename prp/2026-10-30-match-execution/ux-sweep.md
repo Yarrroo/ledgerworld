@@ -10,7 +10,7 @@ Before changing the view, `bash scripts/ux-check.sh e2e/ux/match-execution.spec.
 
 ## Evidence
 
-- `npm --prefix frontend run test:unit -- tests/unit/decide-execute.spec.js`: 166 passed.
+- `npm --prefix frontend run test:unit -- tests/unit/decide-execute.spec.js`: 173 passed, including seven fails-before/passes-after cases covering the five independent review findings.
 - `bash scripts/ux-check.sh e2e/ux/execution.spec.ts`: 33 passed, followed by all 12 judge-path/accessibility tests.
 - `bash scripts/ux-check.sh e2e/ux/match-execution.spec.ts`: 6 passed, followed by all 12 judge-path/accessibility tests. The desktop case explicitly resizes to 1487 px; tablet is 834 px and phone 390 px.
 - `ux/copy-2.spec.ts --grep 'Execution:'`, using the same offline app and viewport config: all 9 Execution-only cases passed. No neighboring-screen implementation was changed.
@@ -43,6 +43,10 @@ Screenshots are in `ux/`, named by width, state and theme. Closed-page word coun
 - The old judge-path selector treated a new `leg-pill` hook as a leg. The new hook uses the receipt namespace. Existing receipt mouse and keyboard selectors were aligned with the row chevron and its outer summary; the timed four-click path remains intact.
 - Nested tooltips consumed Escape before modal dismissal. The modal listener now captures the key while the dialog is open; a unit regression and the existing browser focus test prove dismissal and focus return.
 - The stricter aggregate status requires a settled leg, reconciliation flag, journal and no open incident. The banner, per-leg steps, hero counts and dialog terminal state now agree.
+
+## Stability follow-up
+
+The initial auxiliary repeat run failed because its undrained stdout pipe blocked the offline server's HTTP logger. Its first failure, video, partial original stdout and provenance are preserved in `stability-red/`; the RED result has not been replaced by a rerun. A pipe/drain/file-sink probe reproduced and isolated the launcher defect. With output redirected to a file, all 60 repeated Execution cases passed unchanged; see `stability-green.txt` and `stability-app.txt`. The regular acceptance command already uses a file sink and passed again after the review fixes.
 
 ## Deliberate omissions and boundaries
 

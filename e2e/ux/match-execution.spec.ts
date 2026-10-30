@@ -4,13 +4,13 @@ import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
 import { settled, sideways, tipWorks } from './routes'
 import { visibleWords, wordBudget } from './words'
+import { $ } from './copy'
 
 const evidence = join(__dirname, '../../prp/2026-10-30-match-execution/ux')
 const fixture = (path: string) => JSON.parse(readFileSync(join(__dirname, '../../contracts/examples', path), 'utf8')).instance
 const overview = fixture('c6_api/valid-overview-lf1.json')
 const approval = fixture('c3_bound_approval/valid-lf1-integrated.json')
 const execution = fixture('c6_api/valid-execution.json')
-const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 
 async function shot (page: Page, name: string) {
   mkdirSync(evidence, { recursive: true })

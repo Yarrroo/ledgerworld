@@ -2499,3 +2499,65 @@ describe('Approval mockup 07: nested tooltip dismissal', () => {
     expect(posts(calls)).toEqual([])
   })
 })
+
+
+describe('Execution independent review regressions', () => {
+  it('keeps bound terms usable when the Decisions refresh fails', async () => {
+    let failed = false
+    const { w } = await reviewReady({ 'GET /decisions/run-1': () => failed ? refuse(404, 'not_found') : decisionsBody() })
+    await approve(w)
+    const errors = []
+    w.vm.$.appContext.config.errorHandler = (error) => errors.push(error.message)
+    failed = true
+    await reread()
+    await flushPromises()
+    expect(errors).toEqual([])
+    expect(text(w, 'plan-hash')).toBe(boundApproval.instance.plan_hash)
+    expect(disabled(w, 'execute')).toBe(false)
+  })
+
+  it('does not attribute a different run policy to an explicit execution id', async () => {
+    serve({
+      'GET /overview': overview(),
+      'GET /decisions/run-a': { ...decisionsBody(), selected: 'no-action' },
+      'GET /executions/apr-1': executionBody({ legs: [advance()] })
+    })
+    const w = await open(Execution, '/execution?run_id=run-a&execution_id=apr-1')
+    expect(text(w, 'summary')).not.toContain('Do nothing')
+    expect(text(w, 'hero-subtitle')).not.toContain('Do nothing')
+  })
+
+  it.each(['failed', 'unknown', 'submitted'])('%s with no provider evidence does not prove submission', async (state) => {
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': executionBody({ legs: [{ ...advance(), state, provider_id: null, receipt: null, reconciled: false, journal_id: null }] })
+    })
+    const w = await open(Execution, '/execution')
+    const submitted = w.get('[data-test="execution-progress"]').findAll('li')[1]
+    expect(submitted.attributes('data-reached')).toBe('false')
+    expect(submitted.text()).not.toContain('Sent to provider')
+  })
+
+  it('the hero count excludes a settled leg with an open incident', async () => {
+    const leg = advance()
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': executionBody({ legs: [leg], incidents: [{ leg_id: leg.leg_id, kind: 'amount_mismatch', state: 'open', opened_at: '2026-11-05T10:02:00Z' }] })
+    })
+    const w = await open(Execution, '/execution')
+    expect(text(w, 'hero-subtitle')).toContain('0 of 1 legs reconciled')
+  })
+
+  it('uses the provider leg purpose, never an invented payroll destination', async () => {
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': executionBody({ legs: [payout({ label: 'Rent payment', receipt: null, provider_id: null })] })
+    })
+    const w = await open(Execution, '/execution')
+    expect(w.get('[data-test="leg-payout"] .lw-leg__name').text()).toContain('Rent payment')
+    expect(w.get('[data-test="leg-payout"] .lw-leg__name').text()).not.toContain('Payroll')
+  })
+})

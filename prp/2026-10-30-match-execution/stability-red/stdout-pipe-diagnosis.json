@@ -1,0 +1,7 @@
+{
+  "pipe_capacity": 65536,
+  "undrained_pipe_stalled_at_request": 561,
+  "pipe_bytes_before_drain": 65520,
+  "same_app_after_drain_status": 200,
+  "file_sink_requests_passed": 500
+}
