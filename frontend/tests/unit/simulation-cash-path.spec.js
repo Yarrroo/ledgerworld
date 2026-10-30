@@ -12,6 +12,32 @@ const props = () => ({ round: 5, at: epoch + 20 * 3600000, epoch,
 })
 
 describe('Simulation cash outlook', () => {
+  it('never labels another entity’s recorded account as treasury when metadata is absent', () => {
+    const p = props()
+    p.account = null
+    for (const path of p.paths) path.account_id = 'lender-pool'
+    const w = mount(CashPaths, { props: p })
+    expect(w.find('[data-test="policy-chart"]').exists()).toBe(false)
+    expect(w.text()).toContain('Treasury account not identified')
+    w.unmount()
+  })
+  it('reads the available policy currency when the base path has no points', () => {
+    const p = props()
+    p.account = null
+    p.paths[0].points = []
+    for (const point of p.paths[1].points) point.value.currency = 'EUR'
+    const w = mount(CashPaths, { props: p })
+    expect(w.get('[data-policy="no-action"]').attributes('d')).toMatch(/^M/)
+    expect(w.get('.lw-cash-chart__axes').text()).toContain('€')
+    w.unmount()
+  })
+  it('does not invent an observation timestamp from a point’s scenario time', () => {
+    const w = mount(CashPaths, { props: props() })
+    const tips = w.findAll('.lw-cash-chart__point [role="tooltip"]').map((x) => x.text()).join(' ')
+    expect(tips).toContain('Observation time unavailable')
+    expect(tips).not.toContain('as of 2026-')
+    w.unmount()
+  })
   it('still draws run-owned paths when the auxiliary treasury reading is unavailable', () => {
     const w = mount(CashPaths, { props: { ...props(), account: null } })
     expect(w.find('[data-test="policy-chart"]').exists()).toBe(true)

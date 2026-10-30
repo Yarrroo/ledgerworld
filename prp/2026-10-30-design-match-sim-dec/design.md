@@ -33,3 +33,11 @@ The action feed, the evidence graph and the round export move into one fold, "So
 
 The lender's capacity on its map node (the run API serves no capacity), and the mockup's scenario
 name "Demo 01" (the run has an id, shown as "Demo run" with the id in the tooltip).
+
+## Route record
+
+Brief · thresholds v2 · one reversible UI module; no storage, API or execution contract change.
+The supplied mockup is the binding shape. Existing Scrubber and WorldMap are extended; CashPaths
+is rebuilt around the same run response. No new dependency or external consumer is introduced.
+No reviewer pack. Expanded system-design artifacts, external inventory, publishing and multi-agent
+panels are skipped: this order requests a one-screen local design and a solo implementation.

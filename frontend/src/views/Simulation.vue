@@ -598,9 +598,12 @@ const actorTimeline = computed(() => {
 // cursor (an unloaded round included) or showing another run closes its details. A poll that
 // moves neither keeps them.
 const graphPanel = ref(null)
+let sourceGraph = null
 watch(sourceOpen, async (open) => {
+  if (!open) { sourceGraph = graphData.value; return }
   await nextTick()
-  if (open && sourceOpen.value && graphExpanded.value) graphPanel.value?.redraw()
+  if (sourceOpen.value && graphExpanded.value && sourceGraph !== graphData.value) graphPanel.value?.redraw()
+  sourceGraph = graphData.value
 })
 watch([runId, () => body.value?.run_id, display], () => graphPanel.value?.closeDetailPanel())
 

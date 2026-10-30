@@ -25,7 +25,7 @@
           <Tip v-if="shortfall" :text="`No action's lowest known cash ${money(shortfall.low.value)} against reserve floor ${money(account.floor)}. ${shortfall.branch_id}`"><p class="lw-cash-chart__shortfall" data-test="cash-shortfall">! Treasury reserve shortfall without protection: <b>{{ formatMoney(shortfall.minor, currency) }} at h{{ hour(shortfall.low.t) }}</b></p></Tip>
         </div>
       </div>
-      <p v-else class="lw-live-empty">No treasury cash path recorded for this run</p>
+      <p v-else class="lw-live-empty">{{ paths.length && !primaryPath ? 'Treasury account not identified; inspect recorded accounts in round data.' : 'No treasury cash points recorded for this run' }}</p>
       <details class="lw-cash-values"><summary>Round {{ round }} values and data</summary><ul class="lw-cash"><li v-for="row in rows" :key="`${row.branch_id}|${row.account_id}`" class="lw-cash__row" :data-branch="row.branch_id"><span class="lw-cash__branch">{{ row.name }}</span><Tip class="lw-cash__value" :text="`${row.branch_id} · ${accountName(row.account_id, { owner: true })} · ${PLAIN.branch}${row.replay ? ` · ${PLAIN.replay}` : ''} · cash at round ${round}`"><span data-test="cash-value">{{ row.text }}</span></Tip></li></ul>
         <table v-if="series.length"><caption>Known policy cash points</caption><thead><tr><th>Policy</th><th>Hour</th><th>Cash</th></tr></thead><tbody><template v-for="s in series" :key="s.branch_id"><tr v-for="p in s.points" :key="p.t"><td>{{ s.name }}</td><td>{{ hour(p.t) }}</td><td>{{ metricText(p.value) }}</td></tr></template></tbody></table>
       </details>
@@ -69,10 +69,12 @@ const rows = computed(() => props.paths.map((p) => {
 }))
 const primaryPath = computed(() => props.account
   ? props.paths.find((p) => p.account_id === props.account.id)
-  : props.paths.find((p) => meta.value.get(p.branch_id)?.parent_branch_id === null) ?? props.paths[0])
-const currency = computed(() => props.account?.currency ?? primaryPath.value?.points[0]?.value.currency ?? 'USD')
+  : props.paths.find((p) => p.account_id.startsWith('treasury/')))
+const currency = computed(() => props.account?.currency ?? props.paths
+  .filter((p) => p.account_id === primaryPath.value?.account_id)
+  .flatMap((p) => p.points).find((p) => p.value.currency)?.value.currency ?? null)
 const series = computed(() => {
-  if (!primaryPath.value || props.epoch === null) return []
+  if (!primaryPath.value || !currency.value || props.epoch === null) return []
   const matching = props.paths.filter((p) => p.account_id === primaryPath.value.account_id)
   const policies = matching.filter((p) => meta.value.get(p.branch_id)?.policy)
   return (policies.length ? policies : matching).map((p) => {
@@ -88,7 +90,7 @@ const chartPoints = computed(() => {
   for (const s of series.value) for (const p of s.points) {
     const key = Date.parse(p.t)
     const group = points.get(key) ?? { t: p.t, values: [] }
-    group.values.push(`${s.name}: ${metricText(p.value)} · ${s.branch_id}${s.replay ? ' · Replay' : ''} · as of ${p.value.as_of ?? p.t}`)
+    group.values.push(`${s.name}: ${metricText(p.value)} · ${s.branch_id}${s.replay ? ' · Replay' : ''} · ${p.value.as_of ? `as of ${p.value.as_of}` : 'Observation time unavailable'}`)
     points.set(key, group)
   }
   return [...points.values()].map((p) => ({ t: p.t, text: p.values.join('; ') }))

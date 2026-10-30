@@ -154,6 +154,20 @@ describe('the evidence graph draws when its disclosure opens', () => {
     await flushPromises()
   }
 
+  it('reopening unchanged evidence keeps its existing graph nodes', async () => {
+    const { w } = await open(() => run())
+    await reveal(w)
+    const before = svg(w).querySelector('circle')
+    const outer = w.get('details.lw-sim__source-evidence').element
+    outer.open = false
+    outer.dispatchEvent(new Event('toggle'))
+    await flushPromises()
+    outer.open = true
+    outer.dispatchEvent(new Event('toggle'))
+    await flushPromises()
+    expect(svg(w).querySelector('circle') === before).toBe(true)
+  })
+
   it('reopening Source evidence redraws an already-open graph after a hidden scrub', async () => {
     const { w } = await open(() => run())
     await reveal(w)
