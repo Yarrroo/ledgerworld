@@ -60,31 +60,21 @@ test('S2–S4: one selected actor drives map, inspector and feed; an edge opens 
   const writes = await readOnly(page, baseURL!)
   const runId = await demoRunId(request)
   await open(page, runId)
-  const phone = isPhone(info.project.use.viewport!.width)
 
-  // the keyboard actor list
+  // The keyboard actor list lives in Source evidence.
+  await page.locator('.lw-sim__source').click()
   const lender = page.locator('[data-actor="lender"]')
   await lender.focus()
   await page.keyboard.press('Enter')
   await expect(lender).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('[data-test="map-node"][data-node="lender"]')).toHaveAttribute('aria-pressed', 'true')
   const detail = $(page, 'actor-detail')
-  if (phone) {
-    await expect($(page, 'actor-sheet')).toBeVisible()
-    const box = (await $(page, 'actor-sheet').boundingBox())!
-    expect(box.height, 'the actor sheet is not full height').toBeGreaterThanOrEqual(info.project.use.viewport!.height - 1)
-  }
   await expect(detail).toBeVisible()
-  await expect(detail).toContainText('Role')
-  await expect(detail).toContainText('lender pool')
-  await expect(detail).toContainText('Actions up to round')
-  // the feed highlights the selected actor's items, and no one else's
+  await expect(detail).toContainText('What changed')
+  // Actor metadata is on demand; the timeline remains inline at every width.
+  await expect(page.locator('[data-test="how-actor"]')).toContainText('lender pool')
   const highlighted = page.locator('[data-test="feed"] .is-highlight')
   for (const item of await highlighted.all()) await expect(item).toContainText('lender')
-  if (phone) {
-    await page.keyboard.press('Escape')
-    await expect($(page, 'actor-sheet')).toBeHidden()
-  }
 
   // the map: a node selects its actor, and the list follows
   const treasury = page.locator('[data-test="map-node"][data-node="treasury"]')
@@ -92,7 +82,7 @@ test('S2–S4: one selected actor drives map, inspector and feed; an edge opens 
   await expect(treasury).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('[data-actor="treasury"]')).toHaveAttribute('aria-pressed', 'true')
   await expect(detail).toContainText('Northwind')
-  if (phone) await page.keyboard.press('Escape')
+  await expect($(page, 'inspector')).toBeVisible()
 
   // canonical edges: pool → Borrower B via line-b; no Treasury–Borrower B credit
   const edges = await page.locator('[data-test="map-edge"]').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? ''))
@@ -136,11 +126,11 @@ test('S5: one committed-round cursor; arrows, Home and End; round n is 4n h', as
 
   const atRound = async (n: number) => {
     await expect(slider).toHaveAttribute('aria-valuenow', String(n))
-    await expect($(page, 'cursor')).toHaveText(new RegExp(`^Round ${n} of ${last} · simulated t=${4 * n} h$`))
+    await expect($(page, 'cursor')).toHaveText(new RegExp(`^Round ${n} of 18 · ${4 * n}h simulated$`))
     await expect(page.locator('#feed-title')).toContainText(`Action feed · round ${n}`)
-    await expect($(page, 'inspector').locator('h2')).toHaveText(`Actors up to round ${n}`)
-    await expect(page.locator('#cash-title')).toContainText(`round ${n}`)
-    await expect($(page, 'graph')).toContainText(`World map · round ${n}`)
+    await expect($(page, 'selected-round')).toHaveText(`Selected actor · Round ${n}`)
+    await expect(page.locator('.lw-cash-values > summary')).toContainText(`Round ${n}`)
+    await expect($(page, 'graph')).toContainText(`Market relationships at round ${n}`)
   }
   await atRound(last)
   await slider.focus()
@@ -188,17 +178,11 @@ test('S6: fork asks first and names its checkpoint and policies; Compare opens D
   expect(writes, 'the fork was sent').toEqual([])
 })
 
-test('phone reading order: round control, cash, feed, actor list, map', async ({ page, request }, info) => {
+test('phone reading order: map and actor, round control, cash, folded source evidence', async ({ page, request }, info) => {
   test.skip(!isPhone(info.project.use.viewport!.width), 'the phone order')
-  const runId = await demoRunId(request)
-  await open(page, runId)
+  await open(page, await demoRunId(request))
   const top = async (selector: string) => (await page.locator(selector).first().boundingBox())!.y
-  const order = [
-    await top('[data-test="scrubber-slider"]'),
-    await top('[data-test="cash"]'),
-    await top('[data-test="feed"]'),
-    await top('[data-test="inspector"]'),
-    await top('[data-test="map"]')
-  ]
+  const order = [await top('[data-test="map"]'), await top('[data-test="inspector"]'),
+    await top('[data-test="controls"]'), await top('[data-test="cash"]'), await top('#simulation-evidence')]
   expect([...order].sort((a, b) => a - b)).toEqual(order)
 })

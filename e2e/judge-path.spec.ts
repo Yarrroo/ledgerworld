@@ -77,11 +77,11 @@ async function simulation (page: Page, demo: Demo): Promise<void> {
   const slider = test$(page, 'scrubber-slider')
   await expect(slider).toHaveAttribute('aria-valuenow', /^[1-9]\d*$/)
   const round = await slider.getAttribute('aria-valuenow')
-  await expect(test$(page, 'cursor')).toHaveText(new RegExp(`^Round ${round} of \\d+ · simulated t=\\d+ h$`))
+  await expect(test$(page, 'cursor')).toHaveText(new RegExp(`^Round ${round} of \\d+ · \\d+h simulated$`))
   await expect(test$(page, 'phase')).not.toHaveText(/invalid/i)
   // feed, graph inspector and cursor read the same committed round
   await expect(page.locator('#feed-title')).toContainText(`Action feed · round ${round}`)
-  await expect(test$(page, 'inspector').locator('h2')).toHaveText(`Actors up to round ${round}`)
+  await expect(test$(page, 'selected-round')).toHaveText(`Selected actor · Round ${round}`)
   await expect(test$(page, 'feed-unloaded')).toHaveCount(0)
   // a replayed run says so on the page, in the header, not only in its tooltip (COPY.md rule 4)
   if (await test$(page, 'replay-note').count()) {

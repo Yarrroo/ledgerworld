@@ -10,198 +10,97 @@
       </Tip>
     </template>
     <template #default>
-    <div class="lw-live" :class="{ 'is-graph-expanded': graphExpanded }">
-      <section class="lw-sim__context" aria-labelledby="run-heading" data-panel="The what-if" data-test="run-context">
-        <h2 id="run-heading" class="lw-visually-hidden">Run and scenario context</h2>
+    <div class="lw-live" :class="{ 'is-graph-expanded': graphExpanded }" data-test="graph">
+      <section class="lw-sim__context" aria-label="Run and scenario context" data-test="run-context">
+        <div class="lw-sim__selector"><span>Scenario</span><Tip :text="`Run ${body?.run_id ?? runId}`"><b>Demo run</b></Tip></div>
+        <div class="lw-sim__selector"><span>Branch</span><Tip :text="`${base.branch_id} · ${provenance(base.replay)} · ${checkpoints}`"><b>Base</b></Tip></div>
+        <div class="lw-sim__selector"><span>Cohort</span><Tip :text="family?.about ?? 'No scenario family named by this run'"><b data-test="cohort-name">{{ family ? family.id.replaceAll('-', ' ') : 'Not named' }}</b></Tip></div>
+        <Tip text="Inspect the prepared scenario families; opening settings changes nothing."><button type="button" class="lw-button lw-button--quiet" data-test="settings" @click="settingsOpen = true">Scenario settings</button></Tip>
         <HowWeKnow test="how-run">
-          <dl>
-            <div><dt>Run</dt><dd data-test="run-id">{{ body?.run_id ?? runId ?? '–' }}</dd></div>
-            <div><dt>Branch</dt><dd>{{ base.branch_id ?? '–' }} · <span data-test="hypothetical">{{ PLAIN.branch }}</span></dd></div>
-            <div><dt>Checkpoint</dt><dd>{{ checkpoints }}</dd></div>
-            <div><dt>Scenario</dt><dd data-test="family">{{ family ? family.id : 'not named by this run' }}</dd></div>
-            <div><dt>Provenance</dt><dd>{{ provenance(base.replay) }}</dd></div>
-            <div><dt>Mode</dt><dd>{{ body ? (LABELS[body.mode] || body.mode) : '–' }}<template v-if="body">
-              · <span data-test="plain-mode">{{ PLAIN[body.mode] || LABELS[body.mode] || body.mode }}</span></template></dd></div>
-          </dl>
-          <p>The amount in the sentence above is the treasury's pending flow the scenario family delays
-            ({{ family?.params.flow_id ?? 'none named' }}), read from the treasury on this run's snapshot;
-            the delay is the family's delay_h.</p>
-          <p v-if="handoff" data-test="handoff">{{ handoff }}</p>
+          <span data-test="run-id">{{ body?.run_id ?? runId }}</span> · {{ base.branch_id }} · {{ provenance(base.replay) }} · {{ checkpoints }} · {{ LABELS[body?.mode] }}
+          <span data-test="family">{{ family?.id ?? 'not named by this run' }}</span>
+          <span data-test="hypothetical">{{ PLAIN.branch }}</span>
+          <span v-if="handoff" data-test="handoff">{{ handoff }}</span>
         </HowWeKnow>
-        <p v-if="handoffMismatch" class="lw-note lw-sim__handoff" role="status" data-test="handoff-mismatch">
-          {{ handoffMismatch }}
-        </p>
-        <button type="button" class="lw-button lw-button--quiet" data-test="settings" @click="settingsOpen = true">
-          Scenario settings
-        </button>
+        <p v-if="handoffMismatch" class="lw-note lw-sim__handoff" role="status" data-test="handoff-mismatch">{{ handoffMismatch }}</p>
       </section>
 
-      <section class="lw-live-panel lw-live__controls" aria-label="Round and controls" data-test="controls" data-panel="Round and controls">
-        <Tip test="phase-tip">
-          <div class="lw-live__phase" :class="`is-${phase.tone}`" role="status" data-test="phase">
-            {{ phase.icon }} {{ phase.text }}
-          </div>
-          <template #tip>
-            <span>Branch {{ base.branch_id ?? '–' }} · {{ PLAIN.branch }}.</span>
-            <span v-if="base.replay" data-test="replay-note"> {{ PLAIN.replay }}: these rounds were replayed, not run fresh.</span>
-          </template>
-        </Tip>
-        <Scrubber :model-value="display" :rounds="ticks" :loaded="loadedRounds" :t-hours="current?.t_hours ?? null"
-                  :hint="`Round n is simulated hour ${ROUND_HOURS}n. ←/→ step, Home and End jump; moving the cursor never creates a financial action.`"
-                  @update:model-value="scrub" />
-        <div class="lw-live__row">
-          <button type="button" class="lw-button" data-test="play" :disabled="!ticks.length"
-                  @click="playing ? pause() : play()">
-            {{ playing ? 'Pause playback' : 'Play' }}
-          </button>
-          <span v-if="paused" class="lw-live__note" data-test="paused">Playback paused; simulation may continue</span>
-          <a v-if="exportHref" class="lw-button lw-button--quiet" :href="exportHref" :download="exportName"
-             data-test="export">Export round {{ display }}</a>
+      <section class="lw-live__graph" aria-label="World map and actor inspector" data-test="relationships">
+        <div class="lw-sim__map">
+          <h2 data-test="relationships-title">Market relationships at round {{ display ?? '–' }}</h2>
+          <p class="lw-sim__sub">{{ worldMap.nodes.length }} actors · Cash flows and information</p>
+          <WorldMap :nodes="worldMap.nodes" :edges="worldMap.edges" :selected="mapSelected" :layout="MAP_LAYOUT" :legend="false"
+                    label="Actors and their typed relationships at the selected round"
+                    :empty="current ? 'No actor to draw' : 'Round not loaded'" @select="pickMap" />
         </div>
+        <div class="lw-live__inspector" data-test="inspector">
+          <h2>{{ actorInfo?.label ?? 'Select an actor' }}</h2>
+          <p class="lw-sim__sub" data-test="selected-round">Selected actor · Round {{ display ?? '–' }}</p>
+          <p v-if="!current" class="lw-live-empty">Round not loaded</p>
+          <article v-else-if="actorInfo" class="lw-sim__actor" data-test="actor-detail">
+            <h3>What changed</h3>
+            <ol v-if="actorTimeline.length" class="lw-sim__timeline" data-test="actor-actions">
+              <li v-for="x in actorTimeline" :key="x.id"><Tip :text="x.detail"><b>h{{ x.hour }} · {{ x.title }}</b><span>{{ x.text }}</span></Tip></li>
+            </ol>
+            <p v-else class="lw-sim__sub">No change recorded by this round.</p>
+            <HowWeKnow test="how-actor"><span>Role: {{ actorInfo.role }}. Objective: {{ actorInfo.objective }}. Observes: {{ actorInfo.sees }}.</span>
+              <span v-for="x in actorInfo.actions" :key="x.id">{{ x.id }} · {{ x.verdict }} · journal {{ x.journal ?? 'none' }} · evidence {{ x.evidence || 'none cited' }}</span>
+            </HowWeKnow>
+          </article>
+          <form class="lw-live__interview" data-test="interview" @submit.prevent="interview">
+            <label><span>Ask this actor</span><input v-model="question" maxlength="2000" placeholder="Why did this change?" data-test="question"></label>
+            <Tip test="ask-tip"><button type="submit" class="lw-button" :disabled="Boolean(interviewWhy)" data-test="ask">Interview</button>
+              <template #tip>Read-only: the answer changes nothing.<span v-if="interviewWhy" data-test="interview-why"> {{ interviewWhy }}.</span></template></Tip>
+          </form>
+          <label class="lw-live__token"><span>Operator access{{ token ? '' : ' required' }}</span><Tip text="Kept in this tab's memory only; never stored or exported."><input v-model="token" type="password" autocomplete="off" spellcheck="false" data-test="token" aria-label="Operator access"></Tip></label>
+          <button v-if="token" type="button" class="lw-button lw-button--quiet" data-test="forget" @click="token = ''">Forget access</button>
+          <p v-if="interviewError" class="lw-alert" role="alert" data-test="interview-error">{{ interviewError }}</p>
+          <article v-if="answer" class="lw-live__answer" data-test="answer">
+            <Tip :text="`Read-only answer · branch ${answer.branch_id}${answer.replay ? ` · ${PLAIN.replay}` : ''}`">{{ nameOf(answer.actor_id) }} at round {{ answer.round }}</Tip><p>{{ answer.answer }}</p>
+            <HowWeKnow v-if="answer.evidence_ids.length" test="how-answer">evidence: {{ answer.evidence_ids.join(', ') }}</HowWeKnow>
+          </article>
+          <a href="#simulation-evidence" class="lw-sim__source" @click.prevent="sourceOpen = !sourceOpen">Source evidence →</a>
+        </div>
+      </section>
 
-        <div class="lw-live__row lw-sim__access">
-          <label class="lw-live__token">
-            <span>Operator access</span>
-            <Tip text="Kept in this tab's memory only: never stored, never in the URL or the export.">
-              <input v-model="token" type="password" autocomplete="off" spellcheck="false" data-test="token">
-            </Tip>
-          </label>
-          <button v-if="token" type="button" class="lw-button lw-button--quiet" data-test="forget" @click="token = ''">
-            Forget access
-          </button>
-        </div>
-        <div class="lw-live__row">
-          <Tip test="fork-tip">
-            <button type="button" class="lw-button" data-test="fork" :disabled="Boolean(forkWhy)"
-                    :aria-expanded="confirming ? 'true' : 'false'" @click="confirming = true">
-              Try the plans on this shock
-            </button>
-            <template #tip>
-              <span data-test="fork-what">Tries each plan from round {{ display ?? '–' }} in its own what-if; approves nothing.</span>
-              <span v-if="forkWhy" data-test="fork-why"> {{ forkWhy }}.</span>
-            </template>
-          </Tip>
-        </div>
-        <div v-if="confirming && !forkWhy" class="lw-sim__confirm" role="group" aria-label="Confirm the fork" data-test="fork-confirm-panel">
-          <p>Try {{ listWords(POLICIES.map((p) => PLANS[p])) }} from round {{ display }}, each in its own
-            fresh what-if. It creates no approval and moves no money.</p>
-          <div class="lw-live__row">
-            <Tip :text="`Forks ${base.branch_id} at committed round ${display} into ${POLICIES.join(', ')}.`">
-              <button type="button" class="lw-button" data-test="fork-confirm" @click="confirmFork">Try the plans</button>
-            </Tip>
-            <button type="button" class="lw-button lw-button--quiet" data-test="fork-cancel" @click="confirming = false">Cancel</button>
+      <section class="lw-live__controls" aria-label="Round and controls" data-test="controls">
+        <div class="lw-sim__round-row">
+          <Tip :text="playing ? 'Pause local playback; the simulation job continues.' : 'Play committed rounds only; no financial action is created.'"><button type="button" class="lw-button lw-button--quiet" data-test="play" :disabled="!ticks.length" @click="playing ? pause() : play()">{{ playing ? 'Pause playback' : 'Play' }}</button></Tip>
+          <Scrubber :model-value="display" :rounds="ticks" :loaded="loadedRounds" :t-hours="current?.t_hours ?? null" :horizon="world ? HORIZON_ROUNDS : 0" :marks="shockMarks"
+                    :hint="`Round n is simulated hour ${ROUND_HOURS}n. ←/→ step, Home and End jump; moving the cursor never creates a financial action.`" @update:model-value="scrub" />
+          <div class="lw-sim__fork">
+            <Tip test="fork-tip"><button type="button" class="lw-button lw-button--quiet" data-test="fork" :disabled="Boolean(forkWhy)" :aria-expanded="confirming ? 'true' : 'false'" @click="confirming = true">Fork checkpoint</button>
+              <template #tip><span data-test="fork-what">Tries each plan from round {{ display ?? '–' }} in its own what-if; approves nothing.</span><span v-if="forkWhy" data-test="fork-why"> {{ forkWhy }}.</span></template></Tip>
+            <small>Playback only · No funds move</small>
           </div>
         </div>
-        <p v-if="forked" class="lw-live__note" role="status" data-test="forked">
-          <Tip :text="`Branches: ${forked.branch_ids.join(', ') || 'none named yet'}`">
-            Fork accepted at round {{ forked.round }} ·
-            {{ forked.done ? 'branches and cash paths loaded' : 'running; its branches appear here when it finishes' }}
-          </Tip>
-        </p>
-        <p v-if="forked?.lag" class="lw-live__note" role="status" data-test="fork-lag">
-          Fork progress not read: {{ forked.lag }}; still checking
-        </p>
+        <Tip test="phase-tip"><span class="lw-live__phase" :class="`is-${phase.tone}`" role="status" data-test="phase">{{ phase.icon }} {{ phase.text }}</span>
+          <template #tip>{{ phase.text }} · {{ base.branch_id }}<span v-if="base.replay" data-test="replay-note"> Replay: these rounds were replayed, not run fresh.</span></template></Tip>
+        <p v-if="paused" class="lw-sim__sub" data-test="paused">Playback paused; simulation may continue</p>
+        <div v-if="confirming && !forkWhy" class="lw-sim__confirm" role="group" aria-label="Confirm the fork" data-test="fork-confirm-panel">
+          <p>Try {{ listWords(POLICIES.map((p) => PLANS[p])) }} from round {{ display }}, each in its own fresh what-if. It creates no approval and moves no money.</p>
+          <Tip :text="`Forks ${base.branch_id} at committed round ${display} into ${POLICIES.join(', ')}.`"><button type="button" class="lw-button" data-test="fork-confirm" @click="confirmFork">Try the plans</button></Tip>
+          <button type="button" class="lw-button lw-button--quiet" data-test="fork-cancel" @click="confirming = false">Cancel</button>
+        </div>
+        <p v-if="forked" role="status" data-test="forked"><Tip :text="`Branches: ${forked.branch_ids.join(', ') || 'none named yet'}`">Fork accepted at round {{ forked.round }} · {{ forked.done ? 'branches and cash paths loaded' : 'running; its branches appear here when it finishes' }}</Tip></p>
+        <p v-if="forked?.lag" role="status" data-test="fork-lag">Fork progress not read: {{ forked.lag }}; still checking</p>
         <p v-if="forkError" class="lw-alert" role="alert" data-test="fork-error">{{ forkError }}</p>
       </section>
 
-      <CashPaths class="lw-live__cash" data-panel="Cash paths" :round="display" :at="roundAt" :paths="body?.cash_paths ?? []"
-                 :branches="body?.branches ?? []" />
+      <CashPaths class="lw-live__cash" :round="display" :at="roundAt" :paths="body?.cash_paths ?? []" :branches="body?.branches ?? []" :account="cashAccount" :epoch="epoch" />
 
-      <ActionFeed class="lw-live__feed" data-panel="Event feed" :round="display" :loaded="Boolean(current)" :posts="roundPosts"
-                  :intents="current?.intents ?? []" :cleared="current?.cleared ?? []"
-                  :replay="base.replay" :highlight="actor" @pick="pickEvent" />
-
-      <section class="lw-live-panel lw-live__graph" aria-label="World map and actor inspector" data-test="graph" data-panel="World map and actors">
-        <div class="lw-live__inspector" data-test="inspector">
-          <h2>Actors up to round {{ display ?? '–' }}</h2>
-          <p v-if="!current" class="lw-live-empty">Round not loaded</p>
-          <ul v-else class="lw-live__actors" aria-label="Actors, the keyboard way to the map">
-            <li v-for="a in actors" :key="a.id">
-              <Tip :text="`${a.id}${a.active ? ' · acted this round' : ''}`">
-                <button type="button" class="lw-button lw-button--quiet" :aria-pressed="a.id === actor ? 'true' : 'false'"
-                        :data-actor="a.id" @click="selectActor(a.id)">
-                  <span>{{ a.name }}</span>
-                  <span v-if="a.active" class="lw-sim__actor-id">acted this round</span>
-                </button>
-              </Tip>
-            </li>
-          </ul>
-
-          <Teleport defer to="#lw-actor-sheet" :disabled="!phone">
-            <article v-if="actorInfo" class="lw-sim__actor" data-test="actor-detail">
-              <h3>{{ actorInfo.label }}</h3>
-              <dl>
-                <dt>Role</dt><dd>{{ actorInfo.role || 'not named by the world file' }}</dd>
-                <dt>Objective</dt><dd>{{ actorInfo.objective || 'not named by the world file' }}</dd>
-                <dt>Observes</dt><dd>{{ actorInfo.sees }}</dd>
-              </dl>
-              <h4>Actions up to round {{ display }}</h4>
-              <ol v-if="actorInfo.actions.length" class="lw-sim__actions" data-test="actor-actions">
-                <li v-for="x in actorInfo.actions" :key="x.id">
-                  <span>Round {{ x.round }} · {{ x.type }}</span>
-                  <span :class="`is-${x.tone}`">{{ x.verdict }}</span>
-                </li>
-              </ol>
-              <HowWeKnow v-if="actorInfo.actions.length" test="how-actor">
-                <ul class="lw-sim__actions">
-                  <li v-for="x in actorInfo.actions" :key="x.id">
-                    {{ x.id }}<template v-if="x.journal"> · journal {{ x.journal }}</template>
-                    · evidence {{ x.evidence || 'none cited' }}
-                  </li>
-                </ul>
-              </HowWeKnow>
-              <p v-else class="lw-live-empty">No action by round {{ display }}</p>
-            </article>
-            <form class="lw-live__interview" data-test="interview" @submit.prevent="interview">
-              <label>
-                <span>Ask {{ actor ? nameOf(actor) : 'an actor' }} about round {{ display ?? '–' }}</span>
-                <textarea v-model="question" rows="2" maxlength="2000" data-test="question" />
-              </label>
-              <Tip test="ask-tip">
-                <button type="submit" class="lw-button" :disabled="Boolean(interviewWhy)" data-test="ask">
-                  Interview
-                </button>
-                <template #tip>
-                  <span>Read-only: the answer changes nothing.</span>
-                  <span v-if="interviewWhy" data-test="interview-why"> {{ interviewWhy }}.</span>
-                </template>
-              </Tip>
-            </form>
-            <p v-if="interviewError" class="lw-alert" role="alert" data-test="interview-error">{{ interviewError }}</p>
-            <article v-if="answer" class="lw-live__answer" data-test="answer">
-              <p class="lw-live__note">
-                <Tip :text="`Read-only answer · branch ${answer.branch_id}${answer.replay ? ` · ${PLAIN.replay}` : ''}`">
-                  {{ nameOf(answer.actor_id) }} at round {{ answer.round }}
-                </Tip>
-              </p>
-              <p>{{ answer.answer }}</p>
-              <HowWeKnow v-if="answer.evidence_ids.length" test="how-answer">
-                <p>evidence: {{ answer.evidence_ids.join(', ') }}</p>
-              </HowWeKnow>
-            </article>
-          </Teleport>
-        </div>
-
-        <div class="lw-sim__map">
-          <h2>World map · round {{ display ?? '–' }}</h2>
-          <WorldMap :nodes="worldMap.nodes" :edges="worldMap.edges" :selected="mapSelected" :focus="actor"
-                    label="Actors and their typed relationships at the selected round"
-                    :empty="current ? 'No actor to draw' : 'Round not loaded'" @select="pickMap" />
-          <details class="lw-sim__evidence" :open="graphExpanded" @toggle="evidenceToggled">
-            <summary>Evidence graph: posts and the citations behind each intent</summary>
-            <div class="lw-live__graph-view">
-              <LiveGraph ref="graphPanel" :graph-data="graphData" :loading="busy" :is-simulating="phase.running"
-                         @refresh="reload" @toggle-maximize="graphExpanded = !graphExpanded" />
-            </div>
-          </details>
-        </div>
-      </section>
+      <details id="simulation-evidence" class="lw-sim__source-evidence" :open="sourceOpen" @toggle="sourceOpen = $event.target.open">
+        <summary>Source evidence</summary>
+        <ul class="lw-live__actors" aria-label="Actors, the keyboard way to the map">
+          <li v-for="a in actors" :key="a.id"><Tip :text="`${a.id}${a.active ? ' · acted this round' : ''}`"><button type="button" class="lw-button lw-button--quiet" :aria-pressed="a.id === actor ? 'true' : 'false'" :data-actor="a.id" @click="selectActor(a.id)">{{ a.name }}<span v-if="a.active"> · acted this round</span></button></Tip></li>
+        </ul>
+        <a v-if="exportHref" class="lw-button lw-button--quiet" :href="exportHref" :download="exportName" data-test="export">Export round {{ display }}</a>
+        <ActionFeed class="lw-live__feed" :round="display" :loaded="Boolean(current)" :posts="roundPosts" :intents="current?.intents ?? []" :cleared="current?.cleared ?? []" :replay="base.replay" :highlight="actor" @pick="pickEvent" />
+        <details class="lw-sim__evidence" :open="graphExpanded" @toggle="evidenceToggled"><summary>Evidence graph: posts and the citations behind each intent</summary>
+          <div class="lw-live__graph-view"><LiveGraph ref="graphPanel" :graph-data="graphData" :loading="busy" :is-simulating="phase.running" @refresh="reload" @toggle-maximize="graphExpanded = !graphExpanded" /></div>
+        </details>
+      </details>
     </div>
-
-    <DetailSheet :open="actorSheet && phone" :title="actorInfo ? actorInfo.label : 'Actor'" test="actor-sheet"
-                 @close="actorSheet = false">
-      <div id="lw-actor-sheet" />
-    </DetailSheet>
 
     <DetailSheet :open="Boolean(evidence)" :title="evidence?.title ?? 'Evidence'" test="evidence-sheet" @close="evidence = null">
       <dl v-if="evidence" data-test="evidence-detail">
@@ -237,7 +136,7 @@
  * component's memory only — never storage, the URL, the export or a log. An accepted fork is
  * followed until its branches arrive or it fails. No POST is retried.
  */
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import LiveGraph from '../components/LiveGraph.vue'
 import Scrubber from '../components/Scrubber.vue'
@@ -430,23 +329,8 @@ const handoffMismatch = computed(() => {
   return parts.join(' ')
 })
 
-// A phone shows the selected actor in a full-height sheet; wider screens show it inline.
-const phone = ref(false)
-let phoneQuery = null
-const onPhone = (event) => { phone.value = event.matches }
-onMounted(() => {
-  phoneQuery = window.matchMedia?.('(max-width: 767px)') ?? null
-  phone.value = Boolean(phoneQuery?.matches)
-  phoneQuery?.addEventListener?.('change', onPhone)
-})
-onBeforeUnmount(() => phoneQuery?.removeEventListener?.('change', onPhone))
-const actorSheet = ref(false)
-
-/** One actor is selected: the map, the actor list, the inspector and the feed highlight follow it. */
-function selectActor (id) {
-  actor.value = id
-  if (phone.value) actorSheet.value = true
-}
+const sourceOpen = ref(false)
+function selectActor (id) { actor.value = id }
 
 const nameOf = (id) => world.value?.actors.find((a) => a.id === id)?.label ?? id
 
@@ -504,10 +388,22 @@ const shownOwners = computed(() => requestOwners(shownViews.value))
  * and it and an accepted one with no journal are drawn as part of the request. Every intent edge
  * carries its clearing verdict. Nothing after the cursor is drawn.
  */
+const MAP_LAYOUT = { treasury: [0.44, 0.56], lender: [0.44, 0.12], 'borrower-b': [0.13, 0.32],
+  'borrower-c': [0.74, 0.3], feed: [0.86, 0.08], payroll: [0.86, 0.57], venue: [0.17, 0.9], 'market-maker': [0.77, 0.9] }
+const ICON = { bank: 'M3 9l9-6 9 6H3M5 11v8m5-8v8m4-8v8m5-8v8M3 21h18',
+  company: 'M4 21V7h9v14M13 12h7v9M7 10h3m-3 4h3m-3 4h3m6-3h2',
+  paper: 'M5 3h10l4 4v14H5zM14 3v5h5M8 12h8M8 16h8',
+  chart: 'M3 21V14m6 7V9m6 12V4m6 17V1' }
+const cashAccount = computed(() => {
+  const t = treasury.value?.for === `${body.value?.snapshot_id}|${body.value?.run_id}` ? treasury.value.body : null
+  return t?.accounts?.find((a) => a.id === 'treasury/operating') ?? t?.accounts?.[0] ?? null
+})
+const shockMarks = computed(() => family.value?.startsRound ? { [family.value.startsRound]: 'Shock event' } : {})
 const worldMap = computed(() => {
   if (!current.value) return { nodes: [], edges: [] }
   const w = world.value
-  const nodes = new Map((w?.actors ?? []).map((a) => [a.id, { id: a.id, label: a.label, role: a.role }]))
+  const nodes = new Map((w?.actors ?? []).map((a) => [a.id, { id: a.id, label: a.label, role: a.role,
+    icon: ['treasury', 'lender'].includes(a.id) ? ICON.bank : a.role === 'borrower' ? ICON.company : a.id === 'venue' || a.id === 'market-maker' ? ICON.chart : ICON.paper }]))
   const node = (id) => nodes.has(id) || nodes.set(id, { id, label: id, role: null })
   const edges = new Map((w?.edges ?? []).map((e) => [e.id, { ...e, source: `world file, snapshot ${w.snapshotId}` }]))
   const r = display.value
@@ -546,7 +442,13 @@ const worldMap = computed(() => {
       }
     }
   }
-  return { nodes: [...nodes.values()], edges: [...edges.values()] }
+  return { nodes: [...nodes.values()], edges: [...edges.values()].map((e) => {
+    if (e.source?.startsWith('intent ')) {
+      const view = views.find((v) => v.intents.some((i) => e.source === `intent ${i.intent_id}`))
+      return { ...e, causal: true, tag: `h${view?.t_hours ?? '?'} ${e.tag}` }
+    }
+    return e
+  }) }
 })
 
 const mapSelected = computed(() => (actor.value ? { kind: 'node', id: actor.value } : null))
@@ -666,6 +568,22 @@ function same (graph) {
 
 const graphExpanded = ref(false)
 const actor = ref(null)
+watch([current, world], () => {
+  if (!actor.value && current.value) actor.value = world.value?.actors.find((a) => a.id === 'lender')?.id ?? actors.value.find((a) => a.id === 'lender')?.id ?? actors.value[0]?.id ?? null
+}, { immediate: true })
+
+const actorTimeline = computed(() => {
+  if (!actorInfo.value) return []
+  return shownViews.value.flatMap((v) => v.intents.filter((i) => i.type !== 'no_action' &&
+    (i.actor_id === actor.value || (i.type === 'request_advance' && i.params?.from === actor.value)))
+    .map((i) => {
+      const verdict = verdictOf(v.cleared.find((c) => c.intent_id === i.intent_id))
+      return { id: i.intent_id, hour: v.t_hours,
+        title: `${nameOf(i.actor_id)} · ${kindText(i.type)}`,
+        text: `${i.params?.amount ? money(i.params.amount) + ' · ' : ''}${verdict.text}`,
+        detail: `${i.intent_id} · ${verdict.journal ? `journal ${verdict.journal}` : ledgerNote(verdict)} · evidence ${(i.evidence_ids ?? []).join(', ') || 'none cited'}` }
+    })).sort((a, b) => a.hour - b.hour).slice(-3)
+})
 
 // A node or edge picked in the graph belongs to the run and round it was picked in: moving the
 // cursor (an unloaded round included) or showing another run closes its details. A poll that
@@ -954,258 +872,58 @@ const exportHref = computed(() => {
 </script>
 
 <style scoped>
-/* The live panel in the ivory system: the shared components read --live-* (Scrubber, ActionFeed,
-   CashPaths), mapped here onto the design tokens, so both themes follow tokens.css. */
 .lw-live {
-  --live-surface: var(--lw-surface);
-  --live-raised: var(--lw-surface-raised);
-  --live-ink: var(--lw-ink);
-  --live-muted: var(--lw-ink-muted);
-  --live-rule: var(--lw-rule);
-  --live-brand: var(--lw-brand);
-  --live-ok: var(--lw-ok-text);
-  --live-warn: var(--lw-warn-text);
-  --live-bad: var(--lw-bad-text);
-  display: grid;
-  gap: var(--lw-space-6);
-  grid-template-columns: minmax(0, 1fr);
-  margin-top: var(--lw-space-4);
-  color: var(--lw-ink);
+  --live-surface: var(--lw-surface); --live-raised: var(--lw-surface-raised);
+  --live-ink: var(--lw-ink); --live-muted: var(--lw-ink-muted); --live-rule: var(--lw-rule);
+  --live-brand: var(--lw-brand); --live-ok: var(--lw-ok-text); --live-warn: var(--lw-warn-text); --live-bad: var(--lw-bad-text);
+  display: grid; gap: 20px; min-width: 0; color: var(--lw-ink);
 }
-
-.lw-live > * { min-width: 0; }
-
-/* Desktop: map and inspector left, feed right; round controls and cash below. */
-@media (min-width: 1200px) {
-  .lw-live {
-    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-    grid-template-areas:
-      'context context'
-      'graph feed'
-      'controls cash';
-    align-items: start;
-  }
-
-  .lw-sim__context { grid-area: context; }
-  .lw-live__controls { grid-area: controls; }
-  .lw-live__cash { grid-area: cash; }
-  .lw-live__feed { grid-area: feed; }
-  .lw-live__graph { grid-area: graph; }
-}
-
-.lw-live :deep(.lw-live-panel) {
-  min-width: 0;
-  padding: var(--lw-space-4);
-  border: 1px solid var(--lw-rule);
-  border-radius: var(--lw-radius);
-  background: var(--lw-surface-raised);
-}
-
-.lw-live :deep(h2) {
-  margin: 0 0 var(--lw-space-3);
-  font-family: var(--lw-font-heading);
-  font-size: 22px;
-  line-height: 28px;
-  color: var(--lw-ink);
-}
-
-.lw-live :deep(.lw-live-empty),
-.lw-live__note {
-  margin: var(--lw-space-2) 0 0;
-  color: var(--lw-ink-muted);
-}
-
-.lw-live__phase { margin: 0 0 var(--lw-space-2); font-weight: 700; }
-.lw-live__phase.is-ok { color: var(--lw-ok-text); }
-.lw-live__phase.is-warn { color: var(--lw-warn-text); }
+.lw-live > *, .lw-live__graph > * { min-width: 0; }
+.lw-live :deep(h2) { font-family: var(--lw-font-heading); font-size: 26px; line-height: 1.2; margin: 0 0 6px; }
+.lw-sim__context { display: flex; flex-wrap: wrap; gap: 16px 28px; align-items: center; border-bottom: 1px solid var(--lw-rule); padding: 12px 0; }
+.lw-sim__selector { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.lw-sim__selector > span, .lw-sim__sub { color: var(--lw-ink-muted); }
+.lw-sim__selector b { display: inline-flex; min-height: 44px; align-items: center; border: 1px solid var(--lw-rule); border-radius: 4px; padding: 0 12px; font-weight: 500; text-transform: capitalize; }
+.lw-sim__handoff { flex-basis: 100%; margin: 0; }
+.lw-live__graph { display: grid; gap: 24px; }
+.lw-live__inspector { border-top: 1px solid var(--lw-rule); padding-top: 20px; }
+.lw-sim__sub { margin: 0 0 16px; font-size: 14px; }
+.lw-live :deep(.lw-cash-panel h2) { font: 600 15px var(--lw-font-text); margin: 0 0 12px; }
+.lw-sim__actor h3 { font-family: var(--lw-font-heading); font-size: 23px; font-weight: 500; margin: 24px 0 16px; }
+.lw-sim__timeline { margin: 0; padding: 0 0 0 16px; list-style: none; }
+.lw-sim__timeline li { position: relative; border-left: 1px solid var(--lw-warn); padding: 0 0 18px 20px; }
+.lw-sim__timeline li::before { content: ''; position: absolute; width: 10px; height: 10px; background: var(--lw-warn); border-radius: 50%; left: -6px; top: 5px; }
+.lw-sim__timeline b, .lw-sim__timeline span:not(.lw-tip) { display: block; }
+.lw-sim__timeline b { font-size: 14px; font-weight: 600; }
+.lw-sim__timeline li .lw-tip > span:not(.lw-tip__bubble) { color: var(--lw-ink-muted); font-size: 13px; margin-top: 4px; }
+.lw-live__interview { display: flex; align-items: end; gap: 10px; border-top: 1px solid var(--lw-rule); padding-top: 18px; margin-top: 14px; }
+.lw-live__interview label { display: grid; gap: 8px; flex: 1; min-width: 0; font-family: var(--lw-font-heading); font-size: 22px; }
+.lw-live input { width: 100%; box-sizing: border-box; min-height: 44px; padding: 8px 10px; border: 1px solid var(--lw-rule); border-radius: 4px; background: var(--lw-surface-raised); color: var(--lw-ink); font: 14px var(--lw-font-text); }
+.lw-live input:focus-visible { outline: 3px solid var(--lw-focus); outline-offset: 2px; }
+.lw-live__token { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; font-size: 12px; color: var(--lw-ink-muted); }
+.lw-live__token :deep(input) { max-width: 150px; }
+.lw-sim__source { display: inline-block; color: var(--lw-brand); margin-top: 12px; min-height: 44px; line-height: 44px; }
+.lw-live__controls { border-block: 1px solid var(--lw-rule); padding: 12px 0; }
+.lw-sim__round-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.lw-sim__round-row :deep(.lw-scrubber) { flex: 1 1 520px; }
+.lw-sim__round-row :deep(.lw-scrubber__track) { flex-basis: 280px; }
+.lw-sim__round-row :deep(.lw-scrubber__tick) { flex-basis: 22px; }
+.lw-sim__fork { display: grid; gap: 4px; text-align: right; }
+.lw-sim__fork small { color: var(--lw-ink-muted); font-size: 11px; }
+.lw-live__phase { font-size: 12px; color: var(--lw-ink-muted); }
 .lw-live__phase.is-bad { color: var(--lw-bad-text); }
-
-.lw-sim__context {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--lw-space-3) var(--lw-space-6);
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--lw-space-3) 0;
-  border-bottom: 1px solid var(--lw-rule);
-}
-
-.lw-sim__context dl {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--lw-space-3) var(--lw-space-6);
-  margin: 0;
-  min-width: 0;
-}
-
-.lw-sim__handoff { flex: 1 1 20rem; margin: 0; }
-.lw-sim__context dt { font-size: 13px; color: var(--lw-ink-muted); }
-.lw-sim__context dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
-
-.lw-live__row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--lw-space-3);
-  align-items: end;
-  margin-top: var(--lw-space-3);
-}
-
-.lw-live__token,
-.lw-live__interview label {
-  display: grid;
-  gap: var(--lw-space-1);
-  width: min(100%, 420px);
-  color: var(--lw-ink-muted);
-}
-
-.lw-live input,
-.lw-live textarea,
-.lw-sim__actor-sheet textarea {
-  min-height: var(--lw-target);
-  padding: var(--lw-space-2);
-  border: 1px solid var(--lw-ink-muted);
-  border-radius: var(--lw-radius);
-  background: var(--lw-surface-raised);
-  color: var(--lw-ink);
-  font: inherit;
-}
-
-.lw-live input:focus-visible,
-.lw-live textarea:focus-visible {
-  outline: 3px solid var(--lw-focus);
-  outline-offset: 2px;
-}
-
-.lw-sim__confirm {
-  margin-top: var(--lw-space-3);
-  padding: var(--lw-space-3);
-  border-left: 4px solid var(--lw-brand);
-  background: var(--lw-selected);
-}
-
-.lw-sim__confirm p { margin: 0; }
-
-.lw-live__graph {
-  display: grid;
-  gap: var(--lw-space-4);
-}
-
-.lw-live__actors {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--lw-space-2);
-}
-
-.lw-live__actors .lw-button[aria-pressed='true'] {
-  background: var(--lw-brand);
-  color: var(--lw-on-brand);
-}
-
-.lw-live__actors .lw-button {
-  flex-direction: column;
-  align-items: flex-start;
-  padding-block: var(--lw-space-1);
-  text-align: left;
-}
-
-.lw-sim__actor-id { font-size: 12px; font-weight: 400; }
-
-.lw-sim__actor { margin-top: var(--lw-space-4); }
-.lw-sim__actor h3 { margin: 0 0 var(--lw-space-2); font-size: 18px; }
-.lw-sim__actor h4 { margin: var(--lw-space-3) 0 var(--lw-space-2); font-size: 15px; }
-
-.lw-sim__actor dl {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
-  gap: var(--lw-space-1) var(--lw-space-3);
-  margin: 0;
-}
-
-.lw-sim__actor dt { color: var(--lw-ink-muted); }
-.lw-sim__actor dd { margin: 0; overflow-wrap: anywhere; }
-
-.lw-sim__actions {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.lw-sim__actions li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 var(--lw-space-3);
-  padding: var(--lw-space-1) 0;
-  border-top: 1px solid var(--lw-rule);
-  overflow-wrap: anywhere;
-}
-
-.lw-sim__actions .is-ok { color: var(--lw-ok-text); }
-.lw-sim__actions .is-bad { color: var(--lw-bad-text); }
-.lw-sim__actions .is-warn { color: var(--lw-warn-text); }
-.lw-sim__actions .is-muted { color: var(--lw-ink-muted); }
-
-.lw-live__interview {
-  display: grid;
-  gap: var(--lw-space-2);
-  margin-top: var(--lw-space-4);
-}
-
-.lw-live__answer {
-  margin-top: var(--lw-space-3);
-  padding: var(--lw-space-2) var(--lw-space-3);
-  background: var(--lw-selected);
-}
-
-/* From the tablet up the map leads its section; a phone reads the actor list first. */
-@media (min-width: 768px) {
-  .lw-sim__map { order: -1; }
-}
-
-.lw-sim__evidence { margin-top: var(--lw-space-3); }
-
-.lw-sim__evidence summary {
-  display: flex;
-  align-items: center;
-  min-height: var(--lw-target);
-  color: var(--lw-brand);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.lw-live__graph-view {
-  height: 360px;
-  overflow: hidden;
-  border: 1px solid var(--lw-rule);
-  border-radius: var(--lw-radius);
-}
-
+.lw-live__phase.is-warn { color: var(--lw-warn-text); }
+.lw-sim__confirm { margin-top: 12px; padding: 12px; background: var(--lw-selected); }
+.lw-sim__source-evidence summary, .lw-sim__evidence summary { cursor: pointer; color: var(--lw-brand); min-height: 44px; line-height: 44px; }
+.lw-live__actors { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.lw-live__actors [aria-pressed='true'] { background: var(--lw-selected); }
+.lw-live__graph-view { height: 360px; overflow: hidden; }
 .is-graph-expanded .lw-live__graph-view { height: 70vh; }
-
-/* The reused graph's toolbar keeps the 44 px touch target here. */
-.lw-live__graph-view :deep(.tool-btn) {
-  min-width: var(--lw-target);
-  min-height: var(--lw-target);
+.lw-live__answer { background: var(--lw-selected); padding: 12px; margin-top: 12px; }
+.lw-sim__families { list-style: none; padding: 0; }
+.lw-sim__families li { padding: 12px; border-bottom: 1px solid var(--lw-rule); }
+@media (min-width: 1200px) {
+  .lw-live__graph { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+  .lw-live__inspector { border-top: 0; border-left: 1px solid var(--lw-rule); padding: 0 0 0 24px; }
 }
-
-.lw-sim__families {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.lw-sim__families li {
-  padding: var(--lw-space-3) 0;
-  border-top: 1px solid var(--lw-rule);
-}
-
-.lw-sim__families li.is-current {
-  padding-left: var(--lw-space-3);
-  border-left: 4px solid var(--lw-brand);
-  background: var(--lw-selected);
-}
-
-.lw-sim__families p { margin: var(--lw-space-1) 0 0; }
 </style>

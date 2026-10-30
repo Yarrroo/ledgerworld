@@ -147,6 +147,7 @@ describe('the evidence graph draws when its disclosure opens', () => {
 
   const svg = (w) => w.get('[data-test="graph"] .graph-svg').element
   async function reveal (w) {
+    w.get('details.lw-sim__source-evidence').element.open = true
     const disclosure = w.get('details.lw-sim__evidence').element
     disclosure.open = true
     disclosure.dispatchEvent(new Event('toggle'))

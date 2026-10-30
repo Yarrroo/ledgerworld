@@ -80,7 +80,7 @@ const uid = `lw-map-${useId()}`
 const box = ref(null)
 const width = useWidth(box)
 
-const height = computed(() => (width.value < 600 ? 340 : 380))
+const height = computed(() => (width.value < 600 ? 420 : 380))
 const fixed = computed(() => Boolean(props.layout) && width.value >= 600)
 const showLabels = computed(() => width.value >= 600)
 
@@ -110,7 +110,7 @@ function lines (text, max) {
 const placed = computed(() => {
   const w = width.value
   const h = height.value
-  const nodeW = Math.min(184, Math.max(88, Math.floor(w / 4.2)))
+  const nodeW = w < 600 ? Math.max(112, Math.floor(w / 2) - 16) : Math.min(184, Math.max(148, Math.floor(w / 4.2)))
   const max = Math.floor(nodeW / 7.4)
   const [center, ...ring] = props.nodes
   const rx = w / 2 - nodeW / 2 - 8
@@ -120,7 +120,7 @@ const placed = computed(() => {
     : [])
   const at = (n, x, y) => {
     // an icon takes the box's left; the name and its sub line sit centred in what is left
-    const room = n.icon ? max - 4 : max
+    const room = n.icon ? Math.max(10, max - 5) : max
     const named = n.sub ? [...lines(n.label, room).slice(0, 2), n.sub] : lines(n.label, room)
     return {
       ...n, x, y, w: nodeW, tx: n.icon ? x + 13 : x, lines: named, step: named.length > 2 ? 13 : 15,
@@ -141,6 +141,7 @@ const placed = computed(() => {
       return at(n, w / 2 + rx * Math.cos(a), h / 2 + ry * Math.sin(a))
     })
   }
+  if (w < 600) return props.nodes.map((n, i) => at(n, w * (i % 2 ? 0.75 : 0.25), 40 + Math.floor(i / 2) * 100))
   return [
     at(center, w / 2, h / 2),
     ...ring.map((n, i) => {
@@ -185,8 +186,8 @@ const drawn = computed(() => {
 })
 
 /** Edge-label metrics at the label's 12px: a generous character width, so the estimate never runs short. */
-const CHAR = 6.8
-const TAG_H = 16
+const CHAR = 7.4
+const TAG_H = 24
 
 /**
  * Each edge's caption, placed where it overlaps no node box, no caption already placed and no
@@ -202,7 +203,7 @@ const tags = computed(() => {
   const free = (b) => b.x >= 0 && b.y >= 0 && b.x + b.w <= w && b.y + b.h <= h &&
     taken.every((o) => b.x + b.w <= o.x || o.x + o.w <= b.x || b.y + b.h <= o.y || o.y + o.h <= b.y)
   const out = []
-  for (const e of drawn.value) {
+  for (const e of [...drawn.value].sort((a, b) => Number(Boolean(b.causal)) - Number(Boolean(a.causal)))) {
     const text = cut(e.tag ?? e.label, 24)
     const tw = text.length * CHAR + 6
     const dx = e.x2 - e.x1
