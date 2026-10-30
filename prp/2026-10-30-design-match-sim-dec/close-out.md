@@ -35,4 +35,6 @@ settings remain read-only. Charts use run-owned settled cash, not today's projec
 unknown points break the line and prevent a shortfall claim. Narrow maps use two columns.
 
 No push, PR, merge or deploy was performed. The `devw stage` command was refused by the route
-hook as undeclared; workflow instrumentation needs a separate configuration follow-up.
+hook as undeclared; ops vet/log were recorded successfully. The final `pocket-pm receipt check`
+was refused as owner-only; it was not bypassed or reported as passed. Local vet/close receipts
+and the run report are supplied for the owner/landing process to validate.
