@@ -80,9 +80,7 @@ const shown = computed(() => (props.horizon
 const valueText = computed(() => props.modelValue == null
   ? 'No round committed yet'
   : `Round ${props.modelValue} of ${of.value} · ${props.tHours === null ? 'simulated time not loaded' : props.horizon ? `${props.tHours}h simulated` : `simulated t=${props.tHours} h`}`)
-const ariaText = computed(() => props.modelValue == null
-  ? valueText.value
-  : `${valueText.value} · ${props.tHours === null ? 'simulated time not loaded' : `simulated t=${props.tHours} h`}`)
+const ariaText = computed(() => valueText.value)
 
 function pick (r) {
   if (r !== props.modelValue) emit('update:modelValue', r)

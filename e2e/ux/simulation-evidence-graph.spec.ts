@@ -46,6 +46,13 @@ test('the evidence graph draws at its open size on first opening', async ({ page
   await expect(slider).toHaveAttribute('aria-valuenow', String(last - 1))
   await expect(page.locator('[data-test="graph"]')).toContainText(`Market relationships at round ${last - 1}`)
 
+  // Keeping the inner graph open while closing its parent must not strand it at 0×0.
+  await page.locator('#simulation-evidence > summary').click()
+  await slider.focus()
+  await page.keyboard.press('Home')
+  await page.locator('.lw-sim__source').click()
+  await expect(page.locator('#simulation-evidence > summary')).toBeFocused()
+  await expect.poll(async () => (await drawing(page)).w).toBeGreaterThan(0)
   expect(await sideways(page), 'Live simulation scrolls sideways').toBeLessThanOrEqual(0)
   if (process.env.UX_SHOTS) {
     await disclosure.screenshot({ path: join(process.env.UX_SHOTS, `${info.project.name}-evidence-graph.png`) })

@@ -154,6 +154,21 @@ describe('the evidence graph draws when its disclosure opens', () => {
     await flushPromises()
   }
 
+  it('reopening Source evidence redraws an already-open graph after a hidden scrub', async () => {
+    const { w } = await open(() => run())
+    await reveal(w)
+    const outer = w.get('details.lw-sim__source-evidence').element
+    outer.open = false
+    outer.dispatchEvent(new Event('toggle'))
+    await flushPromises()
+    await scrubTo(w, 4)
+    expect(svg(w).getAttribute('viewBox')).toBe('0 0 0 0')
+    outer.open = true
+    outer.dispatchEvent(new Event('toggle'))
+    await flushPromises()
+    expect(svg(w).getAttribute('viewBox')).toBe('0 0 640 400')
+  })
+
   it('first opening draws at the open size, not the closed one', async () => {
     const { w } = await open(() => run())
     expect(svg(w).getAttribute('viewBox')).toBe('0 0 0 0') // drawn while closed

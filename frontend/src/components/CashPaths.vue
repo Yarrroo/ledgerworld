@@ -14,13 +14,14 @@
             <path v-for="s in series" :key="s.branch_id" :d="pathOf(s.points)" :class="['lw-cash-chart__line', `is-${s.policy ?? 'base'}`]" :data-policy="s.policy ?? 'base'" />
             <line v-if="cursorHour !== null" :x1="x(cursorHour)" :x2="x(cursorHour)" y1="12" y2="148" class="lw-cash-chart__cursor" data-test="cash-cursor" />
           </svg>
-          <Tip v-for="p in chartPoints" :key="p.t" class="lw-cash-chart__point" :style="{ left: `${x(hour(p.t))}px`, top: `${p.minor === null ? 148 : y(p.minor)}px` }" toggle>
+          <Tip v-for="p in chartPoints" :key="p.t" class="lw-cash-chart__point" :style="{ left: `${x(hour(p.t))}px`, top: '12px' }" toggle>
             <button type="button" data-test="cash-point" :aria-label="`h${hour(p.t)}: ${p.text}`" />
             <template #tip>h{{ hour(p.t) }} · {{ p.text }}</template>
           </Tip>
         </div>
         <div>
-          <ul class="lw-cash-chart__legend" aria-label="Cash paths"><li v-for="s in series" :key="s.branch_id"><span :class="`is-${s.policy ?? 'base'}`" />{{ s.name }}</li><li v-if="floorKnown"><span class="is-floor"/>Reserve floor ({{ money(account.floor) }})</li></ul>
+          <ul class="lw-cash-chart__legend" aria-label="Cash paths"><li v-for="s in series" :key="s.branch_id"><span :class="`is-${s.policy ?? 'base'}`" />{{ s.name }}{{ s.replay ? ' · Replay' : '' }}</li><li v-if="floorKnown"><span class="is-floor"/>Reserve floor ({{ money(account.floor) }})</li></ul>
+          <p v-if="!floorKnown" class="lw-live-empty" data-test="floor-unavailable">Reserve floor unavailable</p>
           <Tip v-if="shortfall" :text="`No action's lowest known cash ${money(shortfall.low.value)} against reserve floor ${money(account.floor)}. ${shortfall.branch_id}`"><p class="lw-cash-chart__shortfall" data-test="cash-shortfall">! Treasury reserve shortfall without protection: <b>{{ formatMoney(shortfall.minor, currency) }} at h{{ hour(shortfall.low.t) }}</b></p></Tip>
         </div>
       </div>
@@ -66,30 +67,32 @@ const rows = computed(() => props.paths.map((p) => {
   const point = p.points.find((x) => Date.parse(x.t) === props.at)
   return { ...p, name: nameOf(b), replay: Boolean(b?.replay), text: point ? metricText(point.value) : `No point at round ${props.round}` }
 }))
+const primaryPath = computed(() => props.account
+  ? props.paths.find((p) => p.account_id === props.account.id)
+  : props.paths.find((p) => meta.value.get(p.branch_id)?.parent_branch_id === null) ?? props.paths[0])
+const currency = computed(() => props.account?.currency ?? primaryPath.value?.points[0]?.value.currency ?? 'USD')
 const series = computed(() => {
-  if (!props.account || props.epoch === null) return []
-  const matching = props.paths.filter((p) => p.account_id === props.account.id)
+  if (!primaryPath.value || props.epoch === null) return []
+  const matching = props.paths.filter((p) => p.account_id === primaryPath.value.account_id)
   const policies = matching.filter((p) => meta.value.get(p.branch_id)?.policy)
   return (policies.length ? policies : matching).map((p) => {
     const b = meta.value.get(p.branch_id)
     const first = Math.min(...p.points.map((x) => Date.parse(x.t)))
     const parent = matching.find((q) => q.branch_id === b?.parent_branch_id)
     const prefix = parent?.points.filter((q) => Date.parse(q.t) < first) ?? []
-    return { ...p, policy: b?.policy, name: nameOf(b), replay: Boolean(b?.replay), points: [...prefix, ...p.points].filter((x) => Number.isFinite(Date.parse(x.t)) && x.value.currency === props.account.currency).sort((a, b) => Date.parse(a.t) - Date.parse(b.t)) }
+    return { ...p, policy: b?.policy, name: nameOf(b), replay: Boolean(b?.replay), points: [...prefix, ...p.points].filter((x) => Number.isFinite(Date.parse(x.t)) && x.value.currency === currency.value).sort((a, b) => Date.parse(a.t) - Date.parse(b.t)) }
   })
 })
 const chartPoints = computed(() => {
   const points = new Map()
   for (const s of series.value) for (const p of s.points) {
     const key = Date.parse(p.t)
-    const group = points.get(key) ?? { t: p.t, values: [], amounts: [] }
-    group.values.push(`${s.name}: ${metricText(p.value)} · ${s.branch_id}${s.replay ? ' · Replay' : ''}`)
-    if (p.value.minor !== null) group.amounts.push(p.value.minor)
+    const group = points.get(key) ?? { t: p.t, values: [] }
+    group.values.push(`${s.name}: ${metricText(p.value)} · ${s.branch_id}${s.replay ? ' · Replay' : ''} · as of ${p.value.as_of ?? p.t}`)
     points.set(key, group)
   }
-  return [...points.values()].map((p) => ({ t: p.t, text: p.values.join('; '), minor: p.amounts.length ? Math.max(...p.amounts) : null }))
+  return [...points.values()].map((p) => ({ t: p.t, text: p.values.join('; ') }))
 })
-const currency = computed(() => props.account?.currency ?? 'USD')
 const floorKnown = computed(() => props.account?.floor?.status === 'known' && Number.isSafeInteger(props.account.floor.minor) && props.account.floor.currency === currency.value)
 const hour = (t) => (Date.parse(t) - props.epoch) / 3_600_000
 const cursorHour = computed(() => props.at !== null && props.epoch !== null ? (props.at - props.epoch) / 3_600_000 : null)
@@ -137,8 +140,9 @@ const shortfall = computed(() => {
 .lw-cash-chart__floor { stroke: var(--lw-ink-muted); stroke-dasharray: 6 4; }
 .lw-cash-chart__cursor { stroke: var(--lw-ink-muted); stroke-dasharray: 2 4; }
 .lw-cash-chart__point { position: absolute; width: 0; height: 0; }
-.lw-cash-chart__point button { position: absolute; left: -16px; top: -16px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
+.lw-cash-chart__point button { position: absolute; left: -8px; top: 0; width: 16px; height: 136px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; }
 .lw-cash-chart__point button:focus-visible { outline: 3px solid var(--lw-focus); }
+.lw-cash-chart__point.is-open button { border-left: 1px dotted var(--lw-ink-muted); }
 .lw-cash-chart__legend { display: flex; flex-wrap: wrap; gap: 10px 16px; list-style: none; padding: 0; margin: 0; font-size: 12px; }
 .lw-cash-chart__legend li { display: flex; gap: 6px; align-items: center; }
 .lw-cash-chart__legend span { width: 20px; border-top: 2px solid var(--lw-ink-muted); }

@@ -382,6 +382,13 @@ describe('scrubber fixture', () => {
 })
 
 describe('review findings, each pinned', () => {
+  it('Source evidence opens and transfers keyboard focus to the disclosure', async () => {
+    const { wrapper: w } = await open(run())
+    await w.get('.lw-sim__source').trigger('click')
+    await flushPromises()
+    expect(w.get('#simulation-evidence').attributes('open')).toBeDefined()
+    expect(document.activeElement).toBe(w.get('#simulation-evidence > summary').element)
+  })
   it('another run selected: the old run\'s state cannot fork or interview into the new one', async () => {
     const { wrapper: w, router } = await open(run())
     await w.get('[data-test="token"]').setValue('demo-token-for-test')
@@ -454,6 +461,7 @@ describe('review findings, each pinned', () => {
     const { wrapper: w } = await open(body)
     await scrubTo(w, 4)
     expect(text(w, 'cursor')).toBe('Round 4 of 5 · simulated t=17 h')
+    expect(w.get('[data-test="scrubber-slider"]').attributes('aria-valuetext')).toBe(text(w, 'cursor'))
     expect(text(w, 'cash-value')).toBe('$42,000')
     await scrubTo(w, 2)
     expect(text(w, 'cursor')).toBe('Round 2 of 5 · simulated time not loaded')

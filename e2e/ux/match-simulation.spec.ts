@@ -67,6 +67,7 @@ test('Simulation as mockup 04', async ({ page, request, baseURL }, info) => {
   await page.keyboard.press('End')
   await expect($('cursor')).toContainText(`Round ${run.committed_round} of 18`)
   await page.locator('.lw-sim__source').click()
+  await expect(page.locator('#simulation-evidence > summary')).toBeFocused()
   await expect($('feed')).toBeVisible()
   await page.locator('.lw-sim__source').click()
   await page.locator('h1').click()

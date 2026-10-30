@@ -12,6 +12,25 @@ const props = () => ({ round: 5, at: epoch + 20 * 3600000, epoch,
 })
 
 describe('Simulation cash outlook', () => {
+  it('still draws run-owned paths when the auxiliary treasury reading is unavailable', () => {
+    const w = mount(CashPaths, { props: { ...props(), account: null } })
+    expect(w.find('[data-test="policy-chart"]').exists()).toBe(true)
+    expect(w.find('[data-test="cash-floor"]').exists()).toBe(false)
+    expect(w.get('[data-test="floor-unavailable"]').text()).toContain('Reserve floor unavailable')
+    w.unmount()
+  })
+  it('labels replayed policy curves visibly even when the base is fresh', () => {
+    const p = props()
+    p.branches[1].replay = true
+    const w = mount(CashPaths, { props: p })
+    expect(w.get('.lw-cash-chart__legend').text()).toContain('Do nothing · Replay')
+    w.unmount()
+  })
+  it('uses a full-height hour target rather than a target only at the top curve', () => {
+    const w = mount(CashPaths, { props: props() })
+    expect(w.get('.lw-cash-chart__point').attributes('style')).toContain('top: 12px')
+    w.unmount()
+  })
   it('plots API paths from the parent prefix and names the real low-point gap', () => {
     const w = mount(CashPaths, { props: props() })
     expect(w.get('[data-policy="no-action"]').attributes('d')).toMatch(/^M64,/)

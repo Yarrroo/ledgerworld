@@ -59,7 +59,7 @@
             <Tip :text="`Read-only answer · branch ${answer.branch_id}${answer.replay ? ` · ${PLAIN.replay}` : ''}`">{{ nameOf(answer.actor_id) }} at round {{ answer.round }}</Tip><p>{{ answer.answer }}</p>
             <HowWeKnow v-if="answer.evidence_ids.length" test="how-answer">evidence: {{ answer.evidence_ids.join(', ') }}</HowWeKnow>
           </article>
-          <a href="#simulation-evidence" class="lw-sim__source" @click.prevent="sourceOpen = !sourceOpen">Source evidence →</a>
+          <a href="#simulation-evidence" class="lw-sim__source" @click.prevent="toggleSource">Source evidence →</a>
         </div>
       </section>
 
@@ -89,7 +89,7 @@
 
       <CashPaths class="lw-live__cash" :round="display" :at="roundAt" :paths="body?.cash_paths ?? []" :branches="body?.branches ?? []" :account="cashAccount" :epoch="epoch" />
 
-      <details id="simulation-evidence" class="lw-sim__source-evidence" :open="sourceOpen" @toggle="sourceOpen = $event.target.open">
+      <details id="simulation-evidence" ref="sourceEvidence" class="lw-sim__source-evidence" :open="sourceOpen" @toggle="sourceOpen = $event.target.open">
         <summary>Source evidence</summary>
         <ul class="lw-live__actors" aria-label="Actors, the keyboard way to the map">
           <li v-for="a in actors" :key="a.id"><Tip :text="`${a.id}${a.active ? ' · acted this round' : ''}`"><button type="button" class="lw-button lw-button--quiet" :aria-pressed="a.id === actor ? 'true' : 'false'" :data-actor="a.id" @click="selectActor(a.id)">{{ a.name }}<span v-if="a.active"> · acted this round</span></button></Tip></li>
@@ -136,7 +136,7 @@
  * component's memory only — never storage, the URL, the export or a log. An accepted fork is
  * followed until its branches arrive or it fails. No POST is retried.
  */
-import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import LiveGraph from '../components/LiveGraph.vue'
 import Scrubber from '../components/Scrubber.vue'
@@ -330,6 +330,15 @@ const handoffMismatch = computed(() => {
 })
 
 const sourceOpen = ref(false)
+const sourceEvidence = ref(null)
+async function toggleSource () {
+  sourceOpen.value = !sourceOpen.value
+  await nextTick()
+  if (sourceOpen.value) {
+    sourceEvidence.value?.querySelector('summary')?.focus({ preventScroll: true })
+    sourceEvidence.value?.scrollIntoView?.({ block: 'start' })
+  }
+}
 function selectActor (id) { actor.value = id }
 
 const nameOf = (id) => world.value?.actors.find((a) => a.id === id)?.label ?? id
@@ -408,6 +417,7 @@ const worldMap = computed(() => {
   const edges = new Map((w?.edges ?? []).map((e) => [e.id, { ...e, source: `world file, snapshot ${w.snapshotId}` }]))
   const r = display.value
   const views = shownViews.value
+  const hours = new Map(views.flatMap((v) => v.intents.map((i) => [i.intent_id, v.t_hours])))
   const authors = new Map((body.value.feed ?? [])
     .filter((p) => p.round <= r && p.branch_id === base.value.branch_id).map((p) => [p.post_id, p.author]))
   const owners = shownOwners.value
@@ -444,8 +454,7 @@ const worldMap = computed(() => {
   }
   return { nodes: [...nodes.values()], edges: [...edges.values()].map((e) => {
     if (e.source?.startsWith('intent ')) {
-      const view = views.find((v) => v.intents.some((i) => e.source === `intent ${i.intent_id}`))
-      return { ...e, causal: true, tag: `h${view?.t_hours ?? '?'} ${e.tag}` }
+      return { ...e, causal: true, tag: `h${hours.get(e.source.slice('intent '.length)) ?? '?'} ${e.tag}` }
     }
     return e
   }) }
@@ -589,6 +598,10 @@ const actorTimeline = computed(() => {
 // cursor (an unloaded round included) or showing another run closes its details. A poll that
 // moves neither keeps them.
 const graphPanel = ref(null)
+watch(sourceOpen, async (open) => {
+  await nextTick()
+  if (open && sourceOpen.value && graphExpanded.value) graphPanel.value?.redraw()
+})
 watch([runId, () => body.value?.run_id, display], () => graphPanel.value?.closeDetailPanel())
 
 // The graph is drawn while its disclosure is closed, at 0×0: opening it redraws the round on the
