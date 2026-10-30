@@ -616,7 +616,7 @@ describe('accessibility: keyboard review (mocked transport only)', () => {
     const { w, calls } = await reviewReady()
     expect(focused().id).toBe('review-heading')
     const buttons = w.get('[data-test="review"]').findAll('button').map((b) => b.text())
-    expect(buttons).toEqual(['Approve', 'Cancel']) // logical order: the act, then the way out
+    expect(buttons).toEqual(['Show password', 'Create approval', 'Cancel']) // logical order: the act, then the way out
     await w.get('[data-test="review"]').trigger('keydown', { key: 'Escape' })
     await flushPromises()
     expect(w.find('[data-test="review"]').exists()).toBe(!c.escape_dismisses_review_without_post)
@@ -2404,5 +2404,220 @@ describe('the Approval summary shows the approval this tab holds (board item 151
       expect(held(w).exists()).toBe(false)
       expect(text(w, 'message')).toContain('was created after this screen moved on')
     })
+  })
+})
+
+
+describe('Execution mockup 06: aggregate evidence and compact receipts', () => {
+  async function showing (legs, incidents = []) {
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': executionBody({ legs, incidents })
+    })
+    return open(Execution, '/execution')
+  }
+
+  const reached = (w) => w.get('[data-test="execution-progress"]').findAll('li').map((l) => l.attributes('data-reached') === 'true')
+
+  it('does not infer success from an empty execution', async () => {
+    const w = await showing([])
+    expect(reached(w)).toEqual([true, false, false, false])
+    expect(text(w, 'execution-banner')).not.toContain('Reconciled as of')
+  })
+
+  it('requires every provider leg, not just the first settled leg', async () => {
+    const w = await showing([advance(), sentPayout()])
+    expect(reached(w)).toEqual([true, true, false, false])
+    expect(text(w, 'execution-banner')).not.toContain('Reconciled as of')
+  })
+
+  it('an incident removes the aggregate reconciliation claim', async () => {
+    const leg = advance()
+    const w = await showing([leg], [{ leg_id: leg.leg_id, kind: 'amount_mismatch', state: 'open', opened_at: '2026-11-05T10:02:00Z' }])
+    expect(reached(w)).toEqual([true, true, true, false])
+    expect(text(w, 'execution-banner')).not.toContain('Reconciled as of')
+    expect(text(w, 'receipt-pill')).toContain('Needs review')
+  })
+
+  it('ledger-only reconciliation never claims provider submission or confirmation', async () => {
+    const w = await showing([{ ...advance(), kind: 'repayment', provider_id: null, receipt: null }])
+    expect(reached(w)).toEqual([true, false, false, true])
+    expect(text(w, 'receipt-amount')).toBe('Unavailable')
+    expect(text(w, 'execution-banner')).toContain('Reconciled as of')
+  })
+
+  it('a missing journal cannot produce an aggregate reconciled banner', async () => {
+    const w = await showing([{ ...advance(), journal_id: null }])
+    expect(reached(w)).toEqual([true, true, true, false])
+    expect(text(w, 'execution-banner')).not.toContain('Reconciled as of')
+    expect(text(w, 'receipt-pill')).not.toContain('· Reconciled')
+    expect(w.findAll('h2').some((h) => h.text() === 'Ledger reconciliation')).toBe(false)
+  })
+
+  it('receipt ids start folded and reveal copy controls when expanded', async () => {
+    const w = await showing([advance()])
+    const receipt = w.get('[data-test="receipt"]')
+    expect(receipt.attributes('open')).toBeUndefined()
+    receipt.element.open = true
+    await nextTick()
+    expect(receipt.text()).toContain(advance().receipt.provider_id)
+    expect(receipt.findAll('button').map((b) => b.attributes('aria-label'))).toEqual([
+      'Copy Request id', 'Copy Provider id', 'Copy Journal'
+    ])
+  })
+})
+
+describe('Approval mockup 07: password presentation', () => {
+  it('show/hide changes only the input type and resets on review close', async () => {
+    const { w, calls } = await reviewReady()
+    const input = w.get('[data-test="token"]')
+    expect(input.attributes('type')).toBe('password')
+    await w.get('[data-test="show-token"]').trigger('click')
+    expect(input.attributes('type')).toBe('text')
+    expect(w.get('[data-test="show-token"]').attributes('aria-pressed')).toBe('true')
+    expect(document.body.innerHTML).not.toContain(TOKEN)
+    await closeDialog(w)
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-test="token"]').attributes('type')).toBe('password')
+    expect(w.get('[data-test="token"]').element.value).toBe(TOKEN)
+    expect(posts(calls)).toEqual([])
+  })
+})
+
+
+describe('Approval mockup 07: nested tooltip dismissal', () => {
+  it('Escape from a tooltip still dismisses the modal and returns focus', async () => {
+    const { w, calls } = await reviewReady()
+    const tip = w.get('[data-test="fee-context"]')
+    tip.element.focus()
+    await tip.trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(w.find('[data-test="review"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(w.get('[data-test="review-plan"]').element)
+    expect(posts(calls)).toEqual([])
+  })
+})
+
+
+describe('Execution independent review regressions', () => {
+  it('keeps bound terms usable when the Decisions refresh fails', async () => {
+    let failed = false
+    const { w } = await reviewReady({ 'GET /decisions/run-1': () => failed ? refuse(404, 'not_found') : decisionsBody() })
+    await approve(w)
+    const errors = []
+    w.vm.$.appContext.config.errorHandler = (error) => errors.push(error.message)
+    failed = true
+    await reread()
+    await flushPromises()
+    expect(errors).toEqual([])
+    expect(text(w, 'plan-hash')).toBe(boundApproval.instance.plan_hash)
+    expect(disabled(w, 'execute')).toBe(false)
+  })
+
+  it('does not attribute a different run policy to an explicit execution id', async () => {
+    serve({
+      'GET /overview': overview(),
+      'GET /decisions/run-a': { ...decisionsBody(), selected: 'no-action' },
+      'GET /executions/apr-1': executionBody({ legs: [advance()] })
+    })
+    const w = await open(Execution, '/execution?run_id=run-a&execution_id=apr-1')
+    expect(text(w, 'summary')).not.toContain('Do nothing')
+    expect(text(w, 'hero-subtitle')).not.toContain('Do nothing')
+  })
+
+  it.each(['failed', 'unknown', 'submitted'])('%s with no provider evidence does not prove submission', async (state) => {
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': executionBody({ legs: [{ ...advance(), state, provider_id: null, receipt: null, reconciled: false, journal_id: null }] })
+    })
+    const w = await open(Execution, '/execution')
+    const submitted = w.get('[data-test="execution-progress"]').findAll('li')[1]
+    expect(submitted.attributes('data-reached')).toBe('false')
+    expect(submitted.text()).not.toContain('Sent to provider')
+    const perLeg = w.get('[data-test="steps"]')
+    expect(perLeg.findAll('.lw-steps__done').some((step) => step.text().includes('Submitted'))).toBe(false)
+  })
+
+  it('the hero count excludes a settled leg with an open incident', async () => {
+    const leg = advance()
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': executionBody({ legs: [leg], incidents: [{ leg_id: leg.leg_id, kind: 'amount_mismatch', state: 'open', opened_at: '2026-11-05T10:02:00Z' }] })
+    })
+    const w = await open(Execution, '/execution')
+    expect(text(w, 'hero-subtitle')).toContain('0 of 1 legs reconciled')
+  })
+
+  it('uses the provider leg purpose, never an invented payroll destination', async () => {
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': executionBody({ legs: [payout({ label: 'Rent payment', receipt: null, provider_id: null })] })
+    })
+    const w = await open(Execution, '/execution')
+    expect(w.get('[data-test="leg-payout"] .lw-leg__name').text()).toContain('Rent payment')
+    expect(w.get('[data-test="leg-payout"] .lw-leg__name').text()).not.toContain('Payroll')
+  })
+})
+
+
+describe('Execution final review guards', () => {
+  it('keeps the approved policy context after Decisions selects a different policy', async () => {
+    let decision = decisionsBody()
+    const { w } = await reviewReady({ 'GET /decisions/run-1': () => decision })
+    await approve(w)
+    decision = { ...decision, selected: 'no-action' }
+    await reread()
+    await flushPromises()
+    expect(text(w, 'hero-subtitle')).toContain('Borrow just enough · approved, not sent')
+    expect(text(w, 'review')).not.toContain('Do nothing')
+  })
+
+  it('keeps the nonzero fee context when the Decisions refresh is unavailable', async () => {
+    let fail = false
+    const { w } = await reviewReady({ 'GET /decisions/run-1': () => fail ? refuse(404, 'not_found') : decisionsBody() })
+    await approve(w)
+    fail = true
+    await reread()
+    await flushPromises()
+    expect(text(w, 'branch-fees')).toContain('$800')
+    expect(text(w, 'scenario-cost')).toBe(COST)
+  })
+
+  it('captures policy and scenario context when the approval POST starts, not when it answers', async () => {
+    let answer, decision = decisionsBody()
+    const { w } = await reviewReady({
+      'GET /decisions/run-1': () => decision,
+      'POST /approvals': () => new Promise((resolve) => { answer = resolve })
+    })
+    await w.get('[data-test="confirm"]').trigger('click')
+    decision = { ...decision, selected: 'no-action', cohort: 'a-new-cohort' }
+    await reread()
+    await flushPromises()
+    answer(approvalBody())
+    await flushPromises()
+    expect(text(w, 'review')).toContain('Borrow just enough')
+    expect(text(w, 'review')).not.toContain('Do nothing')
+    expect(text(w, 'review')).not.toContain('a-new-cohort')
+  })
+
+  it('pending ledger-only repayment does not block provider submission evidence', async () => {
+    const local = { ...advance(), kind: 'repayment', label: 'repayment (simulated)', state: 'pending', receipt: null, provider_id: null, reconciled: false, journal_id: null }
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': executionBody({ legs: [advance(), local] })
+    })
+    const w = await open(Execution, '/execution')
+    expect(w.get('[data-test="execution-progress"]').findAll('li')[1].attributes('data-reached')).toBe('true')
+    const row = w.get('[data-test="leg-repayment"]')
+    expect(row.get('[data-test="receipt-mode"]').text()).toBe('Ledger only (simulated)')
+    expect(row.findAll('.lw-steps__skipped').map((step) => step.text())).toEqual([
+      '– Submitted · not applicable', '– Provider-confirmed · not applicable'
+    ])
   })
 })

@@ -147,7 +147,7 @@ test('approve, then execute: one POST each, the dialog follows the execution to 
   const leg = page.locator('[data-test="leg-advance"]')
   await expect(leg.locator('[data-test="leg-status"]')).toHaveText(/reconciled as of .* UTC/)
   await expect(leg.locator('[aria-current="step"]')).toContainText('Reconciled')
-  await leg.locator('[data-test="receipt"] summary').click()
+  await leg.locator('.lw-leg__chevron').click()
   await expect(leg.locator('[data-test="receipt"]')).toContainText(EXECUTION.legs[0].journal_id)
   await expect($(page, 'no-incidents')).toBeVisible()
   expect(await sideways(page)).toBeLessThanOrEqual(0)
