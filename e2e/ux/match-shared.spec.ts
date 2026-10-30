@@ -33,7 +33,7 @@ const ACTION: Record<string, RegExp | null> = {
   '/treasury': /^Rehearse a cash shock$/,
   '/lending': /^Compare funding plans$/,
   '/simulation': /^Compare policies$/,
-  '/decisions': /^Review current plan$/,
+  '/decisions': null,
   '/execution': /^Review plan$/
 }
 const SIDEBAR = ['Overview', 'Treasury', 'Lending', 'Simulation', 'Decisions', 'Execution']

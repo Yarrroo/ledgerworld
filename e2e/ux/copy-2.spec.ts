@@ -14,11 +14,13 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { readOnly } from '../guard'
-import { $, PLANS, fmt, folded, lead, open, plainHeadings, read, technical, words } from './copy'
+import { $, fmt, folded, lead, open, plainHeadings, read, technical, words } from './copy'
 import { demoRunId, settled } from './routes'
 
 const FAMILY = (id: string) => JSON.parse(readFileSync(join(__dirname, `../../scenarios/families/${id}.json`), 'utf-8'))
 const DOING: Record<string, string> = { 'fixed-reserve': 'Keeping a fixed buffer', integrated: 'Borrowing just enough' }
+// Decisions names are local to mockup 05; the shared journey's plan names stay unchanged.
+const DECISION_PLANS: Record<string, string> = { 'no-action': 'No action', 'fixed-reserve': 'Fixed reserve', integrated: 'Integrated plan' }
 const RIPPLE = 'Watch how it ripples through your partners, round by round.'
 
 /** "2 Jan", the UTC day of an instant. */
@@ -49,8 +51,13 @@ async function leads (page: Page): Promise<string> {
 async function honest (page: Page, whatIf: boolean): Promise<void> {
   await expect($(page, 'mode')).toHaveText(/^(Simulated provider|Sandbox)\b.* · Scripted agents/)
   await expect($(page, 'mode')).toBeVisible()
-  // a what-if says so in words on the page (the header on Simulation, the plans' rows on Decisions)
-  if (whatIf) expect(await page.locator('main.lw-main').innerText()).toMatch(/what-if/i)
+  // A hypothetical comparison must say so visibly, never only inside Source evidence.
+  if (whatIf) {
+    if (new URL(page.url()).pathname === '/decisions') {
+      await expect($(page, 'hero-subtitle')).toBeVisible()
+      await expect($(page, 'hero-subtitle')).toContainText('Hypothetical comparison', { useInnerText: true })
+    } else expect(await page.locator('main.lw-main').innerText()).toMatch(/what-if/i)
+  }
 }
 
 /** Read the screen again the way the shell does now: the tab becomes visible again. */
@@ -108,21 +115,36 @@ test('Decisions: what doing nothing costs, the plan that keeps you covered and i
     const fee = top.minor === 0 ? 'no fee' : fees.length > 1 ? `a fee of up to ${fmt(top)}` : `a ${fmt(top)} fee`
     expect(text).toMatch(new RegExp(`${DOING[api.selected]} keeps you covered for ${fee.replace(/[$.]/g, '\\$&')}\\.$`))
   }
-  for (const [policy, name] of Object.entries(PLANS)) {
+  for (const [policy, name] of Object.entries(DECISION_PLANS)) {
     await expect($(page, `policy-${policy}`).locator('.lw-dec__name')).toHaveText(name)
   }
-  await expect(page.locator('#policies-heading')).toHaveText('Three plans side by side')
-  await expect($(page, 'gap-summary')).toContainText('safety minimum')
+  await expect(page.locator('#policies-heading')).toHaveText('Three ways forward')
+  await expect(page.locator('#gap-heading')).toHaveText('The gap we need to close')
   await honest(page, true)
   await plainHeadings(page)
-  await expect($(page, 'cohort')).not.toBeVisible()
-  await folded(page, 'how-decisions', [runId, api.cohort, 'not a probability'])
-  const chosen = api.results.find((r: any) => r.policy === (api.selected ?? 'no-action'))
-  await folded(page, `how-${chosen.policy}`, [chosen.branch_id, `Policy ${chosen.policy}`])
-  await expect($(page, 'timing').locator('summary')).toHaveText('When the money moves')
-  await expect($(page, 'compare-details')).toHaveText('Compare the what-ifs in detail')
+  const evidence = page.locator('details[data-test="how-decisions"]')
+  await expect(evidence).toHaveCount(1)
+  await expect(evidence).not.toHaveAttribute('open', '')
+  await expect($(page, 'cohort')).toBeHidden()
+  await expect(page.locator('[data-test="how-no-action"], [data-test="how-fixed-reserve"], [data-test="how-integrated"]')).toHaveCount(0)
+  const summary = evidence.locator('summary')
+  await expect(summary).toHaveText('Source evidence')
+  await summary.focus()
+  await page.keyboard.press('Enter')
+  await expect($(page, 'cohort')).toBeVisible()
+  for (const fact of [runId, api.cohort, 'not a probability']) await expect(evidence).toContainText(fact)
+  for (const result of api.results) await expect(evidence).toContainText(result.branch_id)
+  await expect(evidence.locator('[data-test="scenario"]')).toHaveCount(api.results.length)
+  await expect(evidence.locator('[data-test="weight"]').first()).toContainText(api.weight_kind)
+  await expect(evidence.locator('a[data-test="view-execution"]')).toHaveText('View execution') // the judge path's name
+  await page.keyboard.press('Enter')
+  await expect($(page, 'cohort')).toBeHidden()
+  await expect(evidence.locator('a[data-test="view-execution"]')).toBeHidden()
+  await expect($(page, 'timing')).toBeVisible()
+  await expect($(page, 'timing').locator('summary, li')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Key timing in this scenario' })).toBeVisible()
+  await expect($(page, 'compare-details')).toHaveText('Compare scenario details')
   if (api.status === 'selected') await expect(page.locator('a[data-test="review-plan"]')).toHaveText('Review current plan')
-  await expect(page.locator('a[data-test="view-execution"]')).toHaveText('View execution') // the judge path's name
   for (const hook of ['gap', 'gap-summary', 'policies', 'timing', 'compare-details', 'open-simulation', 'scenario', 'weight', 'cost']) {
     expect(await $(page, hook).count(), hook).toBeGreaterThan(0)
   }

@@ -98,6 +98,7 @@ async function decisions (page: Page, demo: Demo): Promise<void> {
   for (const p of ['no-action', 'fixed-reserve', 'integrated']) {
     await expect(test$(page, `policy-${p}`), `policy ${p}`).toBeVisible()
   }
+  await test$(page, 'how-decisions').locator('summary').click()
   await expect(test$(page, 'cohort')).toContainText(`Run ${demo.run_id}`)
   await expect(test$(page, 'cohort')).toContainText('not a probability')
   await expect(policies.locator('[data-test="selected"]')).toHaveCount(1)

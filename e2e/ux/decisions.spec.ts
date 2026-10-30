@@ -1,7 +1,7 @@
 /**
  * Decisions in motion (prp/2026-10-29-ux-pass/HANDOFF.md D1–D6), at every width of
  * e2e/ux.config.ts, on the prepared demonstration run: the cohort context with no probability;
- * the gap explanation and its timing disclosure (the cash observed, the payroll deadline, the
+ * the gap explanation and its always-visible timing table (the cash observed, the payroll deadline, the
  * venue arrival, the delayed receipt, in hours from the world's h0); the three policies as a
  * radio group whose choice highlights its row and updates the explanation without approving
  * anything; the scenario details drawer; the review
@@ -13,7 +13,7 @@ import { crumb, demoRunId, settled, sideways } from './routes'
 import { fmt } from './copy'
 
 const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
-const NAMES: Record<string, string> = { 'no-action': 'Do nothing', 'fixed-reserve': 'Keep a fixed buffer', integrated: 'Borrow just enough' }
+const NAMES: Record<string, string> = { 'no-action': 'No action', 'fixed-reserve': 'Fixed reserve', integrated: 'Integrated plan' }
 
 async function open (page: Page, runId: string): Promise<void> {
   await page.goto(`/decisions?run_id=${runId}`)
@@ -28,27 +28,39 @@ test('D1–D2: cohort context, the gap and its timing', async ({ page, baseURL, 
   const api = await (await request.get(`/api/v1/decisions/${runId}`)).json()
   await open(page, runId)
 
+  const evidence = page.locator('details[data-test="how-decisions"]')
+  await expect(evidence).toHaveCount(1)
+  await expect($(page, 'cohort')).toBeHidden()
+  await evidence.locator('summary').click()
+  await expect($(page, 'cohort')).toBeVisible()
   await expect($(page, 'cohort')).toContainText(`Run ${runId}`)
   await expect($(page, 'cohort')).toContainText('not a probability')
+  await evidence.locator('summary').click()
   expect(await page.locator('main').innerText(), 'a probability was inferred').not.toMatch(/\d\s*%|probability of/i)
   await expect(page.locator('a[data-test="open-simulation"]')).toHaveAttribute('href', `/simulation?run_id=${runId}`)
 
-  const none = api.results.find((r: { policy: string }) => r.policy === 'no-action')
+  const treasury = await (await request.get('/api/v1/treasury')).json()
+  const account = treasury.accounts.find((a: any) => a.id.endsWith('/operating')) ?? treasury.accounts[0]
+  const none = api.results.filter((r: { policy: string }) => r.policy === 'no-action')
+  const lowest = none.reduce((a: any, b: any) => b.min_cash.minor < a.min_cash.minor ? b : a).min_cash
   const summary = $(page, 'gap-summary')
-  await expect(summary).toContainText('Lowest point')
-  await expect(summary).toContainText(fmt(none.min_cash))
-  if (!none.floor_kept) await expect(summary).toContainText('short')
-  if (none.obligations_unmet === 0) await expect(summary).toContainText('Every obligation met')
+  await expect(page.locator('#gap-heading')).toHaveText('The gap we need to close')
+  await expect(summary).toBeVisible()
+  await expect(summary).toContainText(fmt({ minor: Math.max(0, account.floor.minor - lowest.minor), currency: lowest.currency }))
+  if (lowest.minor < account.floor.minor) await expect(summary).toContainText(/short|below|under/i)
+  if (none.every((r: any) => r.obligations_unmet === 0)) await expect(summary).toContainText(/every obligation met|all obligations met/i)
 
-  await $(page, 'timing').locator('summary').click()
-  const steps = $(page, 'timing').locator('li')
+  await expect($(page, 'timing')).toBeVisible()
+  await expect($(page, 'timing').locator('summary, li')).toHaveCount(0)
+  const steps = $(page, 'timing').locator('tr[data-at]')
+  await expect(steps.first()).toBeVisible()
   await expect(steps.first()).toContainText('settled cash observed')
   const hours = (await steps.evaluateAll((els) => els.map((e) => Number(e.getAttribute('data-at')))))
   expect([...hours].sort((a, b) => a - b), 'timing is not in time order').toEqual(hours)
   if (/delayed-receipt/.test(api.cohort)) {
     // h40 payroll, h48 venue arrival, h12 + 240 h = h252 delayed receipt (the integrity appendix)
-    for (const h of ['40', '48', '252']) await expect($(page, 'timing').locator(`li[data-at="${h}"]`)).toHaveCount(1)
-    await expect($(page, 'timing').locator('li[data-at="252"]')).toContainText('arrives late')
+    for (const h of ['40', '48', '252']) await expect($(page, 'timing').locator(`tr[data-at="${h}"]`)).toHaveCount(1)
+    await expect($(page, 'timing').locator('tr[data-at="252"]')).toContainText('arrives late')
   }
   expect(await sideways(page), 'Decisions scrolls sideways').toBeLessThanOrEqual(0)
   expect(writes).toEqual([])
@@ -60,6 +72,9 @@ test('D3: a radio group whose choice explains, highlights and approves nothing',
   const api = await (await request.get(`/api/v1/decisions/${runId}`)).json()
   await open(page, runId)
 
+  await expect($(page, 'decision-steps').locator('li')).toHaveText(['1 Rehearse', '2 Compare', '3 Review'])
+  await expect(page.locator('[data-test="hero-action"] :is(a, button)')).toHaveCount(0)
+  await expect(page.locator('#policies-heading')).toHaveText('Three ways forward')
   const group = page.getByRole('radiogroup')
   const radios = group.getByRole('radio')
   await expect(radios).toHaveCount(3)
@@ -67,14 +82,18 @@ test('D3: a radio group whose choice explains, highlights and approves nothing',
   await expect($(page, `policy-${api.selected}`).locator('[data-test="selected"]')).toBeVisible()
   await expect($(page, `policy-${api.selected}`).getByRole('radio')).toBeChecked()
   await expect($(page, 'explanation')).toContainText(`With ${NAMES[api.selected]}`)
-  const review = page.locator('a[data-test="review-plan"]')
+  const review = $(page, 'policies').locator('a[data-test="review-plan"]')
   const href = await review.getAttribute('href')
 
   for (const policy of ['no-action', 'fixed-reserve', 'integrated']) {
     const row = $(page, `policy-${policy}`)
     await row.getByRole('radio').check()
     await expect(row).toHaveClass(/is-chosen/)
-    await expect($(page, 'explanation')).toContainText(`With ${NAMES[policy]}`)
+    const minimum = api.results.filter((r: any) => r.policy === policy)
+      .reduce((a: any, b: any) => b.min_cash.minor < a.min_cash.minor ? b : a).min_cash
+    await expect($(page, 'explanation')).toContainText('Minimum projected cash')
+    await expect($(page, 'minimum-tip')).toContainText(fmt(minimum))
+    await expect($(page, 'minimum-tip').locator('[role="tooltip"]')).toContainText(`With ${NAMES[policy]}`)
     await expect(page.locator('.lw-dec__row.is-chosen')).toHaveCount(1)
     // the backend's selection and the review do not move
     await expect($(page, `policy-${api.selected}`).locator('[data-test="selected"]')).toBeVisible()
@@ -84,7 +103,7 @@ test('D3: a radio group whose choice explains, highlights and approves nothing',
   await $(page, 'policy-no-action').getByRole('radio').focus()
   await page.keyboard.press('ArrowDown')
   await expect($(page, 'policy-fixed-reserve').getByRole('radio')).toBeChecked()
-  await expect($(page, 'explanation')).toContainText('With Keep a fixed buffer')
+  await expect($(page, 'explanation')).toContainText('With Fixed reserve')
   for (const head of await page.locator('.lw-dec__head').all()) {
     expect((await head.boundingBox())!.height).toBeGreaterThanOrEqual(43.5)
   }
@@ -107,7 +126,13 @@ test('D4–D5: scenario details drawer; review hands off to Execution', async ({
   await expect(sheet).toBeHidden()
   await expect(opener).toBeFocused()
 
-  await expect(page.locator('a[data-test="view-execution"]')).toHaveAttribute('href', `/execution?run_id=${runId}`)
+  const evidence = page.locator('details[data-test="how-decisions"]')
+  const execution = evidence.locator('a[data-test="view-execution"]')
+  await expect(execution).toBeHidden()
+  await evidence.locator('summary').click()
+  await expect(execution).toBeVisible()
+  await expect(execution).toHaveAttribute('href', `/execution?run_id=${runId}`)
+  await evidence.locator('summary').click()
   if (api.status === 'selected') {
     const review = page.locator('a[data-test="review-plan"]')
     await expect(review).toHaveAttribute('href', `/execution?run_id=${runId}&review=1`)
@@ -127,8 +152,13 @@ test('phone: gap, timing, grouped rows stacked, review; no carousel', async ({ p
   await open(page, runId)
   const y = async (selector: string) => (await page.locator(selector).first().boundingBox())!.y
   const order = [await y('[data-test="gap-summary"]'), await y('[data-test="timing"]'),
-    await y('[data-test="policy-no-action"]'), await y('[data-test="view-execution"]')]
+    await y('[data-test="policy-no-action"]'), await y('[data-test="explanation"]')]
   expect([...order].sort((a, b) => a - b)).toEqual(order)
+  const review = $(page, 'policies').locator('a[data-test="review-plan"]')
+  if (await review.count()) {
+    await expect(review).toBeVisible()
+    expect((await review.boundingBox())!.y).toBeGreaterThan(await y('[data-test="explanation"]'))
+  }
   const boxes = await page.locator('.lw-dec__row').evaluateAll((els) => els.map((e) => {
     const r = e.getBoundingClientRect()
     return { x: Math.round(r.x), y: r.y, right: r.right }

@@ -81,7 +81,9 @@ describe('Decisions reads minima and shortfalls only as the API supports them', 
       '/treasury': treasury()
     })
     const w = await open(Decisions, '/decisions?run_id=run-1')
-    expect(seen(w, 'gap-summary')).toContain('Lowest point Unknown')
+    expect(seen(w, 'gap-summary')).toContain('Not assessed')
+    expect(w.get('[data-test="gap-tip"] [role="tooltip"]').text()).toContain('Lowest point Unknown')
+    expect(w.find('[data-test="waterfall-bar-0"]').exists()).toBe(false)
     expect(text(w, 'gap-summary')).not.toContain('the floor holds')
     expect(text(w, 'gap-summary')).not.toContain('$50,000')
   })
@@ -93,7 +95,7 @@ describe('Decisions reads minima and shortfalls only as the API supports them', 
       '/treasury': treasury()
     })
     const w = await open(Decisions, '/decisions?run_id=run-1')
-    expect(w.get('[data-test="policy-no-action"]').text()).toContain('Largest shortfallNone')
+    expect(w.get('[data-test="policy-no-action"]').text()).toContain('largest shortfall None')
   })
 
   it('a floor in another currency is never compared with a minimum', async () => {
@@ -102,8 +104,88 @@ describe('Decisions reads minima and shortfalls only as the API supports them', 
       '/treasury': treasury({ minor: 3000000, currency: 'EUR', status: 'known', as_of: null })
     })
     const w = await open(Decisions, '/decisions?run_id=run-1')
-    expect(w.get('[data-test="policy-no-action"]').text()).toContain('Largest shortfallNot assessed')
+    expect(w.get('[data-test="policy-no-action"]').text()).toContain('largest shortfall Not assessed')
     expect(seen(w, 'gap-summary')).not.toContain('short')
+  })
+})
+
+describe('Decisions mockup 05 bridge', () => {
+  const result = () => decisions([row('no-action', 's1', usd(2000000), false), row('integrated', 's1', usd(3000000), true)])
+
+  it('shows the stepper, three sourced bars and the chosen minimum in reading order', async () => {
+    serve({ '/decisions/run-1': result(), '/treasury': treasury() })
+    const w = await open(Decisions, '/decisions?run_id=run-1')
+    expect(seen(w, 'decision-steps')).toContain('1 Rehearse2 Compare3 Review')
+    expect(text(w, 'waterfall-bar-0')).toContain('$70,000')
+    expect(text(w, 'waterfall-bar-1')).toContain('-$50,000')
+    expect(text(w, 'waterfall-bar-2')).toContain('$20,000')
+    expect(seen(w, 'explanation')).toContain('$30,000')
+    expect(seen(w, 'explanation')).toContain('= reserve floor $30,000')
+    expect(w.get('[data-test="how-decisions"]').element.open).toBe(false)
+    const href = w.get('[data-test="review-plan"]').attributes('href')
+    await w.get('[data-test="policy-no-action"] input').setValue()
+    expect(seen(w, 'explanation')).toContain('$20,000')
+    expect(seen(w, 'explanation')).toContain('< reserve floor $30,000')
+    expect(w.get('[data-test="review-plan"]').attributes('href')).toBe(href)
+  })
+
+  for (const kind of ['unknown', 'stale', 'currency', 'snapshot', 'observability']) {
+    it(`does not draw a made-up starting balance for ${kind}`, async () => {
+      const t = treasury()
+      if (kind === 'unknown') t.accounts[0].buckets.settled.minor = null
+      if (kind === 'stale') t.accounts[0].buckets.settled.status = 'stale'
+      if (kind === 'currency') t.accounts[0].buckets.settled.currency = 'EUR'
+      if (kind === 'snapshot') t.snapshot_id = 'unrelated'
+      if (kind === 'observability') t.accounts[0].observability = 'unknown'
+      serve({ '/decisions/run-1': result(), '/treasury': t })
+      const w = await open(Decisions, '/decisions?run_id=run-1')
+      expect(w.find('[data-test="waterfall-bar-0"]').exists()).toBe(false)
+      expect(seen(w, 'waterfall-unavailable')).toContain('no waterfall is drawn')
+    })
+  }
+
+  it('refuses stale observed cash using the API metric state, not a field absent from Money', async () => {
+    const t = treasury()
+    t.as_of = '2026-01-01T12:00:00Z'
+    t.accounts[0].authority = 'reduced'
+    t.accounts[0].spendable = usd(2000000, 'stale')
+    serve({ '/decisions/run-1': result(), '/treasury': t })
+    const w = await open(Decisions, '/decisions?run_id=run-1')
+    expect(w.find('[data-test="waterfall-bar-0"]').exists()).toBe(false)
+  })
+
+  it('compares an integrated-only result against its own known currency floor', async () => {
+    const body = result()
+    body.results = body.results.filter((r) => r.policy === 'integrated')
+    serve({ '/decisions/run-1': body, '/treasury': treasury() })
+    const w = await open(Decisions, '/decisions?run_id=run-1')
+    expect(seen(w, 'explanation')).toContain('= reserve floor $30,000')
+    expect(seen(w, 'explanation')).not.toContain('Not assessed')
+  })
+
+  it('shows Now and remaining time from an observation after world hour zero', async () => {
+    const t = treasury()
+    t.as_of = '2026-01-01T12:00:00Z'
+    t.accounts[0].as_of = t.as_of
+    t.obligations = [{ obligation_id: 'payroll', kind: 'payroll', account: t.accounts[0].id,
+      due_at: '2026-01-02T16:00:00Z', amount: { minor: 5000000, currency: 'USD' } }]
+    serve({ '/decisions/run-1': result(), '/treasury': t })
+    const w = await open(Decisions, '/decisions?run_id=run-1')
+    expect(w.get('[data-test="timing"] tr[data-at="12"] th').text()).toContain('Now')
+    expect(w.get('[data-test="timing"] tr[data-at="40"] th').text()).toContain('In 28h')
+  })
+
+  it('uses a signed scale when the remaining balance is negative', async () => {
+    const body = result()
+    body.results[0].min_cash = usd(-1000000)
+    serve({ '/decisions/run-1': body, '/treasury': treasury() })
+    const w = await open(Decisions, '/decisions?run_id=run-1')
+    expect(text(w, 'waterfall-bar-2')).toContain('-$10,000')
+    const rect = w.get('[data-test="waterfall-bar-2"] rect')
+    expect(Number(rect.attributes('height'))).toBeGreaterThan(0)
+    expect(Number(rect.attributes('y'))).toBeLessThan(230)
+    expect(rect.classes()).toContain('is-out')
+    expect(rect.classes()).not.toContain('is-remaining')
   })
 })
 
@@ -200,8 +282,9 @@ describe('the observed snapshot of a prepared run is that run\'s world', () => {
       '/treasury': observed
     })
     const w = await open(Decisions, '/decisions?run_id=run-1')
-    expect(seen(w, 'gap-summary')).toContain('$10,000 short')
-    const at = w.findAll('[data-test="timing"] li').map((li) => li.attributes('data-at'))
+    expect(seen(w, 'gap-summary')).toContain('$10,000')
+    expect(seen(w, 'gap-summary')).toContain('cash falls below your reserve floor')
+    const at = w.findAll('[data-test="timing"] tr').map((tr) => tr.attributes('data-at'))
     expect(at).toEqual(['12', '40', '252'])
   })
 
