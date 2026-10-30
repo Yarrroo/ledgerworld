@@ -40,7 +40,7 @@
               </g>
               <line v-if="waterfall.floor !== null" x1="82" x2="548" :y1="waterfall.y(waterfall.floor)" :y2="waterfall.y(waterfall.floor)" class="lw-dec__floor" data-test="waterfall-floor" />
               <g v-for="(bar, i) in waterfall.bars" :key="bar.label" :data-test="`waterfall-bar-${i}`">
-                <rect :x="106 + i * 144" :y="waterfall.y(Math.max(bar.from, bar.to))" width="84" :height="Math.max(1, Math.abs(waterfall.y(bar.from) - waterfall.y(bar.to)))" :class="['lw-dec__bar', { 'is-out': bar.value < 0, 'is-remaining': i === 2 }]" />
+                <rect :x="106 + i * 144" :y="waterfall.y(Math.max(bar.from, bar.to))" width="84" :height="Math.max(1, Math.abs(waterfall.y(bar.from) - waterfall.y(bar.to)))" :class="['lw-dec__bar', { 'is-out': bar.value < 0, 'is-remaining': i === 2 && bar.value >= 0 }]" />
                 <text :x="148 + i * 144" :y="waterfall.y(Math.max(bar.from, bar.to)) - 9" text-anchor="middle" class="lw-dec__value">{{ formatMoney(bar.value, waterfall.currency) }}</text>
                 <text :x="148 + i * 144" y="258" text-anchor="middle">{{ bar.label }}</text>
               </g>
@@ -59,7 +59,7 @@
           <h3 id="timing-heading">Key timing in this scenario</h3>
           <table v-if="timing.length" class="lw-table">
             <tbody><tr v-for="t in timing" :key="t.key" :data-at="t.h">
-              <th scope="row"><Tip :text="`Simulated hour ${t.h} from the snapshot's observation${t.ref ? ` · ${t.ref}` : ''}.`">{{ t.h === 0 ? 'Now' : `In ${t.h}h` }}</Tip></th>
+              <th scope="row"><Tip :text="`Simulated hour ${t.h} from the snapshot's observation${t.ref ? ` · ${t.ref}` : ''}.`">{{ t.when }}</Tip></th>
               <td>{{ t.what }}</td>
             </tr></tbody>
           </table>
@@ -92,7 +92,7 @@
           <Tip :text="`With ${NAMES[explained.policy]}. Lowest minimum cash across ${explained.rows.length} scenarios, from the branch ledgers; this choice approves nothing.`" test="minimum-tip">
             <strong :class="['lw-dec__figure', 'lw-dec__figure--minimum', { 'is-bad': minimumRelation === '<' }]">{{ explained.min }}</strong>
           </Tip>
-          <Tip :text="floorTip"><span>{{ minimumRelation }} reserve floor {{ gap?.floor ? metricText(gap.floor) : 'Not assessed' }}</span></Tip>
+          <Tip :text="floorTip"><span>{{ minimumRelation }} reserve floor {{ minimumFloor ? metricText(minimumFloor) : 'Not assessed' }}</span></Tip>
         </div>
         <Tip v-if="reviewable" text="The backend-selected policy is worked out again on today's observed figures. You check bound terms before any money moves.">
           <RouterLink class="lw-button lw-dec__review-button" data-test="review-plan" :to="{ path: '/execution', query: { run_id: body.run_id, review: '1' } }">Review current plan<Arrow /></RouterLink>
@@ -196,8 +196,6 @@ const reviewable = computed(() => state.status === 'loaded' && state.body.status
   !search.value && routeExists(router, '/execution'))
 const family = computed(() => familyOf(state.body?.cohort))
 
-const floorOf = (r) => (r.floor_kept ? 'kept' : 'breached')
-
 /** The treasury's operating account, whose floor the policies are judged against. */
 const account = computed(() => {
   const accounts = state.body?.treasury?.accounts ?? []
@@ -238,6 +236,7 @@ const policies = computed(() => {
   const results = state.body?.results ?? []
   return ORDER.map((policy) => {
     const rows = results.filter((r) => r.policy === policy)
+    const minimum = lowestOf(rows)
     return {
       policy,
       rows,
@@ -245,8 +244,8 @@ const policies = computed(() => {
       breached: rows.filter((r) => !r.floor_kept).length,
       cost: rows.length === 1 ? money(rows[0].funding_cost) : rows.length ? feesAcross(rows) : '',
       short: rows.length ? largestShort(rows) : '',
-      minimum: lowestOf(rows),
-      min: rows.length ? metricText(lowestOf(rows)) : ''
+      minimum,
+      min: rows.length ? metricText(minimum) : ''
     }
   }).filter((p) => p.rows.length)
 })
@@ -337,8 +336,8 @@ const subtitle = computed(() => {
 /** The floor's source, for the tooltip on the safety minimum. */
 const floorTip = computed(() => {
   const a = account.value
-  if (!gap.value?.floor) return 'No reserve floor in this currency was read from the treasury.'
-  return `Reserve floor of ${a.id}, from the treasury read as of ${formatTime(state.body.treasury.as_of).utc}.`
+  if (!a?.floor) return 'No reserve floor was read from the treasury.'
+  return `Reserve floor ${metricText(a.floor)} of ${a.id}, from the treasury read as of ${formatTime(state.body.treasury.as_of).utc}.`
 })
 
 const hoursAt = (asOf, at) => Math.round((Date.parse(at) - Date.parse(asOf)) / 3_600_000)
@@ -368,7 +367,12 @@ const timing = computed(() => {
       rows.push({ key: `f:${f.flow_id}`, h, what: `${kindText(f.kind)} ${money(f.amount)} arrives`, ref: f.flow_id })
     }
   }
-  return rows.filter(timed).sort((x, y) => x.h - y.h)
+  const now = hoursAt(h0, t.as_of)
+  return rows.filter(timed).sort((x, y) => x.h - y.h).map((row) => {
+    const remaining = row.h - now
+    const when = !Number.isFinite(remaining) ? `h${row.h}` : remaining === 0 ? 'Now' : remaining > 0 ? `In ${remaining}h` : `${-remaining}h ago`
+    return { ...row, when }
+  })
 })
 
 const gapSentence = computed(() => {
@@ -377,8 +381,9 @@ const gapSentence = computed(() => {
   const payments = g.unmet ? `${g.unmet} obligation${g.unmet === 1 ? '' : 's'} unmet` : 'Every obligation met'
   return `${payments}, ${g.check.state === 'breached' ? 'but cash falls below your reserve floor' : 'and your reserve floor holds'}.`
 })
+const minimumFloor = computed(() => floorIn(explained.value?.minimum?.currency))
 const minimumRelation = computed(() => {
-  const check = againstFloor(explained.value?.minimum, floorIn(explained.value?.minimum?.currency))
+  const check = againstFloor(explained.value?.minimum, minimumFloor.value)
   if (!['breached', 'kept'].includes(check.state)) return 'Not assessed against'
   return check.gap === 0 ? '=' : check.gap > 0 ? '>' : '<'
 })
@@ -389,7 +394,7 @@ const waterfall = computed(() => {
   const start = account.value?.buckets.settled
   const end = gap.value?.min
   const usable = (m) => Number.isSafeInteger(m?.minor) && (!m.status || m.status === 'known')
-  if (!usable(start) || !usable(end) || start.currency !== end.currency || search.value || account.value.observability !== 'known') return null
+  if (!usable(start) || !usable(end) || start.currency !== end.currency || search.value || account.value.observability !== 'known' || account.value.spendable?.status !== 'known') return null
   const delta = end.minor - start.minor
   if (!Number.isSafeInteger(delta)) return null
   const floor = gap.value.floor

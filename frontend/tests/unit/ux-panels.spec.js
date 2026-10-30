@@ -144,6 +144,37 @@ describe('Decisions mockup 05 bridge', () => {
     })
   }
 
+  it('refuses stale observed cash using the API metric state, not a field absent from Money', async () => {
+    const t = treasury()
+    t.as_of = '2026-01-01T12:00:00Z'
+    t.accounts[0].authority = 'reduced'
+    t.accounts[0].spendable = usd(2000000, 'stale')
+    serve({ '/decisions/run-1': result(), '/treasury': t })
+    const w = await open(Decisions, '/decisions?run_id=run-1')
+    expect(w.find('[data-test="waterfall-bar-0"]').exists()).toBe(false)
+  })
+
+  it('compares an integrated-only result against its own known currency floor', async () => {
+    const body = result()
+    body.results = body.results.filter((r) => r.policy === 'integrated')
+    serve({ '/decisions/run-1': body, '/treasury': treasury() })
+    const w = await open(Decisions, '/decisions?run_id=run-1')
+    expect(seen(w, 'explanation')).toContain('= reserve floor $30,000')
+    expect(seen(w, 'explanation')).not.toContain('Not assessed')
+  })
+
+  it('shows Now and remaining time from an observation after world hour zero', async () => {
+    const t = treasury()
+    t.as_of = '2026-01-01T12:00:00Z'
+    t.accounts[0].as_of = t.as_of
+    t.obligations = [{ obligation_id: 'payroll', kind: 'payroll', account: t.accounts[0].id,
+      due_at: '2026-01-02T16:00:00Z', amount: { minor: 5000000, currency: 'USD' } }]
+    serve({ '/decisions/run-1': result(), '/treasury': t })
+    const w = await open(Decisions, '/decisions?run_id=run-1')
+    expect(w.get('[data-test="timing"] tr[data-at="12"] th').text()).toContain('Now')
+    expect(w.get('[data-test="timing"] tr[data-at="40"] th').text()).toContain('In 28h')
+  })
+
   it('uses a signed scale when the remaining balance is negative', async () => {
     const body = result()
     body.results[0].min_cash = usd(-1000000)
@@ -153,6 +184,8 @@ describe('Decisions mockup 05 bridge', () => {
     const rect = w.get('[data-test="waterfall-bar-2"] rect')
     expect(Number(rect.attributes('height'))).toBeGreaterThan(0)
     expect(Number(rect.attributes('y'))).toBeLessThan(230)
+    expect(rect.classes()).toContain('is-out')
+    expect(rect.classes()).not.toContain('is-remaining')
   })
 })
 
