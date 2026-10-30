@@ -26,10 +26,31 @@
       </Tip>
     </p>
 
+    <div v-if="execution" class="lw-execution-banner" :class="{ 'lw-execution-banner--ok': allReconciled }"
+         role="status" data-test="execution-banner">
+      <Tip :text="`${lead} Read ${formatTime(execution.as_of).utc}; not final: later provider events can open an incident.`">
+        <span aria-hidden="true">{{ allReconciled ? '✓' : incidents.length ? '!' : '◷' }}</span>
+        {{ allReconciled ? 'Reconciled as of' : 'Execution read as of' }} {{ formatTime(execution.as_of).utc }}
+      </Tip>
+      <span>{{ !legs.some((leg) => leg.receipt) ? 'No provider receipt recorded' : execution.mode === 'fake' ? 'Illustrative receipt' : LABELS[execution.mode] || execution.mode }}</span>
+    </div>
+    <ol v-if="execution" class="lw-execution-progress" aria-label="Execution progress" data-test="execution-progress">
+      <li v-for="step in progress" :key="step.name" :data-reached="step.done">
+        <span class="lw-execution-progress__mark" aria-hidden="true">{{ step.done ? '✓' : '○' }}</span>
+        <span>{{ step.name }}<span class="lw-visually-hidden">{{ step.done ? ', reached' : ', not reached' }}</span></span>
+        <small>{{ step.note }}</small>
+      </li>
+    </ol>
+
     <div class="lw-exec">
       <section class="lw-exec__terms" aria-labelledby="summary-heading" data-test="summary"
                data-panel="What you approved">
-        <h2 id="summary-heading">What you approved</h2>
+        <h2 id="summary-heading">Bound approval</h2>
+        <dl v-if="execution" class="lw-terms lw-summary-terms" data-test="approval-summary">
+          <dt>Policy</dt><dd>{{ PLANS[policy] ?? 'Unavailable' }}</dd>
+          <dt>Provider</dt><dd>{{ LABELS[execution.mode] || execution.mode }}</dd>
+          <dt>Status</dt><dd>{{ allReconciled ? 'Reconciled' : 'Read execution legs' }}</dd>
+        </dl>
         <template v-if="held">
           <dl class="lw-terms" data-test="summary-held">
             <dt>Approval</dt>
@@ -52,26 +73,19 @@
             <dt>Expires</dt><dd data-test="summary-held-expires">{{ expires.utc }} · {{ expires.local }}</dd>
           </dl>
         </template>
-        <template v-if="execution">
-          <div data-test="summary-plain">
-            <Tip :text="`Approved and sent; last checked ${formatTime(execution.as_of).utc}.`">{{ PLANS[policy] ?? 'The selected plan' }}, approved
-              and sent.</Tip>
-            <HowWeKnow test="how-summary">
-              <dl class="lw-terms">
-                <dt>Approval</dt>
-                <dd class="lw-copyable">
-                  <span class="lw-hash" data-test="summary-approval">{{ execution.approval_id }}</span>
-                  <button type="button" class="lw-copy" data-test="copy-summary-approval"
-                          @click="copy('Approval id', execution.approval_id)">Copy<span class="lw-visually-hidden"> approval id</span></button>
-                </dd>
-                <dt>Policy</dt><dd>{{ policy ?? 'not read' }}</dd>
-                <dt>Observed snapshot</dt><dd>{{ execution.snapshot_id }}</dd>
-                <dt>Provider</dt><dd>{{ LABELS[execution.mode] || execution.mode }}</dd>
-                <dt>Status read</dt><dd data-test="summary-read">{{ formatTime(execution.as_of).utc }}</dd>
-              </dl>
-            </HowWeKnow>
-          </div>
-        </template>
+        <details v-if="execution" class="lw-calc" data-test="summary-plain">
+          <summary>View all terms →</summary>
+          <dl class="lw-terms">
+            <dt>Approval</dt>
+            <dd class="lw-copyable">
+              <span class="lw-hash" data-test="summary-approval">{{ execution.approval_id }}</span>
+              <button type="button" class="lw-copy" data-test="copy-summary-approval"
+                      @click="copy('Approval id', execution.approval_id)">Copy<span class="lw-visually-hidden"> approval id</span></button>
+            </dd>
+            <dt>Observed snapshot</dt><dd>{{ execution.snapshot_id }}</dd>
+            <dt>Status read</dt><dd data-test="summary-read">{{ formatTime(execution.as_of).utc }}</dd>
+          </dl>
+        </details>
         <p v-else-if="!held" class="lw-time">No approval to summarise: the linked execution has not been read.</p>
         <p v-if="token" class="lw-actions">
           <button type="button" class="lw-button lw-button--quiet" data-test="forget-token"
@@ -80,7 +94,7 @@
       </section>
 
       <section class="lw-exec__legs" aria-labelledby="receipts-heading" data-test="receipts" data-panel="Money moved">
-        <h2 id="receipts-heading">Money moved, with receipts</h2>
+        <h2 id="receipts-heading">Execution legs</h2>
         <HowWeKnow test="how-execution">
           <span class="lw-source" data-test="context">
             Run {{ body.run_id ?? 'unavailable' }} ·
@@ -109,38 +123,57 @@
             No legs are recorded yet for this execution; reading again.
           </p>
           <ol class="lw-legs">
-            <li v-for="leg in legs" :key="leg.leg_id" class="lw-tile" :data-test="`leg-${leg.kind}`">
-              <div class="lw-tile__label">{{ leg.label || leg.kind }}</div>
-              <div class="lw-time">
-                <span data-test="receipt-mode">{{ leg.mode }}</span><template v-if="leg.receipt">
-                  · <Tip :text="`Provider receipt amount, observed ${formatTime(leg.receipt.observed_at).utc}`">{{ receiptMoney(leg.receipt) }}</Tip></template>
-              </div>
-              <Tip :text="`Provider state ${leg.state}; journal ${leg.journal_id ?? 'not posted'}. Checked against your books as of the time shown, not final: a later word from the bank can still open an incident.`">
-                <div :class="['lw-status', `lw-status--${leg.tone}`]" data-test="leg-status">
-                  <span aria-hidden="true">{{ leg.icon }}</span><span>{{ leg.text }}</span>
+            <li v-for="(leg, index) in legs" :key="leg.leg_id" :data-test="`leg-${leg.kind}`">
+              <details class="lw-leg" :data-test="leg.receipt ? 'receipt' : 'receipt-details'">
+                <summary class="lw-leg__row">
+                  <span class="lw-leg__number">{{ index + 1 }}</span>
+                  <span class="lw-leg__name">{{ legTitle(leg) }}<small data-test="receipt-mode">{{ leg.mode }}</small><small v-if="leg.kind === 'advance' && execution.mode === 'sandbox' && /simulation/.test(leg.label)">Sandbox simulation</small></span>
+                  <Tip class="lw-leg__amount" @click.stop.prevent :text="leg.receipt ? `Provider receipt amount, observed ${formatTime(leg.receipt.observed_at).utc}` : 'No provider receipt amount is available.'">
+                    <span data-test="receipt-amount">{{ leg.receipt ? receiptMoney(leg.receipt) : 'Unavailable' }}</span>
+                  </Tip>
+                  <Tip class="lw-leg__status" @click.stop.prevent>
+                    <span :class="['lw-status', 'lw-leg__pill', `lw-status--${leg.tone}`]" data-test="receipt-pill">
+                      <span aria-hidden="true">{{ leg.icon }}</span><span>{{ legPill(leg) }}</span>
+                    </span>
+                    <template #tip><span data-test="leg-status"><span aria-hidden="true">{{ leg.icon }}</span>{{ leg.text }}</span>. Not final: later provider events can open an incident.</template>
+                  </Tip>
+                  <span class="lw-leg__chevron"><span aria-hidden="true">⌄</span><span class="lw-visually-hidden">Open receipt</span></span>
+                  <span class="lw-visually-hidden">Open receipt and identifiers</span>
+                </summary>
+                <div class="lw-leg__detail">
+                  <dl class="lw-terms">
+                    <template v-for="[term, value] in legIds(leg)" :key="term">
+                      <dt>{{ term }}</dt><dd class="lw-copyable"><span>{{ value || 'Unavailable' }}</span>
+                        <button v-if="value" type="button" class="lw-copy" :aria-label="`Copy ${term}`"
+                                @click="copy(term, value)">Copy</button>
+                      </dd>
+                    </template>
+                    <template v-if="leg.receipt">
+                      <dt>Currency</dt><dd>{{ leg.receipt.currency }}</dd>
+                      <dt>Observed</dt><dd>{{ formatTime(leg.receipt.observed_at).utc }}</dd>
+                      <dt>Receipt</dt><dd>{{ leg.mode }}</dd>
+                      <dt>Label</dt><dd>{{ leg.label || leg.receipt.label }}</dd>
+                    </template>
+                  </dl>
+                  <ol class="lw-steps" :aria-label="`Progress of ${leg.label || leg.kind}`" data-test="steps">
+                    <li v-for="step in leg.steps" :key="step.name"
+                        :class="{ [`lw-steps__${step.mark}`]: step.mark !== 'todo', 'lw-steps__now': step.now }"
+                        :aria-current="step.now ? 'step' : undefined">
+                      <span aria-hidden="true">{{ STEP_MARK[step.mark] }}</span> {{ step.name }}<template
+                        v-if="step.note"> · {{ step.note }}</template><span
+                        v-if="step.mark === 'done'" class="lw-visually-hidden">, reached</span>
+                    </li>
+                  </ol>
+                  <details v-if="leg.receipt" class="lw-calc">
+                    <summary>Open receipt →</summary>
+                    <dl class="lw-terms">
+                      <dt>Status</dt><dd>{{ leg.receipt.status }}</dd>
+                      <dt>Amount</dt><dd>{{ leg.receipt.currency }} {{ leg.receipt.amount }}</dd>
+                      <dt>Provider</dt><dd>{{ leg.mode }}</dd>
+                      <dt>Fields</dt><dd>{{ leg.receipt.raw_keys.join(', ') }}</dd>
+                    </dl>
+                  </details>
                 </div>
-              </Tip>
-              <ol class="lw-steps" :aria-label="`Progress of ${leg.label || leg.kind}`" data-test="steps">
-                <li v-for="step in leg.steps" :key="step.name"
-                    :class="{ [`lw-steps__${step.mark}`]: step.mark !== 'todo', 'lw-steps__now': step.now }"
-                    :aria-current="step.now ? 'step' : undefined">
-                  <span aria-hidden="true">{{ STEP_MARK[step.mark] }}</span> {{ step.name }}<template
-                    v-if="step.note"> · {{ step.note }}</template><span
-                    v-if="step.mark === 'done'" class="lw-visually-hidden">, reached</span>
-                </li>
-              </ol>
-              <details v-if="leg.receipt" class="lw-calc" data-test="receipt">
-                <summary>Open receipt</summary>
-                <dl class="lw-calc__body lw-terms">
-                  <dt>Provider id</dt><dd>{{ leg.receipt.provider_id }}</dd>
-                  <dt>Request id</dt><dd>{{ leg.receipt.request_id }}</dd>
-                  <dt>Status</dt>
-                  <dd><Tip :text="`Fields kept from the provider: ${leg.receipt.raw_keys.join(', ')}`">{{ leg.receipt.status }}</Tip></dd>
-                  <dt>Amount</dt><dd>{{ leg.receipt.currency }} {{ leg.receipt.amount }}</dd>
-                  <dt>Journal</dt><dd>{{ leg.journal_id ?? 'not posted' }}</dd>
-                  <dt>Observed</dt><dd>{{ formatTime(leg.receipt.observed_at).utc }}</dd>
-                  <dt>Provider</dt><dd>{{ LABELS[leg.receipt.mode] || leg.receipt.mode }}</dd>
-                </dl>
               </details>
             </li>
           </ol>
@@ -162,6 +195,7 @@
             the provider.</HowWeKnow>
         </div>
         <p v-else-if="execution" class="lw-time" data-test="no-incidents">
+          <span class="lw-incident-check" aria-hidden="true">✓</span>
           <Tip :text="`None open as of ${formatTime(execution.as_of).utc}; a later word from the bank can still open one.`">No
             open incidents for this reading.</Tip>
         </p>
@@ -173,39 +207,45 @@
 
     <div v-if="flow.open" class="lw-overlay">
       <div ref="dialog" class="lw-dialog" role="dialog" aria-modal="true" aria-labelledby="review-heading"
-           data-test="review" :data-stage="stage">
+           data-test="review" :data-stage="stage" :class="{ 'lw-dialog--bound': !!flow.approval }">
         <div class="lw-dialog__body">
-          <p :class="['lw-status', `lw-status--${STAGES[stage].tone}`]" data-test="stage">
-            <span aria-hidden="true">{{ STAGES[stage].icon }}</span><span>{{ STAGES[stage].word }}</span>
-          </p>
-          <h2 id="review-heading" ref="heading" tabindex="-1">{{ stageHeading }}</h2>
-
-          <template v-if="!flow.approval">
-            <dl class="lw-terms">
-              <dt>Run</dt><dd>{{ body.run_id }}</dd>
-              <dt>Compared on</dt>
-              <dd>{{ decisions.snapshot_id }} · cohort {{ decisions.cohort }} · {{ decisions.weight_kind }}</dd>
-              <dt>Provider</dt><dd>{{ LABELS[body.mode] || body.mode }}</dd>
-              <dt>Bound on</dt><dd>the current observed snapshot, by the server when you confirm</dd>
-              <dt>Approval lifetime</dt>
-              <dd>15 minutes by default, set by the server; the absolute expiry is shown after confirmation</dd>
-              <dt>Fee in each what-if</dt><dd data-test="branch-fees">{{ branchFees }}</dd>
-              <dt>Fees across what-ifs</dt><dd data-test="scenario-cost">{{ scenarioCost }}</dd>
+          <h2 id="review-heading" ref="heading" tabindex="-1">Review before you execute.</h2>
+          <p class="lw-review-subtitle"><Tip :text="`Run ${body.run_id} · ${LABELS[body.mode] || body.mode}`">{{ PLANS[policy] ?? policy }} · Current observed snapshot</Tip></p>
+          <div class="lw-approval-grid" :class="{ 'lw-approval-grid--bound': !!flow.approval }">
+          <section class="lw-approval-create" aria-labelledby="create-heading" data-test="create-stage">
+            <h3 id="create-heading"><span class="lw-review-number">1</span> Create approval</h3>
+            <dl class="lw-terms lw-review-context">
+              <dt>Policy</dt><dd>{{ PLANS[policy] ?? policy }}</dd>
+              <dt>Scenario-set</dt><dd>{{ decisions.cohort }} · {{ decisions.weight_kind }}</dd>
+              <dt>Facility fee</dt><dd><Tip :text="`Scenario-set cost, not a current-plan quote: ${scenarioCost}`" data-test="fee-context">
+                <span data-test="branch-fees">{{ branchFees }}</span>
+                <template #tip><span data-test="scenario-cost">{{ scenarioCost }}</span>. Scenario-set cost, not a current-plan quote.</template>
+              </Tip></dd>
+              <dt>Approval lifetime</dt><dd>15 minutes <Tip text="Default set by the server; check the absolute expiry returned with your approval.">by default</Tip></dd>
             </dl>
-            <p v-if="stage === 'unknown'" class="lw-alert" data-test="stage-blocked">{{ flow.blocked }}</p>
-            <p v-else class="lw-note">
-              The legs and amounts are bound by the server at confirmation; this API offers no
-              preview. Confirming creates an approval only: you check its terms before a separate
-              Execute.
-            </p>
-            <form class="lw-field" @submit.prevent>
-              <label for="operator-token">Operator access</label>
-              <input id="operator-token" v-model="token" type="password" autocomplete="off"
-                     spellcheck="false" data-test="token">
-            </form>
-          </template>
-
-          <template v-else>
+            <template v-if="!flow.approval">
+              <p v-if="stage === 'unknown'" class="lw-alert" data-test="stage-blocked">{{ flow.blocked }}</p>
+              <p v-else class="lw-alert lw-review-note">Exact execution legs are returned after approval creation.</p>
+              <form class="lw-field" @submit.prevent>
+                <label for="operator-token">Operator access password</label>
+                <div class="lw-password">
+                  <input id="operator-token" v-model="token" :type="showToken ? 'text' : 'password'" autocomplete="off"
+                         spellcheck="false" data-test="token">
+                  <button type="button" class="lw-copy" data-test="show-token" :aria-pressed="showToken"
+                          @click="showToken = !showToken">{{ showToken ? 'Hide' : 'Show' }}<span class="lw-visually-hidden"> password</span></button>
+                </div>
+              </form>
+              <p class="lw-time">Kept in this tab only.</p>
+            </template>
+            <p v-else class="lw-time">Approval created. Check the bound terms before execution.</p>
+          </section>
+          <section class="lw-approval-bound" aria-labelledby="bound-heading" data-test="bound-stage">
+            <h3 id="bound-heading"><span class="lw-review-number">2</span> Check bound terms</h3>
+            <Tip :text="stageHeading"><p :class="['lw-status', `lw-status--${STAGES[stage].tone}`]" data-test="stage">
+              <span aria-hidden="true">{{ STAGES[stage].icon }}</span><span>{{ STAGES[stage].word }}</span>
+            </p></Tip>
+            <p v-if="!flow.approval" class="lw-time">Create an approval to read its exact terms.</p>
+          <template v-if="flow.approval">
             <p v-if="stage === 'executing' || stage === 'reconciled' || stage === 'incident'"
                class="lw-note" role="status" data-test="stage-status">{{ stageStatus }}</p>
             <dl class="lw-terms" data-test="bound">
@@ -221,7 +261,7 @@
               <dt>Provider</dt><dd>{{ LABELS[flow.approval.mode] || flow.approval.mode }}</dd>
               <dt>Plan hash</dt>
               <dd class="lw-copyable">
-                <span class="lw-hash" data-test="plan-hash">{{ flow.approval.plan_hash }}</span>
+                <Tip :text="flow.approval.plan_hash"><span class="lw-hash" data-test="plan-hash">{{ flow.approval.plan_hash }}</span></Tip>
                 <button type="button" class="lw-copy" data-test="copy-hash"
                         @click="copy('Plan hash', flow.approval.plan_hash)">Copy<span class="lw-visually-hidden"> plan hash</span></button>
               </dd>
@@ -231,18 +271,20 @@
             <div v-if="!flow.executed || flow.invalid" class="lw-table-wrap" tabindex="0"
                  role="region" aria-label="Bound legs">
               <table class="lw-table" data-test="legs">
-                <thead>
-                  <tr><th scope="col">#</th><th scope="col">Kind</th><th scope="col">Amount</th>
-                    <th scope="col">Source</th><th scope="col">Counterparty</th><th scope="col">Funded by</th>
-                    <th scope="col">After</th><th scope="col">Facility</th></tr>
-                </thead>
+                <thead><tr><th scope="col">Execution legs (bound)</th><th scope="col">Amount</th></tr></thead>
                 <tbody>
                   <tr v-for="leg in flow.approval.legs" :key="leg.index">
-                    <td>{{ leg.index }}</td><td>{{ leg.kind }}</td>
+                    <td><strong>{{ leg.index }} · {{ leg.kind }}</strong>
+                      <div>{{ leg.source }} → {{ leg.counterparty }}</div>
+                      <details class="lw-bound-conditions"><summary>Conditions</summary>
+                        <dl class="lw-terms">
+                          <dt>Funded by</dt><dd>{{ leg.funded_by ?? '—' }}</dd>
+                          <dt>After</dt><dd>{{ (leg.after ?? []).join(', ') || '—' }}</dd>
+                          <dt>Facility</dt><dd>{{ leg.facility_id ?? '—' }}</dd>
+                        </dl>
+                      </details>
+                    </td>
                     <td class="lw-num">{{ money(leg.amount) }}</td>
-                    <td>{{ leg.source }}</td><td>{{ leg.counterparty }}</td>
-                    <td>{{ leg.funded_by ?? '—' }}</td><td>{{ (leg.after ?? []).join(', ') || '—' }}</td>
-                    <td>{{ leg.facility_id ?? '—' }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -256,14 +298,17 @@
               <li v-for="item in incidents" :key="item.key">{{ item.line }}</li>
             </ul>
           </template>
+          </section>
+          </div>
         </div>
 
         <div class="lw-dialog__footer lw-actions">
           <button v-if="!flow.approval" type="button" class="lw-button" data-test="confirm" :disabled="!!confirmWhy"
-                  aria-describedby="confirm-why" @click="confirmApproval">Approve</button>
+                  aria-describedby="confirm-why" @click="confirmApproval">Create approval</button>
+          <span v-if="!flow.approval" class="lw-time">This does not execute funds.</span>
           <button v-else-if="!flow.executed || flow.invalid" type="button" class="lw-button"
                   data-test="execute" :disabled="!!executeWhy" aria-describedby="execute-why"
-                  @click="executePlan">Send</button>
+                  @click="executePlan">Execute approved plan</button>
           <button v-else type="button" class="lw-button" data-test="read-status"
                   :disabled="flow.submitting" :aria-disabled="readingNow || undefined"
                   @click="readNow">{{ CHECK }}</button>
@@ -438,6 +483,8 @@ const flow = reactive({
   open: false, approval: null, serverAt: 0, receivedAt: 0, submitting: false, executed: false,
   invalid: '', blocked: '', message: ''
 })
+const showToken = ref(false)
+watch(() => flow.open, () => { showToken.value = false })
 const opener = shallowRef(null)
 const heading = shallowRef(null)
 const now = shallowRef(Date.now())
@@ -894,14 +941,14 @@ const legs = computed(() => {
       [text, tone, icon] = [`${WORD[leg.state]} · ${status} · incident open`, 'bad', '!']
     } else if (leg.state === 'failed') {
       [text, tone, icon] = [`Failed · ${status}`, 'bad', '✕']
-    } else if (leg.reconciled) {
+    } else if (leg.reconciled && leg.state === 'settled' && leg.journal_id) {
       [text, tone, icon] = [`${status} · reconciled as of ${formatTime(body.as_of).utc}`, 'ok', '✓']
     } else {
       [text, tone, icon] = [`${WORD[leg.state] ?? leg.state} · ${status} · not reconciled`, 'warn', '◷']
     }
     const mode = leg.receipt?.mode ?? body.mode
     // an open incident takes the leg back from Reconciled: the tracker never outruns the evidence
-    const reconciled = leg.reconciled && leg.state === 'settled' && !open.length
+    const reconciled = leg.reconciled && leg.state === 'settled' && !!leg.journal_id && !open.length
     const step = reconciled ? 3 : local ? 0 : STEP[leg.state] ?? 0
     const now = local && reconciled ? 'ledger only' : { failed: 'failed', unknown: 'outcome unknown' }[leg.state] ?? ''
     const steps = STEPS.map((name, n) => {
@@ -911,6 +958,15 @@ const legs = computed(() => {
     return { ...leg, text, tone, icon, steps, mode: local ? 'Ledger only (simulated)' : LABELS[mode] || mode }
   })
 })
+
+const legTitle = (leg) => ({ advance: 'Advance inflow', payout: 'Payroll payout', repayment: 'Repayment', fx: 'FX conversion' }[leg.kind] ?? leg.label ?? leg.kind)
+const legPill = (leg) => leg.state === 'unknown' ? 'Outcome unknown' :
+  `${leg.receipt?.status ?? WORD[leg.state]}${leg.tone === 'ok' ? ' · Reconciled' : leg.tone === 'bad' ? ' · Needs review' : ' · Not reconciled'}`
+const legIds = (leg) => [
+  ['Request id', leg.receipt?.request_id ?? leg.request_id],
+  ['Provider id', leg.receipt?.provider_id ?? leg.provider_id],
+  ['Journal', leg.journal_id]
+]
 
 /** E6: each open incident with the evidence it was raised on, never a guessed outcome. */
 const incidents = computed(() => {
@@ -937,6 +993,21 @@ const incidents = computed(() => {
       line: `${kindText(i.kind)} on ${i.leg_id}, opened ${formatTime(i.opened_at).utc}`,
       evidence: evidence(legOf(i.leg_id), [['Opened', formatTime(i.opened_at).utc]])
     }))
+  ]
+})
+
+/** Aggregate progress cannot outrun any leg; ledger-only entries skip provider steps. */
+const allReconciled = computed(() => !!legs.value.length && !incidents.value.length &&
+  legs.value.every((l) => l.state === 'settled' && l.reconciled && l.journal_id))
+const progress = computed(() => {
+  const provider = legs.value.filter((l) => !(l.state === 'settled' && !l.provider_id))
+  const submitted = !!provider.length && provider.every((l) => ['submitted', 'settled', 'failed', 'unknown'].includes(l.state))
+  const confirmed = !!provider.length && provider.every((l) => l.state === 'settled' && l.provider_id && l.receipt)
+  return [
+    { name: 'Approved', done: !!execution.value?.approval_id, note: 'Plan authorized' },
+    { name: 'Submitted', done: submitted, note: provider.length ? submitted ? 'Sent to provider' : 'Awaiting submission' : 'No provider operation' },
+    { name: 'Provider confirmed', done: confirmed, note: provider.length ? 'Provider evidence' : 'Not applicable' },
+    { name: 'Reconciled', done: allReconciled.value, note: 'Matched in ledger' }
   ]
 })
 
@@ -987,7 +1058,7 @@ const lead = computed(() => {
   }
   if (!body.legs.length) return 'The plan you approved is sent; its payments are not recorded yet.'
   const n = body.legs.length
-  const checked = body.legs.filter((l) => l.reconciled && l.state === 'settled').length
+  const checked = body.legs.filter((l) => l.reconciled && l.state === 'settled' && l.journal_id).length
   if (checked < n) return `The plan you approved is under way: ${checked} of ${n} payments checked against your books so far.`
   const moved = movedWords(body.legs.filter((l) => INFLOW.has(l.kind)))
   const paid = movedWords(body.legs.filter((l) => OUTFLOW.has(l.kind)))
@@ -1008,7 +1079,7 @@ const subtitle = computed(() => {
   const plan = PLANS[policy.value] ?? 'Approved plan'
   if (!body) return held.value ? `${plan} · approved, not sent` : 'No execution recorded yet'
   const n = body.legs.length
-  const checked = body.legs.filter((l) => l.reconciled && l.state === 'settled').length
+  const checked = body.legs.filter((l) => l.reconciled && l.state === 'settled' && l.journal_id).length
   return `${plan} · ${checked} of ${n} legs reconciled`
 })
 
@@ -1039,7 +1110,7 @@ const stage = computed(() => {
       // an unknown leg is still being read (executing); an open incident or a failure is not
       const opened = body.incidents.some((i) => i.state === 'open')
       if (opened || body.legs.some((l) => l.state === 'failed')) return 'incident'
-      if (body.legs.length && body.legs.every((l) => l.reconciled)) return 'reconciled'
+      if (allReconciled.value) return 'reconciled'
     }
     return 'executing'
   }
@@ -1109,7 +1180,15 @@ const FOCUSABLE = 'button, [href], input, select, textarea, summary, [tabindex]:
 function trap (event) {
   const box = dialog.value
   if (!box) return
-  const items = [...box.querySelectorAll(FOCUSABLE)].filter((el) => !el.disabled)
+  const items = [...box.querySelectorAll(FOCUSABLE)].filter((el) => {
+    if (el.disabled) return false
+    for (let node = el; node && node !== box; node = node.parentElement) {
+      const style = getComputedStyle(node)
+      if (style.display === 'none' || style.visibility === 'hidden') return false
+      if (node.parentElement?.tagName === 'DETAILS' && !node.parentElement.open && node.tagName !== 'SUMMARY') return false
+    }
+    return true
+  })
   const at = document.activeElement
   const inside = box.contains(at)
   if (!items.length) {
@@ -1135,8 +1214,9 @@ function onKey (event) {
     closeReview()
   } else if (event.key === 'Tab') trap(event)
 }
-document.addEventListener('keydown', onKey)
-onUnmounted(() => document.removeEventListener('keydown', onKey))
+// Capture before nested tooltips consume Escape: the modal owns dismissal while it is open.
+document.addEventListener('keydown', onKey, true)
+onUnmounted(() => document.removeEventListener('keydown', onKey, true))
 
 // A new stage keeps focus in the dialog: a control that went away or was disabled hands focus to
 // the heading; focus already on a live control inside stays where it is.
@@ -1185,13 +1265,13 @@ watch(stage, async () => {
   list-style: none;
   padding: 0;
   display: grid;
-  gap: var(--lw-space-3);
+  gap: 0;
 }
 .lw-exec {
   display: grid;
   gap: var(--lw-space-6);
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "terms" "legs" "incidents";
+  grid-template-areas: "legs" "terms" "incidents";
   margin-top: var(--lw-space-6);
 }
 .lw-exec__terms { grid-area: terms; }
@@ -1263,7 +1343,7 @@ watch(stage, async () => {
 .lw-dialog {
   display: flex;
   flex-direction: column;
-  width: min(48rem, 100%);
+  width: min(76rem, 100%);
   max-height: calc(100vh - 2 * var(--lw-space-4));
   max-height: calc(100dvh - 2 * var(--lw-space-4));
   border: 1px solid var(--lw-rule);
@@ -1299,5 +1379,129 @@ watch(stage, async () => {
     border: 0;
     border-radius: 0;
   }
+}
+.lw-execution-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--lw-space-2) var(--lw-space-4);
+  padding: var(--lw-space-4);
+  background: var(--lw-selected);
+  color: var(--lw-ink);
+}
+.lw-execution-banner--ok { color: var(--lw-ok); }
+.lw-execution-progress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: var(--lw-space-6) 0;
+  border-bottom: 1px solid var(--lw-rule);
+  gap: var(--lw-space-2);
+}
+.lw-execution-progress li { display: grid; gap: var(--lw-space-1); min-width: 0; position: relative; }
+.lw-execution-progress small { color: var(--lw-ink-muted); }
+.lw-execution-progress__mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--lw-rule);
+  border-radius: 50%;
+  background: var(--lw-surface);
+  color: var(--lw-ink-muted);
+}
+.lw-execution-progress li[data-reached="true"] .lw-execution-progress__mark {
+  background: var(--lw-brand);
+  border-color: var(--lw-brand);
+  color: var(--lw-on-brand);
+}
+.lw-execution-progress li:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 15px;
+  left: 38px;
+  right: 0;
+  border-top: 1px solid var(--lw-rule);
+}
+.lw-execution-progress li[data-reached="true"]:not(:last-child)::after { border-color: var(--lw-brand); }
+.lw-leg { border-top: 1px solid var(--lw-rule); }
+.lw-legs > li:last-child { border-bottom: 1px solid var(--lw-rule); }
+.lw-leg__row {
+  list-style: none;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1.2fr) auto minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: var(--lw-space-3);
+  padding: var(--lw-space-4) 0;
+  cursor: pointer;
+  min-height: var(--lw-target);
+}
+.lw-leg__row::-webkit-details-marker { display: none; }
+.lw-leg__number, .lw-incident-check {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--lw-selected);
+  color: var(--lw-brand);
+}
+.lw-leg__name { font-family: var(--lw-font-heading); font-size: 20px; line-height: 1.2; }
+.lw-leg__name small { display: block; font: 12px/1.5 var(--lw-font-text); color: var(--lw-ink-muted); margin-top: 4px; }
+.lw-leg__amount { font-family: var(--lw-font-heading); font-size: 24px; font-weight: 600; }
+.lw-leg__status { justify-self: end; font-size: 12px; }
+.lw-leg__pill { background: var(--lw-selected); border-radius: 4px; padding: 6px 8px; }
+.lw-leg__chevron { justify-self: end; }
+.lw-leg[open] > summary .lw-leg__chevron { transform: rotate(180deg); }
+.lw-leg__detail { padding: 0 var(--lw-space-4) var(--lw-space-4); }
+.lw-summary-terms { margin-bottom: var(--lw-space-6); }
+.lw-exec__incidents { border-top: 1px solid var(--lw-rule); padding-top: var(--lw-space-4); }
+.lw-exec__incidents [data-test="no-incidents"] { display: flex; align-items: center; gap: var(--lw-space-3); color: var(--lw-ink); }
+.lw-incident-check { flex-shrink: 0; }
+.lw-review-subtitle { color: var(--lw-ink-muted); margin-top: 0; }
+.lw-dialog #review-heading { font-size: clamp(28px, 3vw, 42px); font-family: var(--lw-font-heading); margin-bottom: var(--lw-space-2); }
+.lw-approval-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--lw-space-6); }
+.lw-approval-grid > section { min-width: 0; }
+.lw-approval-bound { background: var(--lw-selected); padding: var(--lw-space-4); }
+.lw-approval-create { padding: var(--lw-space-4) 0; }
+.lw-approval-grid h3 { font: 28px/1.3 var(--lw-font-heading); margin: 0 0 var(--lw-space-4); display: flex; align-items: center; gap: var(--lw-space-3); }
+.lw-review-number { display: grid; place-items: center; border: 1px solid var(--lw-rule); border-radius: 50%; width: 44px; height: 44px; flex-shrink: 0; }
+.lw-approval-bound .lw-review-number { background: var(--lw-brand); color: var(--lw-on-brand); }
+.lw-review-context { grid-template-columns: 9rem minmax(0, 1fr); }
+.lw-review-context dt, .lw-review-context dd { padding-block: var(--lw-space-3); border-top: 1px solid var(--lw-rule); }
+.lw-review-note { font-size: 14px; }
+.lw-field label { flex-basis: 100%; }
+.lw-password { display: flex; width: 100%; gap: var(--lw-space-2); }
+.lw-password input { width: 0; }
+.lw-approval-bound .lw-hash { display: inline-block; max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.lw-dialog--bound .lw-dialog__footer { justify-content: flex-end; }
+.lw-approval-bound .lw-table { min-width: 0; width: 100%; }
+.lw-approval-bound .lw-table td { overflow-wrap: anywhere; white-space: normal; }
+.lw-approval-bound .lw-table td:last-child { white-space: nowrap; }
+.lw-bound-conditions summary { cursor: pointer; min-height: var(--lw-target); display: flex; align-items: center; color: var(--lw-link); }
+.lw-bound-conditions .lw-terms { font-size: 12px; }
+.lw-bound-conditions dd { overflow-wrap: anywhere; }
+@media (min-width: 1200px) {
+  .lw-exec { column-gap: var(--lw-space-6); }
+  .lw-exec__terms, .lw-exec__incidents { border-left: 1px solid var(--lw-rule); padding-left: var(--lw-space-6); }
+}
+@media (max-width: 767px) {
+  .lw-approval-grid { grid-template-columns: minmax(0, 1fr); }
+  .lw-approval-grid:not(.lw-approval-grid--bound) .lw-approval-bound,
+  .lw-approval-grid--bound .lw-approval-create { display: none; }
+  .lw-dialog__footer { gap: var(--lw-space-2); }
+  .lw-dialog__footer .lw-time { font-size: 12px; }
+  .lw-leg__row { grid-template-columns: 32px minmax(0, 1fr) auto 16px; gap: var(--lw-space-2); }
+  .lw-leg__number { width: 30px; height: 30px; }
+  .lw-leg__name { font-size: 18px; }
+  .lw-leg__amount { font-size: 20px; }
+  .lw-leg__status { grid-row: 2; grid-column: 2 / 4; justify-self: start; }
+  .lw-leg__chevron { grid-column: 4; grid-row: 1; }
+  .lw-execution-progress { font-size: 12px; }
+  .lw-execution-progress small { display: none; }
+  .lw-execution-banner { font-size: 13px; }
+  .lw-review-context { grid-template-columns: 1fr minmax(0, 1fr); }
+  .lw-review-context dd { margin-bottom: 0; }
 }
 </style>

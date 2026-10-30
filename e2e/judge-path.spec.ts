@@ -128,7 +128,7 @@ async function execution (page: Page, demo: Demo): Promise<void> {
 /** Click 4, Open receipt: provider id, journal, observed time; read-only. */
 async function receipt (page: Page): Promise<void> {
   const details = test$(page, 'receipt').first()
-  await click(page, 4, details.locator('summary'))
+  await click(page, 4, details.locator('.lw-leg__chevron'))
   await expect(details).toHaveAttribute('open', '')
   // the opened one is read on screen; every other leg's receipt carries the same fields
   for (const each of await test$(page, 'receipt').all()) {
@@ -289,7 +289,7 @@ test.describe('accessibility', () => {
 
     await execution(page, demo)
     await accessible(page, 'Execution', phone)
-    await focusByKeyboard(page, test$(page, 'receipt').first().locator('summary'), 'Open receipt')
+    await focusByKeyboard(page, test$(page, 'receipt').first().locator(':scope > summary'), 'Open receipt')
     await receipt(page)
     await accessible(page, 'Execution receipt', phone)
 

@@ -616,7 +616,7 @@ describe('accessibility: keyboard review (mocked transport only)', () => {
     const { w, calls } = await reviewReady()
     expect(focused().id).toBe('review-heading')
     const buttons = w.get('[data-test="review"]').findAll('button').map((b) => b.text())
-    expect(buttons).toEqual(['Approve', 'Cancel']) // logical order: the act, then the way out
+    expect(buttons).toEqual(['Show password', 'Create approval', 'Cancel']) // logical order: the act, then the way out
     await w.get('[data-test="review"]').trigger('keydown', { key: 'Escape' })
     await flushPromises()
     expect(w.find('[data-test="review"]').exists()).toBe(!c.escape_dismisses_review_without_post)
@@ -2404,5 +2404,98 @@ describe('the Approval summary shows the approval this tab holds (board item 151
       expect(held(w).exists()).toBe(false)
       expect(text(w, 'message')).toContain('was created after this screen moved on')
     })
+  })
+})
+
+
+describe('Execution mockup 06: aggregate evidence and compact receipts', () => {
+  async function showing (legs, incidents = []) {
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': executionBody({ legs, incidents })
+    })
+    return open(Execution, '/execution')
+  }
+
+  const reached = (w) => w.get('[data-test="execution-progress"]').findAll('li').map((l) => l.attributes('data-reached') === 'true')
+
+  it('does not infer success from an empty execution', async () => {
+    const w = await showing([])
+    expect(reached(w)).toEqual([true, false, false, false])
+    expect(text(w, 'execution-banner')).not.toContain('Reconciled as of')
+  })
+
+  it('requires every provider leg, not just the first settled leg', async () => {
+    const w = await showing([advance(), sentPayout()])
+    expect(reached(w)).toEqual([true, true, false, false])
+    expect(text(w, 'execution-banner')).not.toContain('Reconciled as of')
+  })
+
+  it('an incident removes the aggregate reconciliation claim', async () => {
+    const leg = advance()
+    const w = await showing([leg], [{ leg_id: leg.leg_id, kind: 'amount_mismatch', state: 'open', opened_at: '2026-11-05T10:02:00Z' }])
+    expect(reached(w)).toEqual([true, true, true, false])
+    expect(text(w, 'execution-banner')).not.toContain('Reconciled as of')
+    expect(text(w, 'receipt-pill')).toContain('Needs review')
+  })
+
+  it('ledger-only reconciliation never claims provider submission or confirmation', async () => {
+    const w = await showing([{ ...advance(), kind: 'repayment', provider_id: null, receipt: null }])
+    expect(reached(w)).toEqual([true, false, false, true])
+    expect(text(w, 'receipt-amount')).toBe('Unavailable')
+    expect(text(w, 'execution-banner')).toContain('Reconciled as of')
+  })
+
+  it('a missing journal cannot produce an aggregate reconciled banner', async () => {
+    const w = await showing([{ ...advance(), journal_id: null }])
+    expect(reached(w)).toEqual([true, true, true, false])
+    expect(text(w, 'execution-banner')).not.toContain('Reconciled as of')
+    expect(text(w, 'receipt-pill')).not.toContain('· Reconciled')
+    expect(w.findAll('h2').some((h) => h.text() === 'Ledger reconciliation')).toBe(false)
+  })
+
+  it('receipt ids start folded and reveal copy controls when expanded', async () => {
+    const w = await showing([advance()])
+    const receipt = w.get('[data-test="receipt"]')
+    expect(receipt.attributes('open')).toBeUndefined()
+    receipt.element.open = true
+    await nextTick()
+    expect(receipt.text()).toContain(advance().receipt.provider_id)
+    expect(receipt.findAll('button').map((b) => b.attributes('aria-label'))).toEqual([
+      'Copy Request id', 'Copy Provider id', 'Copy Journal'
+    ])
+  })
+})
+
+describe('Approval mockup 07: password presentation', () => {
+  it('show/hide changes only the input type and resets on review close', async () => {
+    const { w, calls } = await reviewReady()
+    const input = w.get('[data-test="token"]')
+    expect(input.attributes('type')).toBe('password')
+    await w.get('[data-test="show-token"]').trigger('click')
+    expect(input.attributes('type')).toBe('text')
+    expect(w.get('[data-test="show-token"]').attributes('aria-pressed')).toBe('true')
+    expect(document.body.innerHTML).not.toContain(TOKEN)
+    await closeDialog(w)
+    await w.get('[data-test="review-plan"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-test="token"]').attributes('type')).toBe('password')
+    expect(w.get('[data-test="token"]').element.value).toBe(TOKEN)
+    expect(posts(calls)).toEqual([])
+  })
+})
+
+
+describe('Approval mockup 07: nested tooltip dismissal', () => {
+  it('Escape from a tooltip still dismisses the modal and returns focus', async () => {
+    const { w, calls } = await reviewReady()
+    const tip = w.get('[data-test="fee-context"]')
+    tip.element.focus()
+    await tip.trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(w.find('[data-test="review"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(w.get('[data-test="review-plan"]').element)
+    expect(posts(calls)).toEqual([])
   })
 })

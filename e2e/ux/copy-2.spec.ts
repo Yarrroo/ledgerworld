@@ -186,13 +186,17 @@ test('Execution: what moved in and out, checked against your books; ids one clic
   }
   await honest(page, false)
   await plainHeadings(page)
-  await expect(page.locator('#summary-heading')).toHaveText('What you approved')
-  await expect(page.locator('#receipts-heading')).toHaveText('Money moved, with receipts')
+  await expect(page.locator('#summary-heading')).toHaveText('Bound approval')
+  await expect(page.locator('#receipts-heading')).toHaveText('Execution legs')
   await expect($(page, 'context')).not.toBeVisible()
   await folded(page, 'how-execution', [`execution ${overview.demo.execution_id}`, `Run ${overview.demo.run_id}`])
-  await folded(page, 'how-summary', [execution.approval_id, execution.snapshot_id])
+  await expect($(page, 'summary-plain')).not.toHaveAttribute('open', '')
+  await $(page, 'summary-plain').locator('summary').click()
+  await expect($(page, 'summary-plain')).toContainText(execution.approval_id)
+  await expect($(page, 'summary-plain')).toContainText(execution.snapshot_id)
+  await $(page, 'summary-plain').locator('summary').click()
   await expect($(page, 'review-plan')).toHaveText('Review plan')
-  await expect($(page, 'receipt').first().locator('summary')).toHaveText('Open receipt') // the judge path's name
+  await expect($(page, 'receipt').first().locator(':scope > summary')).toContainText('Open receipt') // the judge path's action
   for (const hook of ['authority', 'summary', 'receipts', 'review-why', 'summary-read', 'summary-approval']) {
     await expect($(page, hook)).toHaveCount(1)
   }
@@ -209,8 +213,8 @@ test('Execution: what moved in and out, checked against your books; ids one clic
   }).toPass({ timeout: 20_000 })
   await $(page, 'review-plan').click()
   await expect($(page, 'review')).toHaveAttribute('data-stage', 'review')
-  await expect(page.locator('#review-heading')).toHaveText(/^Review the plan · (Do nothing|Keep a fixed buffer|Borrow just enough)$/)
-  await expect($(page, 'confirm')).toHaveText('Approve')
+  await expect(page.locator('#review-heading')).toHaveText('Review before you execute.')
+  await expect($(page, 'confirm')).toHaveText('Create approval')
   expect(writes).toEqual([])
 })
 
