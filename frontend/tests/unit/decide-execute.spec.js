@@ -19,6 +19,7 @@ import approvalBinding from '../../../prp/2026-10-20-ledgerworld/design/modules/
 import legStateMachine from '../../../prp/2026-10-20-ledgerworld/design/modules/execution/fixtures/leg-state-machine.json'
 import overviewLf1 from '../../../contracts/examples/c6_api/valid-overview-lf1.json'
 import executionSettled from '../../../contracts/examples/c6_api/valid-execution.json'
+import treasuryLf1 from '../../../contracts/examples/c6_api/valid-treasury-lf1-delayed.json'
 import boundApproval from '../../../contracts/examples/c3_bound_approval/valid-lf1-integrated.json'
 import submittedPayout from '../../../contracts/examples/c4_provider_op/valid-submitted-payout.json'
 
@@ -211,14 +212,23 @@ afterEach(async () => {
 // -------------------------------------------------------------------------------- Decisions
 
 describe('Decisions: policies side by side', () => {
-  it('shows the three policies in order, each labelled with its cohort and weight kind', async () => {
+  it('shows the three local plan names in order, with cohort and weight kind in one source fold', async () => {
     serve({ 'GET /overview': overview(), 'GET /decisions/run-1': decisionsBody() })
     const w = await open(Decisions, '/decisions')
     const c = decideExecute.comparison
     const tiles = w.findAll('[data-test^="policy-"]')
     expect(tiles.map((t) => t.attributes('data-test'))).toEqual(ORDER.map((p) => `policy-${p}`))
-    for (const t of tiles) expect(t.text()).toContain(`${c.weight_kind} · cohort ${c.cohort}`)
-    expect(text(w, 'cohort')).toContain(c.estimate_kind)
+    expect(tiles.map((t) => t.get('.lw-dec__name').text())).toEqual(['No action', 'Fixed reserve', 'Integrated plan'])
+    for (const t of tiles) expect(t.findAll('dt').map((d) => d.text())).toEqual(['Reserve outcome', 'Funding cost', 'Obligations unmet'])
+    expect(text(w, 'policies')).toContain('Three ways forward')
+    const evidence = w.get('details[data-test="how-decisions"]')
+    expect(evidence.attributes('open')).toBeUndefined()
+    expect(evidence.get('summary').text()).toBe('Source evidence')
+    expect(evidence.findAll('[data-test="weight"]')).toHaveLength(ORDER.length)
+    for (const weight of evidence.findAll('[data-test="weight"]')) expect(weight.text()).toContain(`${c.weight_kind} · cohort ${c.cohort}`)
+    expect(evidence.findAll('[data-test="scenario"]')).toHaveLength(decisionsBody().results.length)
+    expect(w.findAll('[data-test="how-no-action"], [data-test="how-fixed-reserve"], [data-test="how-integrated"]')).toHaveLength(0)
+    expect(evidence.get('[data-test="cohort"]').text()).toContain(c.estimate_kind)
     expect(w.text()).not.toMatch(/%|probability of/i)
     expect(w.get(`[data-test="policy-${c.expected_selected}"]`).find('[data-test="selected"]').exists()).toBe(true)
   })
@@ -229,8 +239,52 @@ describe('Decisions: policies side by side', () => {
     const cost = w.get('[data-test="policy-integrated"]').get('[data-test="cost"]')
     expect(visibleText(cost)).toBe(COST) // its tooltip is not on the page
     expect(cost.get('[role="tooltip"]').text()).toContain('the current plan\'s fee is set at review')
-    expect(w.get('[data-test="policy-no-action"]').text()).toContain('broken in 2 of 3 what-ifs')
-    expect(w.get('[data-test="policy-integrated"]').text()).toContain('kept in all 3 what-ifs')
+    expect(visibleText(w.get('[data-test="policy-no-action"]'))).toContain('Broken in 2 of 3')
+    expect(visibleText(w.get('[data-test="policy-integrated"]'))).toContain('Held in all 3')
+  })
+
+  it('single-scenario reserve outcomes show the breached amount or Floor held, not cohort counts', async () => {
+    const body = decisionsBody()
+    body.results = body.results.filter((r) => r.scenario_id === 's1')
+    serve({
+      'GET /overview': overview(), 'GET /decisions/run-1': body,
+      'GET /treasury': { ...clone(treasuryLf1.instance), snapshot_id: body.snapshot_id, mode: body.mode }
+    })
+    const w = await open(Decisions, '/decisions')
+    const floor = treasuryLf1.instance.accounts[0].floor.minor
+    for (const result of body.results) {
+      const row = w.get(`[data-test="policy-${result.policy}"]`)
+      const outcome = visibleText(row.findAll('dd')[0])
+      if (result.floor_kept) expect(outcome).toContain('Floor held')
+      else {
+        const amount = `$${((floor - result.min_cash.minor) / 100).toLocaleString('en-US')}`
+        expect(outcome).toContain(`Breached by ${amount}`)
+      }
+      expect(outcome).not.toMatch(/of \d|all \d/)
+    }
+  })
+
+  it('radio inspection updates minimum cash but leaves the backend-selected review unchanged and sends no writes', async () => {
+    const body = decisionsBody()
+    const calls = serve({ 'GET /overview': overview(), 'GET /decisions/run-1': body })
+    const w = await open(Decisions, '/decisions')
+    expect(w.find('[data-test="hero-action"] a, [data-test="hero-action"] button').exists()).toBe(false)
+    expect(w.get('[data-test="decision-steps"]').findAll('li').map((s) => s.text().replace(/^\d\s*/, ''))).toEqual(['Rehearse', 'Compare', 'Review'])
+    const review = w.get('[data-test="policies"] [data-test="review-plan"]')
+    const href = review.attributes('href')
+    expect(href).toBe('/execution?run_id=run-1&review=1')
+    for (const [policy, name] of Object.entries({ 'no-action': 'No action', 'fixed-reserve': 'Fixed reserve', integrated: 'Integrated plan' })) {
+      await w.get(`[data-test="policy-${policy}"] input[type="radio"]`).setValue(true)
+      expect(w.findAll('.lw-dec__row.is-chosen')).toHaveLength(1)
+      expect(w.get(`[data-test="policy-${policy}"]`).classes()).toContain('is-chosen')
+      const minimum = Math.min(...body.results.filter((r) => r.policy === policy).map((r) => r.min_cash.minor))
+      expect(visibleText(w.get('[data-test="explanation"]'))).toContain('Minimum projected cash')
+      expect(visibleText(w.get('[data-test="minimum-tip"]'))).toContain(`$${(minimum / 100).toLocaleString('en-US')}`)
+      expect(w.get('[data-test="minimum-tip"] [role="tooltip"]').text()).toContain(`With ${name}`)
+      expect(w.get(`[data-test="policy-${body.selected}"] [data-test="selected"]`).attributes('aria-label')).toBe('Backend-selected plan')
+      expect(review.attributes('href')).toBe(href)
+    }
+    expect(posts(calls)).toHaveLength(0)
   })
 
   it('a reading with no results still draws the page, its header included', async () => {
@@ -251,7 +305,8 @@ describe('Decisions: policies side by side', () => {
     expect(esc).toContain(want.escalate_to)
     expect(esc).toContain('Earliest unmet: reserve floor')
     expect(w.find('[data-test="review-plan"]').exists()).toBe(decideExecute.comparison.all_infeasible.approval_enabled)
-    expect(w.text()).toContain('ranking shown, not executable')
+    expect(w.get('[data-test="hero-lead"] [role="tooltip"]').text()).not.toContain('keeps you covered')
+    expect(w.get('[data-test="escalation"]').text()).toContain('nothing can be approved')
   })
 
   it('a reverse-stress search is labelled as a search, with no probability and no review', async () => {
@@ -266,14 +321,16 @@ describe('Decisions: policies side by side', () => {
   it('a replayed comparison is labelled replay and reviews the current observed plan, not the branch', async () => {
     serve({ 'GET /overview': overview(), 'GET /decisions/run-1': decisionsBody({ replay: true }) })
     const w = await open(Decisions, '/decisions')
-    // on the page, in the header, as Simulation says it; How we know names each replayed branch
+    // Replay stays visible in the header; the single source fold names each replayed branch.
     expect(onPage(w, 'mode')).toMatch(/ · Replay$/)
     expect(onPage(w, 'context-line')).toMatch(/ · Replay$/)
     expect(text(w, 'replay')).toContain('Replay')
-    expect(w.get('[data-test="how-integrated"] [role="tooltip"]').text()).toContain('Replay · Hypothetical branch run-1-s1-integrated')
+    const evidence = w.get('details[data-test="how-decisions"]')
+    expect(evidence.attributes('open')).toBeUndefined()
+    expect(evidence.findAll('[data-test="scenario"]').some((r) => r.text().includes('Replay · Hypothetical branch run-1-s1-integrated'))).toBe(true)
     const review = w.get('[data-test="review-plan"]')
     expect(review.attributes('href')).toBe('/execution?run_id=run-1&review=1')
-    expect(tipOf(review)).toContain('worked out again on today\'s real figures')
+    expect(tipOf(review)).toContain('worked out again on today\'s observed figures')
   })
 
   it('a comparison with any replayed result says Replay on the page, outside every tooltip', async () => {

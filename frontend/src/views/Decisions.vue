@@ -1,12 +1,6 @@
 <template>
   <ScreenShell title="Decisions" headline="Protect payroll. Preserve your reserve."
                :subtitle="subtitle" :lead="lead" :reading="state" :refresh="refresh">
-    <template v-if="reviewable" #action="{ body }">
-      <Tip text="A what-if never approves anything: the chosen plan is worked out again on today's real figures, and you check its terms before any money moves.">
-        <RouterLink class="lw-button" data-test="review-plan"
-                    :to="{ path: '/execution', query: { run_id: body.run_id, review: '1' } }">Review current plan<Arrow /></RouterLink>
-      </Tip>
-    </template>
     <template #default="{ body }">
     <p v-if="body.status === 'pending'" class="lw-note" role="status" data-test="pending">
       The comparison is still running; nothing is selected yet.
@@ -19,142 +13,113 @@
       <p>Escalate to: <strong>{{ body.escalation.contact }}</strong></p>
     </section>
 
+    <ol v-if="!search" class="lw-dec__steps" aria-label="Decision progress" data-test="decision-steps">
+      <li><span>1</span> Rehearse</li><li aria-current="step"><span>2</span> Compare</li><li><span>3</span> Review</li>
+    </ol>
     <div class="lw-dec">
-      <section v-if="!search" class="lw-dec__gap" aria-labelledby="gap-heading" data-panel="Where the cash falls short" data-test="gap">
-        <h2 id="gap-heading">Where the cash falls short</h2>
-        <article class="lw-tile">
-          <div class="lw-tile__label">If you {{ PLANS['no-action'].toLowerCase() }}</div>
-          <template v-if="gap">
-            <p class="lw-dec__line" data-test="gap-summary">
-              Lowest point <Tip :text="`${PLANS['no-action']}'s lowest minimum cash across its what-ifs, read from each branch's realised ledger.`"><strong>{{ metricText(gap.min) }}</strong></Tip>
-              against your safety minimum of
-              <Tip :text="floorTip"><strong>{{ gap.floor ? metricText(gap.floor) : 'Not assessed' }}</strong></Tip>
-              <template v-if="gap.check.state === 'breached'">: <Tip text="Safety minimum minus the lowest point."><strong>{{ formatMoney(-gap.check.gap, gap.min.currency) }}</strong></Tip> short</template>
-              <template v-else-if="gap.check.state === 'kept'">: you stay above it</template>.
-              {{ gap.unmet ? `${gap.unmet} obligation${gap.unmet === 1 ? '' : 's'} unmet.` : 'Every obligation met.' }}
-            </p>
-            <Tip :text="`${PLANS['no-action']}'s lowest point against the reserve floor${firstDue}.`">
-              <div :class="['lw-status', `lw-status--${STATES[gap.check.state].tone}`]">
-                <span aria-hidden="true">{{ STATES[gap.check.state].icon }}</span><span>{{ FLOOR_WORDS[gap.check.state] }}</span>
-              </div>
-            </Tip>
-          </template>
-          <p v-else class="lw-time">No result for {{ PLANS['no-action'] }} in this comparison yet.</p>
+      <section v-if="!search" class="lw-dec__gap" aria-labelledby="gap-heading" data-panel="The gap we need to close" data-test="gap">
+        <h2 id="gap-heading">The gap we need to close</h2>
+        <div v-if="gap" data-test="gap-summary">
+          <Tip :text="`${lead} Lowest point ${metricText(gap.min)}. ${floorTip}`" test="gap-tip">
+            <strong :class="['lw-dec__figure', { 'is-bad': gap.check.state === 'breached' }]" data-test="gap-amount">{{ gap.check.state === 'breached' ? formatMoney(-gap.check.gap, gap.min.currency) : gap.check.state === 'kept' ? formatMoney(0, gap.min.currency) : 'Not assessed' }}</strong>
+          </Tip>
+          <p>{{ gapSentence }}</p>
+        </div>
+        <p v-else class="lw-time">No result for No action in this comparison yet.</p>
 
-          <div v-if="explained" class="lw-dec__explain" role="status" aria-live="polite" data-test="explanation">
-            <Tip text="Choosing a plan here only changes this explanation. It approves nothing.">
-              <div class="lw-tile__label">With {{ PLANS[explained.policy] }}</div>
+        <section class="lw-dec__waterfall" aria-labelledby="waterfall-heading" data-test="waterfall">
+          <h3 id="waterfall-heading">Cash waterfall (before plan)</h3>
+          <div v-if="waterfall" class="lw-dec__plot">
+            <svg viewBox="0 0 560 280" role="img" aria-label="Observed starting cash, net cash change and No action's lowest remaining cash">
+              <g class="lw-dec__axis">
+                <g v-for="tick in waterfall.ticks" :key="tick">
+                  <text x="70" :y="waterfall.y(tick) + 4" text-anchor="end">{{ formatMoney(tick, waterfall.currency) }}</text>
+                </g>
+                <line x1="82" x2="548" :y1="waterfall.y(0)" :y2="waterfall.y(0)" />
+                <line x1="82" x2="82" y1="28" y2="230" />
+              </g>
+              <line v-if="waterfall.floor !== null" x1="82" x2="548" :y1="waterfall.y(waterfall.floor)" :y2="waterfall.y(waterfall.floor)" class="lw-dec__floor" data-test="waterfall-floor" />
+              <g v-for="(bar, i) in waterfall.bars" :key="bar.label" :data-test="`waterfall-bar-${i}`">
+                <rect :x="106 + i * 144" :y="waterfall.y(Math.max(bar.from, bar.to))" width="84" :height="Math.max(1, Math.abs(waterfall.y(bar.from) - waterfall.y(bar.to)))" :class="['lw-dec__bar', { 'is-out': bar.value < 0, 'is-remaining': i === 2 }]" />
+                <text :x="148 + i * 144" :y="waterfall.y(Math.max(bar.from, bar.to)) - 9" text-anchor="middle" class="lw-dec__value">{{ formatMoney(bar.value, waterfall.currency) }}</text>
+                <text :x="148 + i * 144" y="258" text-anchor="middle">{{ bar.label }}</text>
+              </g>
+            </svg>
+            <Tip v-for="(bar, i) in waterfall.bars" :key="bar.label" class="lw-dec__mark" :style="{ left: `${(106 + i * 144) / 5.6}%` }" toggle>
+              <button type="button" :aria-label="`${bar.label}: ${formatMoney(bar.value, waterfall.currency)}`" data-test="waterfall-point" />
+              <template #tip>{{ bar.label }} · {{ formatMoney(bar.value, waterfall.currency) }}. {{ waterfall.source }}</template>
             </Tip>
-            <p class="lw-dec__line">
-              Lowest point {{ explained.min }}; safety minimum
-              {{ explained.breached ? `broken in ${explained.breached} of ${explained.rows.length} what-ifs` : `kept in all ${explained.rows.length} what-ifs` }};
-              {{ explained.unmet }} obligation{{ explained.unmet === 1 ? '' : 's' }} unmet; {{ explained.cost }}.
-            </p>
           </div>
+          <p v-else class="lw-time" data-test="waterfall-unavailable">Matching observed cash is unavailable; no waterfall is drawn.</p>
+          <Tip v-if="gap?.floor" :text="floorTip" test="waterfall-floor-tip"><span class="lw-dec__floor-key">Reserve floor {{ metricText(gap.floor) }}</span></Tip>
+          <Tip v-if="gap?.check.state === 'breached'" text="Reserve floor minus No action's lowest branch cash."><span class="lw-dec__chart-gap is-bad">↕ {{ formatMoney(-gap.check.gap, gap.min.currency) }} gap</span></Tip>
+        </section>
 
-          <details class="lw-calc" data-test="timing">
-            <summary>When the money moves</summary>
-            <div class="lw-calc__body">
-              <ol v-if="timing.length" class="lw-dec__timing">
-                <li v-for="t in timing" :key="t.key" :data-at="t.h">
-                  <Tip :text="`Simulated hour ${t.h} from the snapshot's observation${t.ref ? ` · ${t.ref}` : ''}.`"><strong>h{{ t.h }}</strong></Tip>
-                  · {{ t.what }}
-                </li>
-              </ol>
-              <p v-else>The treasury read did not answer for this snapshot; timing is not shown.</p>
-            </div>
-          </details>
-        </article>
+        <section class="lw-dec__timing" data-test="timing" aria-labelledby="timing-heading">
+          <h3 id="timing-heading">Key timing in this scenario</h3>
+          <table v-if="timing.length" class="lw-table">
+            <tbody><tr v-for="t in timing" :key="t.key" :data-at="t.h">
+              <th scope="row"><Tip :text="`Simulated hour ${t.h} from the snapshot's observation${t.ref ? ` · ${t.ref}` : ''}.`">{{ t.h === 0 ? 'Now' : `In ${t.h}h` }}</Tip></th>
+              <td>{{ t.what }}</td>
+            </tr></tbody>
+          </table>
+          <p v-else class="lw-time">No matching treasury timing is available.</p>
+        </section>
       </section>
 
       <section :aria-labelledby="search ? 'search-heading' : 'policies-heading'" class="lw-dec__policies"
-               :data-test="search ? 'search' : 'policies'" :data-panel="search ? 'Search results' : 'Plans side by side'">
-        <div class="lw-dec__heading">
-          <h2 v-if="search" id="search-heading">{{ LABELS.search }}</h2>
-          <h2 v-else id="policies-heading">
-            Three plans side by side<template v-if="body.status === 'all_infeasible'"> · ranking shown, not executable</template>
-          </h2>
-          <HowWeKnow test="how-decisions">
-            <p class="lw-source" data-test="cohort">
-              Run {{ body.run_id }} · checkpoint round {{ body.checkpoint_round }} · cohort {{ body.cohort }} ·
-              {{ body.weight_kind }} · a scenario comparison, not a probability.
-            </p>
-            <p>Each plan faced the same shock in its own what-if; a count of what-ifs is a count, never odds.
-              <template v-if="family">Scenario family {{ family.id }}. </template>Every policy (no-action,
-              fixed-reserve, integrated) ran in a fresh branch from round {{ body.checkpoint_round }} of snapshot
-              {{ body.snapshot_id }}. The shortfall is No action's lowest minimum cash against the operating
-              account's reserve floor; its day is the first payment due on that account. The fee is the selected
-              policy's branch funding cost.</p>
-            <p v-if="replayed" data-test="replay">
-              Results marked Replay come from an earlier run of that branch, not from this session.
-            </p>
-          </HowWeKnow>
-        </div>
+               :data-test="search ? 'search' : 'policies'" :data-panel="search ? 'Search results' : 'Three ways forward'">
+        <h2 v-if="search" id="search-heading">{{ LABELS.search }}</h2>
+        <h2 v-else id="policies-heading">Three ways forward</h2>
         <div class="lw-dec__rows" :role="search ? undefined : 'radiogroup'" :aria-labelledby="search ? undefined : 'policies-heading'">
-          <article v-for="p in policies" :key="p.policy" class="lw-dec__row" :class="{ 'is-chosen': p.policy === chosen }"
-                   :data-test="`policy-${p.policy}`">
+          <article v-for="p in policies" :key="p.policy" class="lw-dec__row" :class="{ 'is-chosen': p.policy === chosen }" :data-test="`policy-${p.policy}`">
             <label class="lw-dec__head">
-              <input v-if="!search" type="radio" name="policy" :value="p.policy" :checked="p.policy === chosen"
-                     :disabled="body.status === 'pending'" @change="chosen = p.policy">
-              <span class="lw-dec__name">{{ PLANS[p.policy] }}</span>
+              <input v-if="!search" type="radio" name="policy" :value="p.policy" :checked="p.policy === chosen" :disabled="body.status === 'pending'" @change="chosen = p.policy">
+              <span><span class="lw-dec__name">{{ NAMES[p.policy] }}</span><span class="lw-dec__description">{{ DESCRIPTIONS[p.policy] }}</span></span>
               <Tip v-if="body.selected === p.policy" text="The comparison ranked this plan first. Selecting approves nothing.">
-                <span class="lw-status lw-status--ok" data-test="selected">
-                  <span aria-hidden="true">✓</span><span>Selected</span>
-                </span>
+                <span class="lw-status lw-status--ok" data-test="selected" aria-label="Backend-selected plan">✓ Selected</span>
               </Tip>
             </label>
-            <dl class="lw-terms">
-              <dt>Obligations unmet</dt>
-              <dd><Tip :text="`Payments missed, summed over ${p.rows.length} what-if${p.rows.length === 1 ? '' : 's'}.`">{{ p.unmet }}</Tip></dd>
-              <dt>Safety minimum</dt>
-              <dd><Tip text="Each what-if's own verdict on the operating account's reserve floor.">{{ p.breached ? `broken in ${p.breached} of ${p.rows.length} what-ifs` : `kept in all ${p.rows.length} what-ifs` }}</Tip></dd>
-              <dt>Largest shortfall</dt>
-              <dd><Tip :text="`The deepest gap below the reserve floor among the what-ifs that broke it; lowest point ${p.min}.`">{{ p.short }}</Tip></dd>
-              <dt>Fees across what-ifs</dt>
-              <dd data-test="cost"><Tip text="Each branch's scenario funding cost; the current plan's fee is set at review.">{{ p.cost }}</Tip></dd>
+            <dl class="lw-dec__terms">
+              <div><dt>Reserve outcome</dt><dd><Tip :text="`${p.breached ? `broken in ${p.breached} of ${p.rows.length} what-ifs` : `kept in all ${p.rows.length} what-ifs`}; lowest point ${p.min}; largest shortfall ${p.short}.`"><span :class="p.breached ? 'is-bad' : 'is-ok'">{{ p.rows.length === 1 ? (p.breached ? (['Not assessed', 'Unknown'].includes(p.short) ? '✕ Floor breached' : `✕ Breached by ${p.short}`) : '✓ Floor held') : (p.breached ? `✕ Broken in ${p.breached} of ${p.rows.length}` : `✓ Held in all ${p.rows.length}`) }}</span></Tip></dd></div>
+              <div><dt>Funding cost</dt><dd data-test="cost"><Tip text="Each branch's scenario funding cost; the current plan's fee is set at review.">{{ p.cost }}</Tip></dd></div>
+              <div><dt>Obligations unmet</dt><dd><Tip :text="`Payments missed, summed over ${p.rows.length} what-if${p.rows.length === 1 ? '' : 's'}.`">{{ p.unmet }}</Tip></dd></div>
             </dl>
-            <HowWeKnow :test="`how-${p.policy}`">
-              <p data-test="weight">Policy {{ p.policy }} · {{ body.weight_kind }} · cohort {{ body.cohort }}</p>
-              <ul class="lw-scenarios" :aria-label="`${PLANS[p.policy]} by scenario`">
-                <li v-for="r in p.rows" :key="r.branch_id" data-test="scenario">
-                  <div class="lw-scenarios__head">
-                    <strong>{{ r.scenario_id }}</strong>
-                    <span :class="['lw-status', `lw-status--${STATES[floorOf(r)].tone}`]">
-                      <span aria-hidden="true">{{ STATES[floorOf(r)].icon }}</span>
-                      {{ r.floor_kept ? 'Floor kept' : 'Floor breached' }}
-                    </span>
-                  </div>
-                  <div>Min cash {{ metricText(r.min_cash) }} · unmet {{ r.obligations_unmet }} ·
-                    funding {{ money(r.funding_cost) }}</div>
-                  <div>{{ r.replay ? `${LABELS.replay} · ` : '' }}{{ LABELS.branch }} {{ r.branch_id }}</div>
-                </li>
-              </ul>
-            </HowWeKnow>
           </article>
         </div>
-        <div class="lw-actions">
-          <Tip text="One row per scenario and plan, from each branch's realised ledger.">
-            <button type="button" class="lw-button lw-button--quiet" data-test="compare-details" @click="details = true">
-              Compare the what-ifs in detail
-            </button>
+        <div v-if="explained && !search" class="lw-dec__minimum" data-test="explanation" role="status" aria-live="polite">
+          <h3>Minimum projected cash</h3>
+          <Tip :text="`With ${NAMES[explained.policy]}. Lowest minimum cash across ${explained.rows.length} scenarios, from the branch ledgers; this choice approves nothing.`" test="minimum-tip">
+            <strong :class="['lw-dec__figure', 'lw-dec__figure--minimum', { 'is-bad': minimumRelation === '<' }]">{{ explained.min }}</strong>
           </Tip>
-          <Tip v-if="routeExists(router, '/simulation')" text="The run these plans branched from, round by round.">
-            <RouterLink data-test="open-simulation"
-                        :to="{ path: '/simulation', query: { run_id: body.run_id } }">Open simulation</RouterLink>
-          </Tip>
+          <Tip :text="floorTip"><span>{{ minimumRelation }} reserve floor {{ gap?.floor ? metricText(gap.floor) : 'Not assessed' }}</span></Tip>
         </div>
+        <Tip v-if="reviewable" text="The backend-selected policy is worked out again on today's observed figures. You check bound terms before any money moves.">
+          <RouterLink class="lw-button lw-dec__review-button" data-test="review-plan" :to="{ path: '/execution', query: { run_id: body.run_id, review: '1' } }">Review current plan<Arrow /></RouterLink>
+        </Tip>
+        <div class="lw-actions lw-dec__links">
+          <Tip text="One row per scenario and plan, from each branch's realised ledger."><button type="button" class="lw-link" data-test="compare-details" @click="details = true">Compare scenario details<Arrow /></button></Tip>
+          <Tip v-if="routeExists(router, '/simulation')" text="The run these plans branched from, round by round."><RouterLink data-test="open-simulation" :to="{ path: '/simulation', query: { run_id: body.run_id } }">Open simulation<Arrow /></RouterLink></Tip>
+        </div>
+        <p class="lw-time lw-dec__footnote">Scenario counts are not probabilities. Selection creates no approval.</p>
       </section>
     </div>
-
-    <section class="lw-dec__review" aria-label="Review handoff" data-panel="Review the plan">
-      <div class="lw-actions">
-        <RouterLink v-if="routeExists(router, '/execution')" class="lw-button lw-button--quiet"
-                    data-test="view-execution"
-                    :to="{ path: '/execution', query: { run_id: body.run_id } }">View execution</RouterLink>
+    <details class="lw-calc lw-dec__evidence" data-test="how-decisions">
+      <summary>Source evidence</summary>
+      <div class="lw-how__body">
+        <p class="lw-source" data-test="cohort">Run {{ body.run_id }} · checkpoint round {{ body.checkpoint_round }} · cohort {{ body.cohort }} · {{ body.weight_kind }} · a scenario comparison, not a probability.</p>
+        <p>Each plan faced the same shock in its own what-if. Selection creates no approval. The chart compares observed starting cash to No action's lowest cash; Cash change is their net difference, not a list of executed payments.</p>
+        <table v-if="waterfall" class="lw-table" data-test="waterfall-table"><caption>Cash waterfall values</caption><tbody><tr v-for="bar in waterfall.bars" :key="bar.label"><th scope="row">{{ bar.label }}</th><td>{{ formatMoney(bar.value, waterfall.currency) }}</td></tr></tbody></table>
+        <p v-if="replayed" data-test="replay">Replay · Results come from an earlier run of that branch, not from this session.</p>
+        <section v-for="p in policies" :key="p.policy">
+          <p data-test="weight">Policy {{ p.policy }} · {{ body.weight_kind }} · cohort {{ body.cohort }}</p>
+          <ul class="lw-scenarios"><li v-for="r in p.rows" :key="r.branch_id" data-test="scenario">
+            {{ r.scenario_id }} · {{ r.floor_kept ? 'Floor kept' : 'Floor breached' }} · Min cash {{ metricText(r.min_cash) }} · unmet {{ r.obligations_unmet }} · funding {{ money(r.funding_cost) }} · {{ r.replay ? `${LABELS.replay} · ` : '' }}{{ LABELS.branch }} {{ r.branch_id }}
+          </li></ul>
+        </section>
+        <RouterLink v-if="routeExists(router, '/execution')" data-test="view-execution" :to="{ path: '/execution', query: { run_id: body.run_id } }">View execution</RouterLink>
       </div>
-      <p class="lw-time">Scenario counts are not probabilities. Selection creates no approval.</p>
-    </section>
-
+    </details>
     <DetailSheet :open="details" title="Scenario details" test="details-sheet" @close="details = false">
       <p class="lw-time">One row per scenario and policy, from each branch's realised ledger. Funding is that
         branch's scenario fee, not the current plan's fee, which is set at review.</p>
@@ -195,16 +160,17 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Arrow from '../components/Arrow.vue'
 import DetailSheet from '../components/DetailSheet.vue'
-import HowWeKnow from '../components/HowWeKnow.vue'
 import Tip from '../components/Tip.vue'
 import { familyOf, observedBy, worldFor } from '../api/world.js'
 import {
-  FLOOR_WORDS, LABELS, OWED, PLANS, PLANS_DOING, STATES, ScreenShell, againstFloor, dayText,
-  feesAcross, formatMoney, formatTime, getOverview, getTreasury, metricText, money, noDemoRun, replayed as replayedIn, request,
+  LABELS, OWED, PLANS, PLANS_DOING, ScreenShell, againstFloor, dayText,
+  feesAcross, formatMoney, formatTime, getOverview, getTreasury, kindText, metricText, money, noDemoRun, replayed as replayedIn, request,
   routeExists, useReading
 } from '../api/v1.js'
 
 const ORDER = ['no-action', 'fixed-reserve', 'integrated']
+const NAMES = { 'no-action': 'No action', 'fixed-reserve': 'Fixed reserve', integrated: 'Integrated plan' }
+const DESCRIPTIONS = { 'no-action': 'Let the scenario play out.', 'fixed-reserve': 'Use existing cash buffer.', integrated: 'Draw eligible funding when needed.' }
 
 const route = useRoute()
 const router = useRouter()
@@ -242,7 +208,7 @@ const account = computed(() => {
  * scenario's is, since the lowest of them cannot then be known. */
 function lowestOf (rows) {
   if (!rows.length) return null
-  if (rows.some((r) => r.min_cash?.minor == null)) {
+  if (rows.some((r) => r.min_cash?.minor == null || r.min_cash.currency !== rows[0].min_cash?.currency || r.min_cash.status !== 'known')) {
     return { minor: null, currency: rows[0].min_cash?.currency, status: 'unknown', as_of: null }
   }
   return rows.reduce((a, b) => (b.min_cash.minor < a.min_cash.minor ? b : a)).min_cash
@@ -277,8 +243,9 @@ const policies = computed(() => {
       rows,
       unmet: rows.reduce((n, r) => n + r.obligations_unmet, 0),
       breached: rows.filter((r) => !r.floor_kept).length,
-      cost: rows.length ? feesAcross(rows) : '',
+      cost: rows.length === 1 ? money(rows[0].funding_cost) : rows.length ? feesAcross(rows) : '',
       short: rows.length ? largestShort(rows) : '',
+      minimum: lowestOf(rows),
       min: rows.length ? metricText(lowestOf(rows)) : ''
     }
   }).filter((p) => p.rows.length)
@@ -398,107 +365,125 @@ const timing = computed(() => {
       rows.push({ key: `f:${f.flow_id}`, h: h + delay.delay_h,
         what: `${f.kind} ${money(f.amount)} arrives late in this scenario`, ref: `h${h} + ${delay.delay_h} h · ${f.flow_id}` })
     } else {
-      rows.push({ key: `f:${f.flow_id}`, h, what: `${f.kind} ${money(f.amount)} arrives`, ref: f.flow_id })
+      rows.push({ key: `f:${f.flow_id}`, h, what: `${kindText(f.kind)} ${money(f.amount)} arrives`, ref: f.flow_id })
     }
   }
   return rows.filter(timed).sort((x, y) => x.h - y.h)
+})
+
+const gapSentence = computed(() => {
+  const g = gap.value
+  if (!g || !['breached', 'kept'].includes(g.check.state)) return 'The reserve gap is not assessed from the available figures.'
+  const payments = g.unmet ? `${g.unmet} obligation${g.unmet === 1 ? '' : 's'} unmet` : 'Every obligation met'
+  return `${payments}, ${g.check.state === 'breached' ? 'but cash falls below your reserve floor' : 'and your reserve floor holds'}.`
+})
+const minimumRelation = computed(() => {
+  const check = againstFloor(explained.value?.minimum, floorIn(explained.value?.minimum?.currency))
+  if (!['breached', 'kept'].includes(check.state)) return 'Not assessed against'
+  return check.gap === 0 ? '=' : check.gap > 0 ? '>' : '<'
+})
+
+/** A bridge between two sourced figures, not a reconstruction of branch payments. Without
+ * matching known currency and state there is no bridge; an unknown is never a zero bar. */
+const waterfall = computed(() => {
+  const start = account.value?.buckets.settled
+  const end = gap.value?.min
+  const usable = (m) => Number.isSafeInteger(m?.minor) && (!m.status || m.status === 'known')
+  if (!usable(start) || !usable(end) || start.currency !== end.currency || search.value || account.value.observability !== 'known') return null
+  const delta = end.minor - start.minor
+  if (!Number.isSafeInteger(delta)) return null
+  const floor = gap.value.floor
+  const floorMinor = usable(floor) ? floor.minor : null
+  const top = Math.max(0, start.minor, end.minor, floorMinor ?? 0)
+  const bottom = Math.min(0, start.minor, end.minor, floorMinor ?? 0)
+  const span = top - bottom || 1
+  const y = (n) => 230 - (n - bottom) / span * 190
+  return {
+    currency: start.currency, floor: floorMinor, y,
+    ticks: [bottom, bottom + Math.round(span / 2), top].filter((n, i, all) => all.indexOf(n) === i),
+    bars: [
+      { label: 'Starting cash', from: 0, to: start.minor, value: start.minor },
+      { label: 'Cash change', from: start.minor, to: end.minor, value: delta },
+      { label: 'Remaining', from: 0, to: end.minor, value: end.minor }
+    ],
+    source: `Observed cash from ${account.value.id} as of ${formatTime(account.value.as_of).utc}; remaining is No action's lowest branch cash. Cash change is their net difference, not a payment attribution.`
+  }
 })
 
 const details = ref(false)
 </script>
 
 <style scoped>
-.lw-dec {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--lw-space-6);
-}
-
+.lw-dec { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--lw-space-8); }
+.lw-dec > * { min-width: 0; }
+.lw-dec h2 { margin: 0 0 16px; font-size: 36px; }
+.lw-dec h3 { margin: 0 0 16px; font: 600 18px var(--lw-font-text); }
+.lw-dec__steps { display: flex; flex-wrap: wrap; gap: 32px; list-style: none; padding: 0; margin: 4px 0 32px; }
+.lw-dec__steps li { display: flex; align-items: center; gap: 12px; }
+.lw-dec__steps li:not(:last-child)::after { content: ''; width: 64px; border-top: 1px solid var(--lw-rule); margin-left: 12px; }
+.lw-dec__steps span { display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid var(--lw-ink-muted); border-radius: 50%; }
+.lw-dec__steps [aria-current] { font-weight: 600; }
+.lw-dec__steps [aria-current] span { background: var(--lw-brand); color: var(--lw-on-brand); border-color: var(--lw-brand); }
+.lw-dec__figure { display: block; font: 600 clamp(56px, 5vw, 80px)/1.1 var(--lw-font-heading); letter-spacing: -0.04em; overflow-wrap: anywhere; }
+.is-bad { color: var(--lw-bad-text); }
+.is-ok { color: var(--lw-ok-text); }
+.lw-dec__waterfall, .lw-dec__timing { margin-top: 32px; }
+.lw-dec__plot { position: relative; }
+.lw-dec__plot svg { width: 100%; height: auto; display: block; overflow: visible; }
+.lw-dec__plot text { fill: var(--lw-ink); font: 14px var(--lw-font-text); }
+.lw-dec__plot .lw-dec__axis text { fill: var(--lw-ink-muted); font-size: 12px; }
+.lw-dec__axis line { stroke: var(--lw-ink-muted); stroke-width: 1; }
+.lw-dec__floor { stroke: var(--lw-ink-muted); stroke-dasharray: 6 6; }
+.lw-dec__bar { fill: var(--lw-brand); }
+.lw-dec__bar.is-out { fill: var(--lw-bad); }
+.lw-dec__bar.is-remaining { fill: var(--lw-ok); opacity: 0.55; }
+.lw-dec__plot .lw-dec__value { font-weight: 600; }
+.lw-dec__mark { position: absolute; top: 13%; width: 15%; height: 70%; }
+.lw-dec__mark button { width: 100%; height: 100%; min-height: 44px; background: transparent; border: 0; cursor: help; }
+.lw-dec__floor-key { font-size: 13px; color: var(--lw-ink-muted); }
+.lw-dec__floor-key::before { content: ''; display: inline-block; width: 24px; border-top: 1px dashed currentColor; vertical-align: middle; margin-right: 8px; }
+.lw-dec__timing th { white-space: nowrap; text-align: left; }
+.lw-dec__timing td { color: var(--lw-ink-muted); white-space: normal; overflow-wrap: anywhere; }
+.lw-dec__row { padding: 16px 12px; border-top: 1px solid var(--lw-rule); min-width: 0; }
+.lw-dec__row.is-chosen { background: var(--lw-selected); }
+.lw-dec__head { display: flex; gap: 16px; align-items: flex-start; min-height: 44px; cursor: pointer; }
+.lw-dec__head input { width: 24px; height: 24px; margin: 6px 0 0; flex-shrink: 0; accent-color: var(--lw-brand); }
+.lw-dec__head:focus-within { outline: 3px solid var(--lw-focus); outline-offset: 2px; }
+.lw-dec__name { display: block; font: 600 26px/1.15 var(--lw-font-heading); }
+.lw-dec__description { display: block; margin-top: 4px; color: var(--lw-ink-muted); font-size: 14px; }
+.lw-dec__terms { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 12px; margin: 16px 0 0 40px; font-size: 13px; }
+.lw-dec__terms > div { min-width: 0; }
+.lw-dec__terms > div + div { padding-left: 12px; border-left: 1px solid var(--lw-rule); }
+.lw-dec__terms dt { color: var(--lw-ink-muted); margin-bottom: 6px; }
+.lw-dec__terms dd { margin: 0; overflow-wrap: anywhere; }
+.lw-dec__minimum { border-top: 1px solid var(--lw-rule); margin-top: 8px; padding-top: 20px; }
+.lw-dec__minimum h3 { margin-bottom: 4px; }
+.lw-dec__minimum > .lw-tip { display: inline-block; margin-right: 8px; }
+.lw-dec__figure--minimum { font-size: 48px; color: var(--lw-brand); }
+.lw-dec__review-button { width: 100%; margin-top: 16px; justify-content: center; }
+.lw-dec__policies > .lw-tip { display: block; }
+.lw-dec__figure--minimum.is-bad { color: var(--lw-bad-text); }
+.lw-dec__chart-gap { margin-left: 16px; font-size: 13px; }
+.lw-dec__links { justify-content: space-between; margin-top: 12px; }
+.lw-dec__links button { padding: 0; border: 0; background: transparent; color: var(--lw-brand); text-decoration: underline; cursor: pointer; }
+.lw-dec__links a, .lw-dec__links button { display: inline-flex; gap: 10px; align-items: center; min-height: 44px; font-size: 13px; }
+.lw-dec__footnote { border-top: 1px solid var(--lw-rule); padding-top: 12px; margin-top: 12px; font-size: 12px; }
+.lw-dec__evidence { margin-top: 24px; }
+.lw-scenarios { padding-left: 20px; }
+.lw-scenarios li { padding: 8px 0; overflow-wrap: anywhere; }
 @media (min-width: 1200px) {
   .lw-dec { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .lw-dec__policies { border-left: 1px solid var(--lw-rule); padding-left: 28px; }
 }
-
-.lw-dec > * { min-width: 0; }
-
-.lw-dec__heading {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--lw-space-2);
-  align-items: center;
+@media (max-width: 599px) {
+  .lw-dec h2 { font-size: 30px; }
+  .lw-dec__plot text, .lw-dec__plot .lw-dec__axis text { font-size: 20px; }
+  .lw-dec__steps { gap: 14px; font-size: 13px; }
+  .lw-dec__steps li { gap: 6px; }
+  .lw-dec__steps li::after { display: none; }
+  .lw-dec__steps span { width: 30px; height: 30px; }
+  .lw-dec__terms { margin-left: 0; gap: 8px; font-size: 12px; }
+  .lw-dec__terms > div + div { padding-left: 8px; }
 }
-.lw-dec__heading h2 { margin: 0; }
-.lw-dec__policies .lw-dec__heading { margin-bottom: var(--lw-space-3); }
-
-.lw-dec__line { margin: var(--lw-space-2) 0; }
-
-.lw-dec__explain {
-  margin-top: var(--lw-space-4);
-  padding: var(--lw-space-3);
-  border-left: 4px solid var(--lw-brand);
-  background: var(--lw-selected);
-}
-
-.lw-dec__timing {
-  margin: 0 0 var(--lw-space-2);
-  padding-left: var(--lw-space-4);
-}
-
-.lw-dec__rows {
-  display: grid;
-  gap: var(--lw-space-3);
-}
-
-.lw-dec__row {
-  padding: var(--lw-space-3) var(--lw-space-4);
-  border: 1px solid var(--lw-rule);
-  border-radius: var(--lw-radius);
-  background: var(--lw-surface-raised);
-  min-width: 0;
-}
-
-.lw-dec__row.is-chosen {
-  border-color: var(--lw-brand);
-  box-shadow: inset 4px 0 0 var(--lw-brand);
-  background: var(--lw-selected);
-}
-
-.lw-dec__head {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--lw-space-2) var(--lw-space-3);
-  align-items: center;
-  min-height: var(--lw-target);
-  cursor: pointer;
-}
-
-.lw-dec__head input { width: 20px; height: 20px; margin: 0; accent-color: var(--lw-brand); }
-.lw-dec__head:focus-within { outline: 3px solid var(--lw-focus); outline-offset: 2px; border-radius: var(--lw-radius); }
-.lw-dec__name { font-weight: 700; font-size: 18px; }
-
-.lw-terms {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: var(--lw-space-1) var(--lw-space-3);
-  margin: var(--lw-space-2) 0;
-}
-.lw-terms dt { color: var(--lw-ink-muted); }
-.lw-terms dd { margin: 0; overflow-wrap: anywhere; }
-.lw-scenarios {
-  list-style: none;
-  margin: var(--lw-space-2) 0 0;
-  padding: 0;
-}
-.lw-scenarios li {
-  padding: var(--lw-space-2) 0;
-  border-top: 1px solid var(--lw-rule);
-  overflow-wrap: anywhere;
-}
-.lw-scenarios__head {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--lw-space-2);
-  align-items: baseline;
-}
-
-.lw-dec__review { margin-top: var(--lw-space-6); }
+@media (forced-colors: active) { .lw-dec__bar { fill: CanvasText; } .lw-dec__bar.is-out { fill: GrayText; stroke: CanvasText; stroke-dasharray: 4 2; } }
 </style>
