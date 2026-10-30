@@ -29,7 +29,7 @@ async function simulation (page: Page, runId: string): Promise<void> {
 test('the map: captions clear the nodes, each other and the frame; nodes show names', async ({ page, baseURL, request }) => {
   const writes = await readOnly(page, baseURL!)
   await simulation(page, await demoRunId(request))
-  const frame = (await page.locator('[data-test="map"] svg').boundingBox())!
+  const frame = (await page.locator('[data-test="map"] > svg.lw-map__svg').boundingBox())!
   const nodes = await $(page, 'map-node').all()
   const boxes: Box[] = []
   for (const node of nodes) {
@@ -65,6 +65,8 @@ test('the actor list and the cash paths lead with names, ids in their tooltip', 
   const run = await (await request.get(`/api/v1/runs/${runId}`)).json()
   await simulation(page, runId)
 
+  await page.locator('.lw-sim__source').click()
+  await page.locator('.lw-cash-values > summary').click()
   const actors = await page.locator('[data-actor]').all()
   expect(actors.length).toBeGreaterThan(0)
   for (const button of actors) {

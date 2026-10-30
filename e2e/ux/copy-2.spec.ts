@@ -78,7 +78,7 @@ test('Simulation: the what-if from the treasury and the family, ids one click do
   await plainHeadings(page)
   await expect($(page, 'run-id')).not.toBeVisible()
   await folded(page, 'how-run', [runId, base.branch_id, 'Simulated provider'])
-  await expect($(page, 'fork')).toHaveText('Try the plans on this shock')
+  await expect($(page, 'fork')).toHaveText('Fork checkpoint')
   await expect($(page, 'fork-what')).toContainText('in its own what-if; approves nothing')
   await expect($(page, 'compare')).toHaveText('Compare policies') // the judge path's name
   for (const hook of ['run-context', 'controls', 'phase', 'play', 'scrubber-slider', 'cursor', 'inspector', 'graph', 'settings']) {

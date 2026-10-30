@@ -232,7 +232,7 @@ Panel identifiers are the handoff contract. All secondary surfaces inherit the s
 
 **Content and data:** Name, role, objective, scoped observations, accepted/rejected actions and evidence IDs at selected round. No unrelated private observations.
 
-**Interaction and alternate state:** Interview submits question with run/branch/round/actor and operator token. Loading/error/result stay in inspector. Read-only answer changes no ledger state.
+**Interaction and alternate state:** Interview submits question with run/branch/round/actor and operator token. Loading/error/result stay in inspector. Read-only answer changes no ledger state. Mockup 04 keeps the selected actor inline at every width, with What changed from committed intents/received requests; role, objective and evidence stay in the tooltip. Source evidence holds the keyboard actor list, action feed, graph and round export.
 
 ### S4 / Event & action feed
 
@@ -376,7 +376,7 @@ Desktop visuals define the system. These rules specify tablet and phone reflow; 
 | Shell | 208px labeled sidebar; 32px content gutters. | 72px icon rail with accessible names; 24px gutters. | 48px header, menu drawer with all six labels; 16px gutters. Mode and source remain visible. |
 | Overview | Cash strip, 60/40 cash plot and obligation/exposure. | Cash strip 2x2; next obligation below chart. | Metrics 2x2, next obligation, chart/data table, exposure preview, scenario entry. |
 | Treasury / Lending | Main data left, calculation/coverage inspector right. | Inspector below primary data, account lists intact. | Financial answer first, calculation disclosure next, obligations/facilities as labeled stacked rows. |
-| Simulation | Map left; actor/feed inspector right; scrubber/cash below. | Cash/controls first; map and inspector can stack. | Round control, cash answer, event feed, actor list, map. Tap actor opens full-height sheet; zoom not required to read evidence. |
+| Simulation | Map left; selected actor right; scrubber/cash below (mockup 04). | Map, selected actor, scrubber, cash; source evidence folded. | Map with two-column nodes, inline selected actor, scrubber, cash; source evidence folded. |
 | Decisions | Gap and policy comparison 50/50. | Gap compressed above full policy list. | Gap summary, timing disclosure, three grouped policy rows, review CTA. No horizontal carousel. |
 | Execution | Legs left; bound terms/incidents right. | Terms summary above legs; details in sheet. | Current status, approval summary, legs/receipts, incidents. Review is full-height dialog with fixed action footer. |
 | Tables & charts | Sortable only where endpoint/order supports it; numeric columns right-aligned. | Scroll region for truly tabular comparisons. | Never hide amount/status/deadline. Offer equivalent text data and row details; no miniature unreadable chart labels. |

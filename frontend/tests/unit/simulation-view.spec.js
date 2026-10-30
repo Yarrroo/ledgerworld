@@ -173,7 +173,7 @@ describe('scrubber fixture', () => {
     expect(text(w, 'cursor')).toContain(`Round ${r} of`)
     expect(text(w, 'feed')).toContain(`round ${r}`)
     expect(text(w, 'cash')).toContain(`round ${r}`)
-    expect(text(w, 'inspector')).toContain(`round ${r}`)
+    expect(text(w, 'selected-round')).toContain(`Round ${r}`)
     expect(feedIds(w)).toContain(want.expect.feed_contains)
     expect(feedIds(w)).not.toContain(want.expect.feed_excludes)
     // the fixture names it as USD 42,000.00; the screen shows the mockups' figure (MATCH.md item 5)
@@ -188,7 +188,7 @@ describe('scrubber fixture', () => {
     const { wrapper: w } = await open(run())
     expect(text(w, 'cash-value')).toBe('$30,000')
     expect(feedIds(w)).toEqual(scrubber.rounds[2].feed_ids)
-    expect(text(w, 'inspector')).toContain('lender · acted this round')
+    expect(w.get('[data-actor="lender"]').text()).toContain('lender · acted this round')
   })
 
   it('the graph links the lender to borrower-c through the request id it cites', async () => {
@@ -302,7 +302,7 @@ describe('scrubber fixture', () => {
     expect(disabled(w, 'fork')).toBe(true)
     expect(text(w, 'fork-why')).toBe('Enter operator access to fork.')
     await w.get('[data-test="token"]').setValue('demo-token-for-test')
-    expect(text(w, 'fork')).toBe('Try the plans on this shock') // the fixture's "Fork this checkpoint", in COPY.md's words
+    expect(text(w, 'fork')).toBe('Fork checkpoint') // the fixture's "Fork this checkpoint", in COPY.md's words
     expect(text(w, 'fork-what')).toContain(`from round ${want.expect.payload_round}`)
     await w.get('[data-test="fork"]').trigger('click')
     // Fork asks first, naming the checkpoint and the policies; nothing is sent before Confirm
@@ -361,7 +361,7 @@ describe('scrubber fixture', () => {
   it('phone: reading order, keyboard scrubbing and an expandable graph', async () => {
     const want = kase('phone')
     const { wrapper: w } = await open(run())
-    const order = ['banner', 'controls', 'cash', 'feed', 'graph'].map((t) => w.get(`[data-test="${t}"]`).element)
+    const order = ['banner', 'relationships', 'controls', 'cash', 'feed'].map((t) => w.get(`[data-test="${t}"]`).element)
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     }
@@ -382,6 +382,13 @@ describe('scrubber fixture', () => {
 })
 
 describe('review findings, each pinned', () => {
+  it('Source evidence opens and transfers keyboard focus to the disclosure', async () => {
+    const { wrapper: w } = await open(run())
+    await w.get('.lw-sim__source').trigger('click')
+    await flushPromises()
+    expect(w.get('#simulation-evidence').attributes('open')).toBeDefined()
+    expect(document.activeElement).toBe(w.get('#simulation-evidence > summary').element)
+  })
   it('another run selected: the old run\'s state cannot fork or interview into the new one', async () => {
     const { wrapper: w, router } = await open(run())
     await w.get('[data-test="token"]').setValue('demo-token-for-test')
@@ -454,6 +461,7 @@ describe('review findings, each pinned', () => {
     const { wrapper: w } = await open(body)
     await scrubTo(w, 4)
     expect(text(w, 'cursor')).toBe('Round 4 of 5 · simulated t=17 h')
+    expect(w.get('[data-test="scrubber-slider"]').attributes('aria-valuetext')).toBe(text(w, 'cursor'))
     expect(text(w, 'cash-value')).toBe('$42,000')
     await scrubTo(w, 2)
     expect(text(w, 'cursor')).toBe('Round 2 of 5 · simulated time not loaded')

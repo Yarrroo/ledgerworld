@@ -147,11 +147,41 @@ describe('the evidence graph draws when its disclosure opens', () => {
 
   const svg = (w) => w.get('[data-test="graph"] .graph-svg').element
   async function reveal (w) {
+    w.get('details.lw-sim__source-evidence').element.open = true
     const disclosure = w.get('details.lw-sim__evidence').element
     disclosure.open = true
     disclosure.dispatchEvent(new Event('toggle'))
     await flushPromises()
   }
+
+  it('reopening unchanged evidence keeps its existing graph nodes', async () => {
+    const { w } = await open(() => run())
+    await reveal(w)
+    const before = svg(w).querySelector('circle')
+    const outer = w.get('details.lw-sim__source-evidence').element
+    outer.open = false
+    outer.dispatchEvent(new Event('toggle'))
+    await flushPromises()
+    outer.open = true
+    outer.dispatchEvent(new Event('toggle'))
+    await flushPromises()
+    expect(svg(w).querySelector('circle') === before).toBe(true)
+  })
+
+  it('reopening Source evidence redraws an already-open graph after a hidden scrub', async () => {
+    const { w } = await open(() => run())
+    await reveal(w)
+    const outer = w.get('details.lw-sim__source-evidence').element
+    outer.open = false
+    outer.dispatchEvent(new Event('toggle'))
+    await flushPromises()
+    await scrubTo(w, 4)
+    expect(svg(w).getAttribute('viewBox')).toBe('0 0 0 0')
+    outer.open = true
+    outer.dispatchEvent(new Event('toggle'))
+    await flushPromises()
+    expect(svg(w).getAttribute('viewBox')).toBe('0 0 640 400')
+  })
 
   it('first opening draws at the open size, not the closed one', async () => {
     const { w } = await open(() => run())
