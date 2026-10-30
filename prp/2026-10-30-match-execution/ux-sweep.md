@@ -10,9 +10,9 @@ Before changing the view, `bash scripts/ux-check.sh e2e/ux/match-execution.spec.
 
 ## Evidence
 
-- `npm --prefix frontend run test:unit -- tests/unit/decide-execute.spec.js`: 173 passed, including seven fails-before/passes-after cases covering the five independent review findings.
+- `npm --prefix frontend run test:unit -- tests/unit/decide-execute.spec.js`: 177 passed, including the fails-before/passes-after guards from both independent review rounds.
 - `bash scripts/ux-check.sh e2e/ux/execution.spec.ts`: 33 passed, followed by all 12 judge-path/accessibility tests.
-- `bash scripts/ux-check.sh e2e/ux/match-execution.spec.ts`: 6 passed, followed by all 12 judge-path/accessibility tests. The desktop case explicitly resizes to 1487 px; tablet is 834 px and phone 390 px.
+- `bash scripts/ux-check.sh e2e/ux/match-execution.spec.ts`: 9 passed, including a 4000-character label that previously overflowed at every width, followed by all 12 judge-path/accessibility tests. The desktop case explicitly resizes to 1487 px; tablet is 834 px and phone 390 px.
 - `ux/copy-2.spec.ts --grep 'Execution:'`, using the same offline app and viewport config: all 9 Execution-only cases passed. No neighboring-screen implementation was changed.
 - `uv run python checks/no_secrets.py`: passed.
 - `uv run python checks/attribution.py`: passed.

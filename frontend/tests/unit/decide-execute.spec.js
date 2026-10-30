@@ -2537,6 +2537,8 @@ describe('Execution independent review regressions', () => {
     const submitted = w.get('[data-test="execution-progress"]').findAll('li')[1]
     expect(submitted.attributes('data-reached')).toBe('false')
     expect(submitted.text()).not.toContain('Sent to provider')
+    const perLeg = w.get('[data-test="steps"]')
+    expect(perLeg.findAll('.lw-steps__done').some((step) => step.text().includes('Submitted'))).toBe(false)
   })
 
   it('the hero count excludes a settled leg with an open incident', async () => {
@@ -2559,5 +2561,63 @@ describe('Execution independent review regressions', () => {
     const w = await open(Execution, '/execution')
     expect(w.get('[data-test="leg-payout"] .lw-leg__name').text()).toContain('Rent payment')
     expect(w.get('[data-test="leg-payout"] .lw-leg__name').text()).not.toContain('Payroll')
+  })
+})
+
+
+describe('Execution final review guards', () => {
+  it('keeps the approved policy context after Decisions selects a different policy', async () => {
+    let decision = decisionsBody()
+    const { w } = await reviewReady({ 'GET /decisions/run-1': () => decision })
+    await approve(w)
+    decision = { ...decision, selected: 'no-action' }
+    await reread()
+    await flushPromises()
+    expect(text(w, 'hero-subtitle')).toContain('Borrow just enough · approved, not sent')
+    expect(text(w, 'review')).not.toContain('Do nothing')
+  })
+
+  it('keeps the nonzero fee context when the Decisions refresh is unavailable', async () => {
+    let fail = false
+    const { w } = await reviewReady({ 'GET /decisions/run-1': () => fail ? refuse(404, 'not_found') : decisionsBody() })
+    await approve(w)
+    fail = true
+    await reread()
+    await flushPromises()
+    expect(text(w, 'branch-fees')).toContain('$800')
+    expect(text(w, 'scenario-cost')).toBe(COST)
+  })
+
+  it('captures policy and scenario context when the approval POST starts, not when it answers', async () => {
+    let answer, decision = decisionsBody()
+    const { w } = await reviewReady({
+      'GET /decisions/run-1': () => decision,
+      'POST /approvals': () => new Promise((resolve) => { answer = resolve })
+    })
+    await w.get('[data-test="confirm"]').trigger('click')
+    decision = { ...decision, selected: 'no-action', cohort: 'a-new-cohort' }
+    await reread()
+    await flushPromises()
+    answer(approvalBody())
+    await flushPromises()
+    expect(text(w, 'review')).toContain('Borrow just enough')
+    expect(text(w, 'review')).not.toContain('Do nothing')
+    expect(text(w, 'review')).not.toContain('a-new-cohort')
+  })
+
+  it('pending ledger-only repayment does not block provider submission evidence', async () => {
+    const local = { ...advance(), kind: 'repayment', label: 'repayment (simulated)', state: 'pending', receipt: null, provider_id: null, reconciled: false, journal_id: null }
+    serve({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-1' }),
+      'GET /decisions/run-1': decisionsBody(),
+      'GET /executions/apr-1': executionBody({ legs: [advance(), local] })
+    })
+    const w = await open(Execution, '/execution')
+    expect(w.get('[data-test="execution-progress"]').findAll('li')[1].attributes('data-reached')).toBe('true')
+    const row = w.get('[data-test="leg-repayment"]')
+    expect(row.get('[data-test="receipt-mode"]').text()).toBe('Ledger only (simulated)')
+    expect(row.findAll('.lw-steps__skipped').map((step) => step.text())).toEqual([
+      '– Submitted · not applicable', '– Provider-confirmed · not applicable'
+    ])
   })
 })

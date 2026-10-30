@@ -209,16 +209,16 @@
            data-test="review" :data-stage="stage" :class="{ 'lw-dialog--bound': !!flow.approval }">
         <div class="lw-dialog__body">
           <h2 id="review-heading" ref="heading" tabindex="-1">Review before you execute.</h2>
-          <p class="lw-review-subtitle"><Tip :text="`Run ${body.run_id} · ${LABELS[body.mode] || body.mode}`">{{ PLANS[policy] ?? policy }} · Current observed snapshot</Tip></p>
+          <p class="lw-review-subtitle"><Tip :text="`Run ${body.run_id} · ${LABELS[body.mode] || body.mode}`">{{ PLANS[reviewContext.policy] ?? reviewContext.policy ?? 'Unavailable' }} · Current observed snapshot</Tip></p>
           <div class="lw-approval-grid" :class="{ 'lw-approval-grid--bound': !!flow.approval }">
           <section class="lw-approval-create" aria-labelledby="create-heading" data-test="create-stage">
             <h3 id="create-heading"><span class="lw-review-number">1</span> Create approval</h3>
             <dl class="lw-terms lw-review-context">
-              <dt>Policy</dt><dd>{{ PLANS[policy] ?? policy }}</dd>
-              <dt>Scenario-set</dt><dd>{{ decisions?.cohort ?? 'Unavailable' }} · {{ decisions?.weight_kind ?? 'Unavailable' }}</dd>
-              <dt>Facility fee</dt><dd><Tip :text="`Scenario-set cost, not a current-plan quote: ${scenarioCost}`" data-test="fee-context">
-                <span data-test="branch-fees">{{ branchFees }}</span>
-                <template #tip><span data-test="scenario-cost">{{ scenarioCost }}</span>. Scenario-set cost, not a current-plan quote.</template>
+              <dt>Policy</dt><dd>{{ PLANS[reviewContext.policy] ?? reviewContext.policy ?? 'Unavailable' }}</dd>
+              <dt>Scenario-set</dt><dd>{{ reviewContext.cohort }} · {{ reviewContext.weight }}</dd>
+              <dt>Facility fee</dt><dd><Tip :text="`Scenario-set cost, not a current-plan quote: ${reviewContext.cost}`" data-test="fee-context">
+                <span data-test="branch-fees">{{ reviewContext.fees }}</span>
+                <template #tip><span data-test="scenario-cost">{{ reviewContext.cost }}</span>. Scenario-set cost, not a current-plan quote.</template>
               </Tip></dd>
               <dt>Approval lifetime</dt><dd>15 minutes <Tip text="Default set by the server; check the absolute expiry returned with your approval.">by default</Tip></dd>
             </dl>
@@ -376,7 +376,6 @@ const REFUSALS = {
 }
 /** E4: how far a leg has come; a leg is reconciled only once confirmed and journalled. */
 const STEPS = ['Ready', 'Submitted', 'Provider-confirmed', 'Reconciled']
-const STEP = { pending: 0, submitted: 1, unknown: 1, settled: 2, failed: 1 }
 /** The steps only a provider operation reaches; a ledger-only leg skips them. */
 const PROVIDER_STEPS = new Set([1, 2])
 const STEP_MARK = { done: '●', skipped: '–', todo: '○' }
@@ -473,14 +472,19 @@ const policy = computed(() => decisions.value?.selected ?? null)
 const selectedRows = computed(() =>
   (decisions.value?.results ?? []).filter((r) => r.policy === policy.value))
 const branchFees = computed(() =>
-  selectedRows.value.map((r) => `${r.scenario_id} ${money(r.funding_cost)}`).join(' · ') || 'None')
-const scenarioCost = computed(() => (selectedRows.value.length ? feesAcross(selectedRows.value) : 'None'))
+  selectedRows.value.map((r) => `${r.scenario_id} ${money(r.funding_cost)}`).join(' · ') || 'Unavailable')
+const scenarioCost = computed(() => (selectedRows.value.length ? feesAcross(selectedRows.value) : 'Unavailable'))
 
 // ------------------------------------------------------------------ approve, then execute
 
 const flow = reactive({
-  open: false, approval: null, serverAt: 0, receivedAt: 0, submitting: false, executed: false,
+  open: false, approval: null, context: null, serverAt: 0, receivedAt: 0, submitting: false, executed: false,
   invalid: '', blocked: '', message: ''
+})
+/** Display context belongs to the POST that created the approval, not a later Decisions read. */
+const reviewContext = computed(() => flow.context ?? {
+  policy: policy.value, cohort: decisions.value?.cohort ?? 'Unavailable',
+  weight: decisions.value?.weight_kind ?? 'Unavailable', fees: branchFees.value, cost: scenarioCost.value
 })
 const showToken = ref(false)
 watch(() => flow.open, () => { showToken.value = false })
@@ -623,7 +627,7 @@ const moved = (from) => from.screen !== screen
 const waiting = computed(() => [...unresolved].filter(([, held]) => held.unseen))
 const accepted = (id) => `Execution ${id} accepted; reading its provider state.`
 /** The review and its approval go: on a new screen, on Forget access, or when a waiting outcome is shown. */
-const dropReview = () => Object.assign(flow, { open: false, approval: null, invalid: '', executed: false })
+const dropReview = () => Object.assign(flow, { open: false, approval: null, context: null, invalid: '', executed: false })
 
 async function openReview () {
   if (reviewWhy.value) return
@@ -643,6 +647,7 @@ async function closeReview () {
 
 async function confirmApproval () {
   if (confirmWhy.value || flow.approval) return
+  const context = { ...reviewContext.value }
   const from = origin()
   const runId = from.run
   flow.submitting = true
@@ -652,7 +657,7 @@ async function confirmApproval () {
   try {
     const answer = await request('/approvals', {
       method: 'POST', token: token.value, signal: AbortSignal.timeout(POST_TIMEOUT_MS),
-      body: { run_id: runId, policy: policy.value }
+      body: { run_id: runId, policy: context.policy }
     })
     const approval = boundApproval(answer) // unreadable is unknown, and held, even once left
     if (moved(from)) { // never offered outside the review it was asked in; unused, it expires
@@ -662,6 +667,7 @@ async function confirmApproval () {
       }
       return
     }
+    flow.context = context
     flow.approval = approval
     flow.serverAt = Date.parse(answer.as_of)
     flow.receivedAt = Date.now()
@@ -923,36 +929,43 @@ onUnmounted(() => {
   clearInterval(clock)
 })
 
+/** Index open incidents once per read, independent of the retained closed history. */
+const openLegIds = computed(() => new Set((execution.value?.incidents ?? [])
+  .filter((i) => i.state === 'open').map((i) => i.leg_id)))
+const hasProviderEvidence = (leg) => !!(leg.provider_id || leg.receipt?.provider_id)
+// Mode B's connector label is supplied before settlement; missing ids alone do not classify a pending leg.
+const isLedgerOnly = (leg) => (leg.kind === 'repayment' && leg.label === 'repayment (simulated)') ||
+  (leg.state === 'settled' && !leg.provider_id)
 /** The same evidence threshold feeds leg status, trackers and both hero readings. */
-const isReconciledLeg = (leg, incidents) => leg.state === 'settled' && leg.reconciled && !!leg.journal_id &&
-  !incidents.some((i) => i.leg_id === leg.leg_id && i.state === 'open')
+const isReconciledLeg = (leg) => leg.state === 'settled' && leg.reconciled && !!leg.journal_id &&
+  !openLegIds.value.has(leg.leg_id)
 
 /** One row per leg: C4 state and reconciliation as the API reports it, never inferred. */
 const legs = computed(() => {
   const body = execution.value
   if (!body) return []
   return body.legs.map((leg) => {
-    const open = body.incidents.filter((i) => i.leg_id === leg.leg_id && i.state === 'open')
+    const open = openLegIds.value.has(leg.leg_id)
     // a provider-backed leg settles only on a provider object, which names it; one settled with no
     // provider id is the ledger-only repayment (mode B): nothing was submitted or confirmed
-    const local = leg.state === 'settled' && !leg.provider_id
+    const local = isLedgerOnly(leg)
     const status = leg.receipt?.status ?? (local ? 'Ledger only, no provider operation' : 'no provider status')
     let text, tone, icon
     if (leg.state === 'unknown') {
       [text, tone, icon] = ['Outcome unknown; checking provider status. Do not send again.', 'bad', '!']
-    } else if (open.length) {
+    } else if (open) {
       [text, tone, icon] = [`${WORD[leg.state]} · ${status} · incident open`, 'bad', '!']
     } else if (leg.state === 'failed') {
       [text, tone, icon] = [`Failed · ${status}`, 'bad', '✕']
-    } else if (isReconciledLeg(leg, body.incidents)) {
+    } else if (isReconciledLeg(leg)) {
       [text, tone, icon] = [`${status} · reconciled as of ${formatTime(body.as_of).utc}`, 'ok', '✓']
     } else {
       [text, tone, icon] = [`${WORD[leg.state] ?? leg.state} · ${status} · not reconciled`, 'warn', '◷']
     }
     const mode = leg.receipt?.mode ?? body.mode
     // an open incident takes the leg back from Reconciled: the tracker never outruns the evidence
-    const reconciled = isReconciledLeg(leg, body.incidents)
-    const step = reconciled ? 3 : local ? 0 : STEP[leg.state] ?? 0
+    const reconciled = isReconciledLeg(leg)
+    const step = reconciled ? 3 : local || !hasProviderEvidence(leg) ? 0 : leg.state === 'settled' && leg.receipt ? 2 : 1
     const now = local && reconciled ? 'ledger only' : { failed: 'failed', unknown: 'outcome unknown' }[leg.state] ?? ''
     const steps = STEPS.map((name, n) => {
       const mark = local && PROVIDER_STEPS.has(n) ? 'skipped' : n <= step ? 'done' : 'todo'
@@ -999,12 +1012,13 @@ const incidents = computed(() => {
   ]
 })
 
+const reconciledCount = computed(() => legs.value.filter(isReconciledLeg).length)
 /** Aggregate progress cannot outrun any leg; ledger-only entries skip provider steps. */
 const allReconciled = computed(() => !!legs.value.length && !incidents.value.length &&
-  legs.value.every((l) => isReconciledLeg(l, execution.value.incidents)))
+  reconciledCount.value === legs.value.length)
 const progress = computed(() => {
-  const provider = legs.value.filter((l) => !(l.state === 'settled' && !l.provider_id))
-  const submitted = !!provider.length && provider.every((l) => !!(l.provider_id || l.receipt?.provider_id))
+  const provider = legs.value.filter((l) => !isLedgerOnly(l))
+  const submitted = !!provider.length && provider.every(hasProviderEvidence)
   const confirmed = !!provider.length && provider.every((l) => l.state === 'settled' && l.provider_id && l.receipt)
   return [
     { name: 'Approved', done: !!execution.value?.approval_id, note: 'Plan authorized' },
@@ -1019,7 +1033,7 @@ const progress = computed(() => {
  * currency; '' when no leg of that kind is there, "an unknown amount" when a receipt does not read.
  * Ledger-only legs carry no receipt and are counted apart (`ledgerOnly`).
  */
-const ledgerOnly = (leg) => !leg.receipt && !leg.provider_id
+const ledgerOnly = isLedgerOnly
 function movedWords (legs) {
   legs = legs.filter((l) => !ledgerOnly(l))
   if (!legs.length) return ''
@@ -1061,7 +1075,7 @@ const lead = computed(() => {
   }
   if (!body.legs.length) return 'The plan you approved is sent; its payments are not recorded yet.'
   const n = body.legs.length
-  const checked = body.legs.filter((l) => isReconciledLeg(l, body.incidents)).length
+  const checked = reconciledCount.value
   if (checked < n) return `The plan you approved is under way: ${checked} of ${n} payments checked against your books so far.`
   const moved = movedWords(body.legs.filter((l) => INFLOW.has(l.kind)))
   const paid = movedWords(body.legs.filter((l) => OUTFLOW.has(l.kind)))
@@ -1079,10 +1093,10 @@ const lead = computed(() => {
 /** The hero's one line: which plan this record is for and how far its legs are checked. */
 const subtitle = computed(() => {
   const body = execution.value
-  const plan = PLANS[policy.value] ?? 'Approved plan'
+  const plan = PLANS[reviewContext.value.policy] ?? 'Approved plan'
   if (!body) return held.value ? `${plan} · approved, not sent` : 'No execution recorded yet'
   const n = body.legs.length
-  const checked = body.legs.filter((l) => isReconciledLeg(l, body.incidents)).length
+  const checked = reconciledCount.value
   return `Observed execution record · ${checked} of ${n} legs reconciled`
 })
 
@@ -1450,7 +1464,7 @@ watch(stage, async () => {
   background: var(--lw-selected);
   color: var(--lw-brand);
 }
-.lw-leg__name { font-family: var(--lw-font-heading); font-size: 20px; line-height: 1.2; }
+.lw-leg__name { min-width: 0; overflow-wrap: anywhere; font-family: var(--lw-font-heading); font-size: 20px; line-height: 1.2; }
 .lw-leg__name small { display: block; font: 12px/1.5 var(--lw-font-text); color: var(--lw-ink-muted); margin-top: 4px; }
 .lw-leg__amount { font-family: var(--lw-font-heading); font-size: 24px; font-weight: 600; }
 .lw-leg__status { justify-self: end; font-size: 12px; }

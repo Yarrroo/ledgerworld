@@ -161,3 +161,18 @@ test('Approval matches mockup 07 and keeps two explicit actions', async ({ page 
   await expect($(page, 'review')).toHaveCount(0)
   await expect($(page, 'review-plan')).toBeFocused()
 })
+
+
+test('long C6 leg label stays inside its column', async ({ page }, info) => {
+  if (info.project.use.viewport!.width >= 1200) await page.setViewportSize({ width: 1487, height: 1058 })
+  await page.route('**/api/v1/overview', (route) => route.fulfill({ json: { ...overview, demo: { run_id: 'run-1', execution_id: execution.execution_id } } }))
+  await page.route('**/api/v1/decisions/run-1', (route) => route.fulfill({ status: 404, json: {} }))
+  const body = { ...execution, legs: execution.legs.map((leg: any) => ({ ...leg, label: 'W'.repeat(4000) })) }
+  await page.route(`**/api/v1/executions/${execution.execution_id}`, (route) => route.fulfill({ json: body }))
+  await page.goto('/execution')
+  await settled(page)
+  await expect(page.locator('.lw-leg__name').first()).toContainText('W'.repeat(4000))
+  expect(await sideways(page)).toBeLessThanOrEqual(0)
+  const name = page.locator('.lw-leg__name').first()
+  expect(await name.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+})
