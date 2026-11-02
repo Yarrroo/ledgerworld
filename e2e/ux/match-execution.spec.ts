@@ -11,6 +11,12 @@ const fixture = (path: string) => JSON.parse(readFileSync(join(__dirname, '../..
 const overview = fixture('c6_api/valid-overview-lf1.json')
 const approval = fixture('c3_bound_approval/valid-lf1-integrated.json')
 const execution = fixture('c6_api/valid-execution.json')
+/** A selected integrated plan on run-1: what the review needs to offer Create approval. */
+const decisions = {
+  as_of: '2026-11-05T10:00:00Z', mode: 'fake', run_id: 'run-1', snapshot_id: 'lf1',
+  cohort: 'delayed-receipt', weight_kind: 'equal', status: 'selected', selected: 'integrated',
+  results: [{ policy: 'integrated', scenario_id: 's1', branch_id: 'branch-1', funding_cost: { minor: 80000, currency: 'USD' } }]
+}
 
 async function shot (page: Page, name: string) {
   mkdirSync(evidence, { recursive: true })
@@ -96,11 +102,7 @@ test('Approval matches mockup 07 and keeps two explicit actions', async ({ page 
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '')
     const method = route.request().method()
     if (method === 'GET' && path === '/overview') return route.fulfill({ json: { ...overview, demo: { run_id: 'run-1', execution_id: null } } })
-    if (method === 'GET' && path === '/decisions/run-1') return route.fulfill({ json: {
-      as_of: '2026-11-05T10:00:00Z', mode: 'fake', run_id: 'run-1', snapshot_id: 'lf1',
-      cohort: 'delayed-receipt', weight_kind: 'equal', status: 'selected', selected: 'integrated',
-      results: [{ policy: 'integrated', scenario_id: 's1', branch_id: 'branch-1', funding_cost: { minor: 80000, currency: 'USD' } }]
-    } })
+    if (method === 'GET' && path === '/decisions/run-1') return route.fulfill({ json: decisions })
     if (method === 'POST' && path === '/approvals') {
       posts.push(path)
       return route.fulfill({ status: 201, json: { as_of: '2026-11-05T10:00:00Z', mode: 'fake', approval } })
@@ -171,11 +173,7 @@ test('a held approval is not summarised with an older execution\'s status', asyn
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '')
     const method = route.request().method()
     if (method === 'GET' && path === '/overview') return route.fulfill({ json: { ...overview, demo: { run_id: 'run-1', execution_id: execution.execution_id } } })
-    if (method === 'GET' && path === '/decisions/run-1') return route.fulfill({ json: {
-      as_of: '2026-11-05T10:00:00Z', mode: 'fake', run_id: 'run-1', snapshot_id: 'lf1',
-      cohort: 'delayed-receipt', weight_kind: 'equal', status: 'selected', selected: 'integrated',
-      results: [{ policy: 'integrated', scenario_id: 's1', branch_id: 'branch-1', funding_cost: { minor: 80000, currency: 'USD' } }]
-    } })
+    if (method === 'GET' && path === '/decisions/run-1') return route.fulfill({ json: decisions })
     if (method === 'GET' && path === `/executions/${execution.execution_id}`) return route.fulfill({ json: execution })
     if (method === 'POST' && path === '/approvals') {
       posts.push(path)
