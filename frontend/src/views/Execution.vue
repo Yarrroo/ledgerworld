@@ -46,7 +46,7 @@
       <section class="lw-exec__terms" aria-labelledby="summary-heading" data-test="summary"
                data-panel="What you approved">
         <h2 id="summary-heading">Bound approval</h2>
-        <dl v-if="execution" class="lw-terms lw-summary-terms" data-test="approval-summary">
+        <dl v-if="execution && !held" class="lw-terms lw-summary-terms" data-test="approval-summary">
           <dt>Provider</dt><dd>{{ LABELS[execution.mode] || execution.mode }}</dd>
           <dt>Status</dt><dd>{{ allReconciled ? 'Reconciled' : 'Read execution legs' }}</dd>
         </dl>
@@ -72,7 +72,7 @@
             <dt>Expires</dt><dd data-test="summary-held-expires">{{ expires.utc }} · {{ expires.local }}</dd>
           </dl>
         </template>
-        <details v-if="execution" class="lw-calc" data-test="summary-plain">
+        <details v-if="execution && !held" class="lw-calc" data-test="summary-plain">
           <summary>View all terms →</summary>
           <dl class="lw-terms">
             <dt>Approval</dt>

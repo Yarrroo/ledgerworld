@@ -11,6 +11,12 @@ const fixture = (path: string) => JSON.parse(readFileSync(join(__dirname, '../..
 const overview = fixture('c6_api/valid-overview-lf1.json')
 const approval = fixture('c3_bound_approval/valid-lf1-integrated.json')
 const execution = fixture('c6_api/valid-execution.json')
+/** A selected integrated plan on run-1: what the review needs to offer Create approval. */
+const decisions = {
+  as_of: '2026-11-05T10:00:00Z', mode: 'fake', run_id: 'run-1', snapshot_id: 'lf1',
+  cohort: 'delayed-receipt', weight_kind: 'equal', status: 'selected', selected: 'integrated',
+  results: [{ policy: 'integrated', scenario_id: 's1', branch_id: 'branch-1', funding_cost: { minor: 80000, currency: 'USD' } }]
+}
 
 async function shot (page: Page, name: string) {
   mkdirSync(evidence, { recursive: true })
@@ -96,11 +102,7 @@ test('Approval matches mockup 07 and keeps two explicit actions', async ({ page 
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '')
     const method = route.request().method()
     if (method === 'GET' && path === '/overview') return route.fulfill({ json: { ...overview, demo: { run_id: 'run-1', execution_id: null } } })
-    if (method === 'GET' && path === '/decisions/run-1') return route.fulfill({ json: {
-      as_of: '2026-11-05T10:00:00Z', mode: 'fake', run_id: 'run-1', snapshot_id: 'lf1',
-      cohort: 'delayed-receipt', weight_kind: 'equal', status: 'selected', selected: 'integrated',
-      results: [{ policy: 'integrated', scenario_id: 's1', branch_id: 'branch-1', funding_cost: { minor: 80000, currency: 'USD' } }]
-    } })
+    if (method === 'GET' && path === '/decisions/run-1') return route.fulfill({ json: decisions })
     if (method === 'POST' && path === '/approvals') {
       posts.push(path)
       return route.fulfill({ status: 201, json: { as_of: '2026-11-05T10:00:00Z', mode: 'fake', approval } })
@@ -162,6 +164,51 @@ test('Approval matches mockup 07 and keeps two explicit actions', async ({ page 
   await expect($(page, 'review-plan')).toBeFocused()
 })
 
+// A new approval beside an older reconciled execution: Bound approval summarises the held one only.
+test('a held approval is not summarised with an older execution\'s status', async ({ page }, info) => {
+  if (info.project.use.viewport!.width >= 1200) await page.setViewportSize({ width: 1487, height: 1058 })
+  const posts: string[] = []
+  const held = { ...approval, approval_id: 'apr-2' }
+  await page.route('**/api/v1/**', async (route) => {
+    const path = new URL(route.request().url()).pathname.replace('/api/v1', '')
+    const method = route.request().method()
+    if (method === 'GET' && path === '/overview') return route.fulfill({ json: { ...overview, demo: { run_id: 'run-1', execution_id: execution.execution_id } } })
+    if (method === 'GET' && path === '/decisions/run-1') return route.fulfill({ json: decisions })
+    if (method === 'GET' && path === `/executions/${execution.execution_id}`) return route.fulfill({ json: execution })
+    if (method === 'POST' && path === '/approvals') {
+      posts.push(path)
+      return route.fulfill({ status: 201, json: { as_of: '2026-11-05T10:00:00Z', mode: 'fake', approval: held } })
+    }
+    if (method !== 'GET') { posts.push(`UNEXPECTED ${method} ${path}`); return route.abort('blockedbyclient') }
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto('/execution')
+  await settled(page)
+  await expect($(page, 'approval-summary')).toContainText('Reconciled')
+  await $(page, 'review-plan').click()
+  await $(page, 'token').fill('operator-ux-token-not-a-secret')
+  await $(page, 'confirm').click()
+  await expect($(page, 'review')).toHaveAttribute('data-stage', 'approved')
+  await page.keyboard.press('Escape')
+  await expect($(page, 'review')).toHaveCount(0)
+  await expect($(page, 'summary-held-approval')).toContainText(held.approval_id)
+  await expect($(page, 'summary-held-state')).toContainText('Approved, not executed')
+  await expect($(page, 'approval-summary')).toHaveCount(0)
+  await expect($(page, 'summary-plain')).toHaveCount(0)
+  await expect($(page, 'summary')).not.toContainText('Reconciled')
+  await expect($(page, 'summary')).not.toContainText(execution.approval_id)
+  // the older execution's own record still reads, under its own id
+  await expect($(page, 'execution-banner')).toContainText('Reconciled as of')
+  await expect($(page, 'context')).toContainText(`execution ${execution.execution_id}`)
+  for (const theme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: theme })
+    await page.locator('h1').click() // focus leaves Review plan, and its tip with it
+    expect(await sideways(page)).toBeLessThanOrEqual(0)
+    await $(page, 'summary').scrollIntoViewIfNeeded()
+    await shot(page, `held-${theme}`)
+  }
+  expect(posts).toEqual(['/approvals'])
+})
 
 test('long C6 leg label stays inside its column', async ({ page }, info) => {
   if (info.project.use.viewport!.width >= 1200) await page.setViewportSize({ width: 1487, height: 1058 })
