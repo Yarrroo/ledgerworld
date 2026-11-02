@@ -2345,6 +2345,39 @@ describe('the Approval summary shows the approval this tab holds (board item 151
     expect(held(w).exists()).toBe(false)
   })
 
+  it('a new approval beside an older reconciled execution: the summary is the held one only (board item 168)', async () => {
+    const old = { ...executionBody({ legs: [advance(), paidPayout()] }), execution_id: 'apr-0', approval_id: 'apr-0' }
+    const { w, calls } = await reviewReady({
+      'GET /overview': overview({ run_id: 'run-1', execution_id: 'apr-0' }),
+      'GET /executions/apr-0': old,
+      'POST /approvals': approvalBody({ approval_id: 'apr-2' })
+    })
+    // before the new approval, the summary is the older execution's
+    expect(text(w, 'approval-summary')).toContain('Reconciled')
+    expect(text(w, 'summary-approval')).toBe('apr-0')
+    await approve(w)
+    await closeDialog(w)
+    const summary = text(w, 'summary')
+    expect(text(w, 'summary-held-approval')).toContain('apr-2')
+    expect(text(w, 'summary-held-state')).toContain('Approved, not executed')
+    expect(text(w, 'summary-held-hash')).toContain(boundApproval.instance.plan_hash)
+    expect(text(w, 'summary-held-expires')).toContain('2026-11-05 10:15 UTC')
+    // nothing of the older execution is read as this approval's: no Reconciled, no apr-0 terms
+    expect(w.find('[data-test="approval-summary"]').exists()).toBe(false)
+    expect(w.find('[data-test="summary-plain"]').exists()).toBe(false)
+    expect(summary).not.toContain('Reconciled')
+    expect(summary).not.toContain('apr-0')
+    // the older execution's own record still stands, labelled as that execution
+    expect(text(w, 'context')).toContain('execution apr-0')
+    expect(text(w, 'execution-banner')).toContain('Reconciled as of')
+    expect(posts(calls, '/executions')).toHaveLength(0)
+    // once the held approval goes, the older execution's summary comes back
+    await w.get('[data-test="forget-token"]').trigger('click')
+    await flushPromises()
+    expect(held(w).exists()).toBe(false)
+    expect(text(w, 'summary-approval')).toBe('apr-0')
+  })
+
   describe('a refresh that names another prepared run', () => {
     let demo
     const prepared = (answers = {}) => {
