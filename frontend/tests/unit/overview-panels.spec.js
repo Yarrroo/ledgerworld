@@ -151,7 +151,11 @@ describe('the cash path is the API data, drawn', () => {
     expect(text(w, 'scenario').startsWith('Hypothetical · dashed path')).toBe(true)
     await w.get('[data-test="toggle-late"]').trigger('click')
     expect(w.find('[data-test="late-path"]').exists()).toBe(false)
-    expect(w.get('[data-test="toggle-late"]').attributes('aria-pressed')).toBe('true')
+    // one signal for assistive tech: the label says what a press does, no contradicting pressed state
+    expect(w.get('[data-test="toggle-late"]').text()).toBe('Show path')
+    expect(w.get('[data-test="toggle-late"]').attributes('aria-pressed')).toBeUndefined()
+    // hidden means hidden: no point's tooltip keeps the what-if's figure
+    expect(w.findAll('[data-test="outlook-tip"]').some((t) => t.text().includes('If late'))).toBe(false)
     expect(face(w, 'late-row')).toContain('$20,000') // the table keeps the numbers
   })
 
@@ -217,5 +221,67 @@ describe('Open simulation and the depth under the decision', () => {
     const w = await open(body)
     const node = w.findAll('[data-test="relation"]').find((n) => n.text().includes('payroll bureau'))
     expect(node.get('small').text()).toBe('2 obligations owed')
+  })
+})
+
+describe('the answer and the chart hold off the recorded answer', () => {
+  it('an obligation beyond the projection is not called covered', async () => {
+    const body = clone(baseline.instance)
+    body.upcoming_outflows[0].due_at = '2026-01-05T04:00:00Z' // h100, past the 72-hour outlook
+    const w = await open(body)
+    expect(face(w, 'hero-headline')).toBe('Cash stays above the reserve floor.')
+  })
+
+  it('a what-if that keeps the floor is no condition of the answer', async () => {
+    const body = withRun()
+    body.scenario.outlook = body.scenario.outlook.map((p) => ({ ...p, value: { ...p.value, minor: Math.max(p.value.minor, 3500000) } }))
+    const w = await open(body)
+    expect(face(w, 'hero-subtitle')).toBe('Cash dips to $40,000 at hour 40, $10,000 above the reserve floor.')
+    expect(text(w, 'what-if-why')).toBe('The reserve floor still holds.')
+  })
+
+  it('a path at or below zero with no floor keeps a handful of gridlines', async () => {
+    const body = clone(baseline.instance)
+    body.coverage.floor = { ...body.coverage.floor, minor: null, status: 'unassessed' }
+    body.coverage.headroom = { ...body.coverage.headroom, minor: null, status: 'unassessed' }
+    body.outlook = body.outlook.map((p, n) => ({ ...p, value: { ...p.value, minor: n ? -5000000 : 0 } }))
+    const w = await open(body)
+    const ticks = w.findAll('.lw-path__grid').length
+    expect(ticks).toBeGreaterThanOrEqual(2)
+    expect(ticks).toBeLessThanOrEqual(8)
+  })
+
+  it('a what-if low near the start keeps its label inside the chart', async () => {
+    const body = withRun()
+    // the what-if's low at h12: its label would run off the left edge
+    body.scenario.outlook = [
+      { ...clone(LATE[0]) },
+      { ...clone(baseline.instance.outlook[1]), events: [], value: { ...LATE[1].value, minor: 1000000 } },
+      ...clone(LATE).slice(1).map((p) => ({ ...p, value: { ...p.value, minor: 3500000 } }))
+    ]
+    const w = await open(body)
+    const [line] = w.findAll('[data-test="late-low-label"] text')
+    expect(line.attributes('text-anchor')).toBe('start')
+  })
+
+  it('the observed low label keeps clear of the what-if low label', async () => {
+    // the what-if low just under the observed one at the same hour: the default place would overlap
+    const body = withRun()
+    body.scenario.outlook[1].value.minor = 3600000
+    const w = await open(body)
+    const [low] = w.findAll('[data-test="outlook-low-label"] text')
+    const [late] = w.findAll('[data-test="late-low-label"] text')
+    const y = (t) => Number(t.attributes('y'))
+    const sameSide = low.attributes('text-anchor') === late.attributes('text-anchor')
+    expect(sameSide && Math.abs(y(low) - y(late)) < 2 * 16).toBe(false)
+  })
+
+  it('a receipt the what-if moves inside the horizon has its own row in the cash data', async () => {
+    const body = withRun()
+    const moved = { ...clone(baseline.instance.outlook[1]), t: '2026-01-02T12:00:00Z', value: { ...LATE[0].value, minor: 9000000 } }
+    body.scenario.outlook = [clone(LATE[0]), moved, ...clone(LATE).slice(1).map((p) => ({ ...p, value: { ...p.value, minor: p.value.minor + 2000000 } }))]
+    const w = await open(body)
+    const rows = w.findAll('[data-test="cash-data"] tbody tr').map((r) => r.text().replace(/\s+/g, ' '))
+    expect(rows.some((r) => r.startsWith('36') && r.includes('(if late)'))).toBe(true)
   })
 })

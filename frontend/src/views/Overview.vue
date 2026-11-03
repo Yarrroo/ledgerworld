@@ -36,7 +36,7 @@
                 stroke-dasharray="5 3" /></svg>Hypothetical{{ latePoints.length ? ' · dashed path' : '' }}
             </span>
             <button v-if="latePoints.length" type="button" class="lw-ov-ghost" data-test="toggle-late"
-                    :aria-pressed="showLate ? 'false' : 'true'" @click="showLate = !showLate">{{ showLate ? 'Hide path' : 'Show path' }}</button>
+                    @click="showLate = !showLate">{{ showLate ? 'Hide path' : 'Show path' }}</button>
           </div>
           <h2 class="lw-ov-iflate__h">{{ teaser }}</h2>
           <p class="lw-ov-iflate__why" data-test="what-if-why">{{ why }}</p>
@@ -202,7 +202,7 @@ import Tip from '../components/Tip.vue'
 import {
   FLOOR_WORDS, STATES, ScreenShell, accountName, againstFloor, amountWords, dayText, floorState, formatAmount, formatMoney,
   formatTime, freshness, getOverview, hoursWords, kindText, lastSeen, metricStatus, metricText, money,
-  pendingFlows, routeExists, rowLink, staleOf, useReading
+  pendingFlows, pointAt, routeExists, rowLink, signedMoney, staleOf, useReading
 } from '../api/v1.js'
 
 const router = useRouter()
@@ -271,7 +271,9 @@ const lead = computed(() => {
 /** The headline: the answer to "is the next obligation covered?", from the floor's state. */
 const answer = computed(() => {
   if (!state.body) return ''
-  const what = next.value ? capital(kindText(next.value.kind)) : null
+  const end = state.body.outlook?.at(-1)?.t
+  const inside = next.value && end && Date.parse(next.value.due_at) <= Date.parse(end)
+  const what = inside ? capital(kindText(next.value.kind)) : null
   if (floor.value === 'kept') return what ? `${what} is covered.` : 'Cash stays above the reserve floor.'
   if (floor.value === 'breached') return 'Cash falls below the reserve floor.'
   return floor.value === 'unassessed' ? 'No reserve floor is assessed yet.' : 'Coverage is unknown.'
@@ -305,7 +307,7 @@ const condition = computed(() => {
     : `${formatMoney(-cov.headroom.minor, cov.headroom.currency)} below the reserve floor`
   const f = scenarioFlow.value
   const fh = f ? hoursAt(b.as_of, f.expected_at) : null
-  const hinge = f && f.direction === 'in' && latePoints.value.length && fh <= lowHour.value
+  const hinge = f && f.direction === 'in' && lateLow.value?.state === 'breached' && fh <= lowHour.value
     ? `, as long as the ${money(f.amount)} ${kindText(f.kind)} lands ${atHour(fh)}`
     : ''
   return `Cash dips to ${amountWords(cov.min_projected)} ${atHour(lowHour.value)}, ${gap}${hinge}.`
@@ -357,7 +359,7 @@ const terms = computed(() => {
 const headroomText = computed(() => {
   const h = state.body?.coverage.headroom
   if (!h || h.minor === null || h.status === 'unassessed') return metricText(h)
-  return `${h.minor < 0 ? '−' : '+'}${formatMoney(Math.abs(h.minor), h.currency)}${h.status === 'stale' ? ' · stale' : ''}`
+  return `${signedMoney(h.minor, h.currency)}${h.status === 'stale' ? ' · stale' : ''}`
 })
 
 /** The what-if's lowest point, first reached, against the floor. */
@@ -367,7 +369,7 @@ const lateLow = computed(() => {
   if (!b || !pts.length) return null
   const p = pts.reduce((x, y) => (y.value.minor < x.value.minor ? y : x))
   const { state: where, gap } = againstFloor(p.value, b.coverage.floor)
-  const against = gap === null ? FLOOR_WORDS[where] : `${gap < 0 ? '−' : '+'}${formatMoney(Math.abs(gap), p.value.currency)}`
+  const against = gap === null ? FLOOR_WORDS[where] : signedMoney(gap, p.value.currency)
   return { hours: hoursAt(b.as_of, p.t), money: metricText(p.value), state: where, against }
 })
 
@@ -397,14 +399,20 @@ const rows = computed(() => {
   const b = state.body
   if (!b) return []
   const late = latePoints.value
-  const lateAt = (t) => [...late].reverse().find((p) => Date.parse(p.t) <= Date.parse(t)) ?? null
-  return (b.outlook ?? []).map((p, n) => {
-    const l = lateAt(p.t)
+  const planned = b.outlook ?? []
+  const words = (events) => events.map((e) => `${capital(kindText(e.kind))} ${e.direction === 'in' ? '+' : '−'}${money(e.amount)}`).join(', ')
+  // every time either path moves: a flow the what-if delays inside the horizon has its own row
+  const times = [...new Set([...planned, ...late].map((p) => p.t))].sort((x, y) => Date.parse(x) - Date.parse(y))
+  return times.map((t, n) => {
+    const own = planned.find((p) => p.t === t)
+    const moved = late.find((p) => p.t === t && !own)
+    const p = pointAt(planned, t)
+    const l = pointAt(late, t)
     return {
-      t: p.t, hours: hoursAt(b.as_of, p.t), planned: metricText(p.value),
-      event: p.events.length
-        ? p.events.map((e) => `${capital(kindText(e.kind))} ${e.direction === 'in' ? '+' : '−'}${money(e.amount)}`).join(', ')
-        : (n === 0 ? 'Now' : 'End of window'),
+      t, hours: hoursAt(b.as_of, t), planned: p ? metricText(p.value) : '',
+      event: own?.events.length ? words(own.events)
+        : moved?.events.length ? `${words(moved.events)} (if late)`
+          : (n === 0 ? 'Now' : 'End of window'),
       late: l ? metricText(l.value) : '',
       lateBad: l ? againstFloor(l.value, b.coverage.floor).state === 'breached' : false
     }

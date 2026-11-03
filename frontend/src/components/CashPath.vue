@@ -43,8 +43,8 @@
               <text v-if="lateLow.from" :x="lateLow.px - 11" :y="lateLow.from + LH + 2" text-anchor="end"
                     class="lw-path__halo lw-path__muted">{{ wide ? 'if the receipt is late (hypothetical)' : 'if late (hypothetical)' }}</text>
               <g :class="`is-${lateLow.tone}`" data-test="late-low-label">
-                <text :x="lateLow.px - 11" :y="lateLow.py - 3" text-anchor="end" class="lw-path__halo lw-path__strong">{{ lateLow.money }} if late</text>
-                <text :x="lateLow.px - 11" :y="lateLow.py + LH - 3" text-anchor="end" class="lw-path__halo">{{ lateLow.against }}</text>
+                <text :x="lateLow.x" :y="lateLow.py - 3" :text-anchor="lateLow.anchor" class="lw-path__halo lw-path__strong">{{ lateLow.money }} if late</text>
+                <text :x="lateLow.x" :y="lateLow.py + LH - 3" :text-anchor="lateLow.anchor" class="lw-path__halo">{{ lateLow.against }}</text>
               </g>
             </template>
           </g>
@@ -93,7 +93,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import Tip from './Tip.vue'
-import { againstFloor, formatMoney, formatTime, hoursFrom, kindText, metricText } from '../api/v1.js'
+import { againstFloor, formatMoney, formatTime, hoursFrom, kindText, metricText, pointAt } from '../api/v1.js'
 
 const props = defineProps({
   points: { type: Array, required: true },
@@ -149,8 +149,10 @@ const range = computed(() => {
   if (floorKnown.value) values.push(props.floor.minor)
   const hi = Math.max(1, ...values)
   const lo = Math.min(0, ...values)
-  const mag = 10 ** Math.floor(Math.log10(hi * 0.55))
-  const unit = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((s) => 2 * s >= hi * 1.08)
+  // the step covers the top in two and the whole span in at most six
+  const need = Math.max(hi * 0.54, (hi - lo) / 6)
+  const mag = 10 ** Math.floor(Math.log10(need))
+  const unit = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((s) => s >= need)
   const bottom = lo < 0 ? -Math.ceil(-lo / unit) * unit : 0
   const ticks = []
   for (let v = bottom; v <= 2 * unit; v += unit) ticks.push(v)
@@ -182,8 +184,6 @@ function eventText (p) {
   return p.events.map((e) => `${capital(kindText(e.kind))} ${e.ref} ${signed(e).replace('−', '-')}`).join('; ')
 }
 
-/** The what-if's P at `t`: its last point at or before `t` (P holds between moves). */
-const lateAt = (t) => [...known(props.late)].reverse().find((p) => Date.parse(p.t) <= Date.parse(t)) ?? null
 
 const drawn = computed(() => props.points.map((p) => {
   const h = hoursOf(p.t)
@@ -191,7 +191,7 @@ const drawn = computed(() => props.points.map((p) => {
   const shown = metricText(p.value)
   const event = eventText(p)
   const low = p.t === props.lowAt
-  const late = props.late.length ? lateAt(p.t) : null
+  const late = pointAt(lateShown.value, p.t)
   return {
     ...p, hours: Math.round(h), h: hoursFrom(props.asOf, p.t), utc, money: shown, event, low,
     px: x(h), py: p.value.minor === null ? y(0) : y(p.value.minor),
@@ -238,6 +238,7 @@ function lowPlace (p, w) {
     ...pts.slice(1).flatMap((q, n) => [around(pts[n].px, pts[n].py, q.px, pts[n].py, 2), around(q.px, pts[n].py, q.px, q.py, 2)]),
     around(pts.at(-1).px, pts.at(-1).py, end, pts.at(-1).py, 2)
   ]
+  if (lateLow.value) marks.push(lateLow.value.box) // the what-if's own low-point label
   const fy = floorY.value
   if (fy !== null) {
     marks.push(around(0, fy, width.value, fy, 2))
@@ -275,7 +276,17 @@ const lateLow = computed(() => {
   if (!pts.length) return null
   const p = pts.reduce((a, b) => (b.value.minor < a.value.minor ? b : a))
   const before = pts[pts.indexOf(p) - 1]
-  return { ...p, money: metricText(p.value), against: againstText(p.value, !wide.value), tone: toneOf(p.value), from: before ? before.py : null }
+  const money = metricText(p.value)
+  const against = againstText(p.value, !wide.value)
+  const w = Math.max(`${money} if late`.length, against.length) * 7.4
+  // left of its point, as drawn; right of it when the left would leave the chart
+  const left = p.px - 11 - w >= 0
+  const x0 = left ? p.px - 11 : p.px + 11
+  return {
+    ...p, money, against, tone: toneOf(p.value), from: before ? before.py : null,
+    x: x0, anchor: left ? 'end' : 'start',
+    box: { left: left ? x0 - w : x0, right: left ? x0 : x0 + w, top: p.py - 3 - LH + 3, bottom: p.py + LH - 3 + 4 }
+  }
 })
 
 /** The split of settled cash at h0: spendable on top, the rest set aside below it (geometry only). */

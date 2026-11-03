@@ -25,5 +25,8 @@ Found and fixed during the sweep: at 390 the floor label moved onto the late-pat
 "crowded" rule fired on phone widths); the low-point label crossed the floor line when the low
 point sat just above it at the right edge (now placed by a fit search).
 
-Inherited, not changed: the chart's per-point tooltip buttons are 32 px (as on Treasury's chart);
-every value they show is also in the "View cash data" table, whose rows need no tap.
+Below 44 px by choice: the chart's per-point tooltip buttons are 32 px, the same pattern as
+Treasury's chart, and at 390 px neighbouring points (h40, h48) sit about 30 px apart, so a 44 px
+target would overlap more. They are not the screen's key controls for raw.md criterion 3: Open simulation, Hide path,
+the payroll link and the folds are, all ≥ 44 px in `match-overview.spec.ts`, and every value they
+show is in the "View cash data" table.

@@ -277,6 +277,23 @@ def test_a_scenario_that_moves_no_known_flow_serves_no_late_path():
     assert body["scenario"] is not None and body["scenario"]["outlook"] == []
 
 
+def test_a_flow_overdue_past_its_delay_serves_no_late_path():
+    """Moved by its delay the receivable is still overdue, so P now counts it either way: the
+    what-if path equals the observed one and is not served."""
+    epoch = WORLD.epoch
+    snap = WORLD.snapshot.model_dump(mode="json")
+    flow = next(f for a in snap["accounts"] for f in a["buckets"]["pending_in"]
+                if f["flow_id"] == "receivable-1")
+    flow["expected_at"] = iso(epoch - timedelta(hours=300))
+    services = build(snap, clock=lambda: epoch)
+    services.jobs.put("run_spec", "run-old", {"scenario": DELAYED | {"params": {"delay_h": 240}},
+                                              "rounds": 3})
+    services.jobs.put("run", "run-old", new_run("run-old", "demo-world", epoch))
+    services.prepare_demo("run-old")
+    body = check(client(services).get("/api/v1/overview"), "OverviewResponse")
+    assert body["scenario"]["outlook"] == []
+
+
 def test_venue_freeze_is_partial_and_unknown_is_never_zero():
     services = build(observed(stressed=True))
     http = client(services)
