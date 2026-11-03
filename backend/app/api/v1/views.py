@@ -8,6 +8,7 @@ says so, a figure nothing has observed yet is `unassessed`.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -134,6 +135,25 @@ def _outlook(views: list[AccountView], now: datetime, status: str,
             for t in sorted({now, end, *moves})]
 
 
+def _late_outlook(views: list[AccountView], now: datetime, status: str,
+                  scenario: Body) -> list[Body]:
+    """The scenario's cash path: the outlook with its flow (`flow_id`) moved by `delay_h` hours,
+    every other flow and deadline as observed; empty when it names no flow these accounts carry.
+    Hypothetical: it changes no observed figure."""
+    params = scenario.get("params") or {}
+    flow, delay = params.get("flow_id"), params.get("delay_h")
+    if not isinstance(flow, str) or type(delay) is not int:
+        return []
+
+    def moved(flows: tuple) -> tuple:
+        return tuple(replace(f, at=f.at + timedelta(hours=delay)) if f.flow_id == flow else f
+                     for f in flows)
+
+    late = [replace(v, pending_in=moved(v.pending_in), pending_out=moved(v.pending_out))
+            for v in views]
+    return [] if late == views else _outlook(late, now, status)
+
+
 def _party(names: dict[str, str], entity: str) -> Body:
     return {"entity_id": entity, "name": names.get(entity, entity)}
 
@@ -208,7 +228,8 @@ def overview(store: LedgerStore, snapshot: Snapshot, now: datetime, demo: Body,
         "accounts": [treasury_account(v, now) for v in views],
         "outlook": outlook,
         "relations": _relations(snapshot, entity, pool, names, open_rows),
-        "scenario": scenario,
+        "scenario": scenario and {**scenario,
+                                  "outlook": _late_outlook(views, now, status, scenario)},
     }
 
 

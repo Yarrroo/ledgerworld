@@ -1,6 +1,7 @@
 /**
- * The cash outlook's labels at every width of e2e/ux.config.ts: the low-point label never crosses
- * the dashed reserve-floor line, the floor label, the step line P or any point marker. Three
+ * The cash path's labels at every width of e2e/ux.config.ts: each line of the low-point label
+ * never crosses the reserve-floor line, the floor label, the step line P or the late path's
+ * low-point label, and the late low point's label never covers the floor label. Three
  * answers: the app's own, the recorded baseline (P lowest at 40,000 against a 30,000 floor, the
  * h48 point just above and to the right), and the baseline with its lowest point moved just above
  * the floor and near the right edge, under the floor label. Read-only.
@@ -35,31 +36,33 @@ async function serve (page: Page, edit: (body: any) => void = () => {}): Promise
 async function clear (page: Page): Promise<void> {
   await page.goto('/overview')
   await settled(page)
-  const label = (await $(page, 'outlook-low-label').boundingBox())!
   const floor = (await $(page, 'outlook-floor').boundingBox())!
   const floorLabel = (await $(page, 'outlook-floor-label').boundingBox())!
   const lineY = floor.y + floor.height / 2
-  expect(lineY > label.y && lineY < label.y + label.height,
-    `the low-point label (y ${label.y}–${label.y + label.height}) crosses the floor line at y ${lineY}`).toBe(false)
-  expect(overlaps(label, floorLabel), 'the low-point label overlaps the floor label').toBe(false)
-  const markers = page.locator('[data-test="outlook-chart"] .lw-outlook__dot')
-  expect(await markers.count(), 'no point markers drawn').toBeGreaterThan(0)
-  for (let n = 0; n < await markers.count(); n++) {
-    const marker = (await markers.nth(n).boundingBox())!
-    expect(overlaps(label, marker), `the low-point label overlaps point marker ${n} at x ${marker.x}`).toBe(false)
+  const late = await $(page, 'late-low-label').locator('text').all()
+  for (const [n, l] of late.entries()) {
+    const b = (await l.boundingBox())!
+    expect(overlaps(b, floorLabel), `the late low point's line ${n} ${JSON.stringify(b)} overlaps the floor label ${JSON.stringify(floorLabel)}`).toBe(false)
   }
-  // the step line, sampled along its length in viewport coordinates (boundingBox's): no sample
-  // inside the label
-  const crossing = await $(page, 'outlook-line').evaluate((path: SVGPathElement, box: Box) => {
-    const m = path.getScreenCTM()!
-    const total = path.getTotalLength()
-    for (let at = 0; at <= total; at += 1) {
-      const { x, y } = path.getPointAtLength(at).matrixTransform(m)
-      if (x > box.x && x < box.x + box.width && y > box.y && y < box.y + box.height) return { x, y }
-    }
-    return null
-  }, label)
-  expect(crossing, `the low-point label sits on the step line at ${JSON.stringify(crossing)}`).toBeNull()
+  for (const [n, text] of (await $(page, 'outlook-low-label').locator('text').all()).entries()) {
+    const label = (await text.boundingBox())!
+    expect(lineY > label.y && lineY < label.y + label.height,
+      `low-point line ${n} (y ${label.y}–${label.y + label.height}) crosses the floor line at y ${lineY}`).toBe(false)
+    expect(overlaps(label, floorLabel), `low-point line ${n} overlaps the floor label`).toBe(false)
+    for (const l of late) expect(overlaps(label, (await l.boundingBox())!), `low-point line ${n} overlaps the late low point's label`).toBe(false)
+    // the step line, sampled along its length in viewport coordinates (boundingBox's): no sample
+    // inside the label
+    const crossing = await $(page, 'outlook-line').evaluate((path: SVGPathElement, box: Box) => {
+      const m = path.getScreenCTM()!
+      const total = path.getTotalLength()
+      for (let at = 0; at <= total; at += 1) {
+        const { x, y } = path.getPointAtLength(at).matrixTransform(m)
+        if (x > box.x && x < box.x + box.width && y > box.y && y < box.y + box.height) return { x, y }
+      }
+      return null
+    }, label)
+    expect(crossing, `low-point line ${n} sits on the step line at ${JSON.stringify(crossing)}`).toBeNull()
+  }
 }
 
 test('the app\'s own answer: the low-point label clears the floor line and its label', async ({ page, baseURL }) => {

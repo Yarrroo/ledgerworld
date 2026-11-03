@@ -247,6 +247,36 @@ def test_a_scenario_that_no_longer_loads_leaves_the_overview_readable():
     assert body["demo"]["run_id"] == "run-gone" and body["scenario"] is None
 
 
+def test_the_scenario_serves_its_late_receipt_cash_path():
+    """The prepared delayed receipt's path beside the observed one: the receivable moved past
+    the horizon, payroll then leaves 20,000 against the 30,000 floor; observed figures unchanged."""
+    epoch = WORLD.epoch
+    services = build(WORLD.snapshot.model_dump(mode="json"), clock=lambda: epoch)
+    services.jobs.put("run_spec", "run-late", {"scenario": DELAYED, "rounds": 3})
+    services.jobs.put("run", "run-late", new_run("run-late", "demo-world", epoch))
+    services.prepare_demo("run-late")
+    body = check(client(services).get("/api/v1/overview"), "OverviewResponse")
+    late = body["scenario"]["outlook"]
+    assert [p["value"]["minor"] for p in body["outlook"]] == [
+        7_000_000, 9_000_000, 4_000_000, 5_500_000, 5_500_000]
+    assert [p["t"] for p in late] == [p["t"] for p in body["outlook"]
+                                      if p["events"] != body["outlook"][1]["events"]]
+    assert [p["value"]["minor"] for p in late] == [7_000_000, 2_000_000, 3_500_000, 3_500_000]
+    assert "receivable-1" not in {e["ref"] for p in late for e in p["events"]}
+    assert body["coverage"]["min_projected"]["minor"] == 4_000_000  # observed, not the what-if
+
+
+def test_a_scenario_that_moves_no_known_flow_serves_no_late_path():
+    epoch = WORLD.epoch
+    services = build(WORLD.snapshot.model_dump(mode="json"), clock=lambda: epoch)
+    services.jobs.put("run_spec", "run-fx", {"scenario": {"family": "fx_gap", "seed": 1,
+                                                          "params": {}}, "rounds": 3})
+    services.jobs.put("run", "run-fx", new_run("run-fx", "demo-world", epoch))
+    services.prepare_demo("run-fx")
+    body = check(client(services).get("/api/v1/overview"), "OverviewResponse")
+    assert body["scenario"] is not None and body["scenario"]["outlook"] == []
+
+
 def test_venue_freeze_is_partial_and_unknown_is_never_zero():
     services = build(observed(stressed=True))
     http = client(services)

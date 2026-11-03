@@ -3111,7 +3111,7 @@
     },
     "ScenarioPreview": {
       "additionalProperties": false,
-      "description": "The prepared demonstration run's scenario, read-only: its family, what it shocks and its\nparameters as run. Hypothetical; it changes no observed figure.",
+      "description": "The prepared demonstration run's scenario, read-only: its family, what it shocks and its\nparameters as run. Hypothetical; it changes no observed figure. `outlook` is the overview's\nP with the scenario's flow moved by its delay (`flow_id`, `delay_h`), the what-if's cash\npath; empty when the scenario moves no flow the overview's accounts carry.",
       "properties": {
         "family": {
           "maxLength": 128,
@@ -3127,6 +3127,13 @@
           "additionalProperties": true,
           "title": "Params",
           "type": "object"
+        },
+        "outlook": {
+          "items": {
+            "$ref": "#/$defs/OutlookPoint"
+          },
+          "title": "Outlook",
+          "type": "array"
         }
       },
       "required": [

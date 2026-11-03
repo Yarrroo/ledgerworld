@@ -1,17 +1,17 @@
 /**
- * Design match 1: Overview as mockup 01 (prp/2026-10-29-ux-pass/MATCH.md, 01 Overview), at
- * 1487 px (the mockup's width, on the desktop project), 834 and 390 px:
+ * Overview as one payroll decision around the 72-hour cash path (the 2026-10-31 Overview design,
+ * prp/2026-11-03-overview-cash-path), at 1440, 834 and 390 px and at 390x844 and 1440x900 in both
+ * themes:
  *
- * - layout order: hero, the four figures, the cash outlook beside (wide) or above (narrow) the
- *   next obligation and the world exposure, the hypothetical banner last;
- * - the hero: headline, the treasury's subtitle, Open simulation as its one action;
- * - the four figures, from the API: Settled cash, Spendable now, the next obligation due with
- *   its hours ("in 40h"), Reserve headroom, as "$70,000";
- * - the outlook: a $ axis, the start and each flow annotated when wide, the lowest point boxed,
- *   the reserve floor, a legend; every point a control with the shared tooltip;
- * - tooltips on every figure, chart point and world node: hover (or tap on a phone) and keyboard
- *   focus open them, Escape closes them;
- * - the word budget (checks/word_budget.py) at every width.
+ * - the first viewport, without scrolling: the answer (h1), the cash path with its reserve floor
+ *   line, and Open simulation;
+ * - the chart is the API's data: the floor, the trough and the late path's low point read back
+ *   off the drawing's own axis equal the API's values for the same snapshot, and their labels
+ *   say the API's figures;
+ * - the equation settled − reserved = spendable, the what-if table, Hide path;
+ * - nothing sideways at any width; every control a finger uses is at least 44 px on a phone;
+ * - tooltips on the equation and on every chart point; the word budget (checks/word_budget.py);
+ * - a screenshot of each first viewport, attached to the run.
  *
  * Read-only.
  */
@@ -20,96 +20,132 @@ import { readOnly } from '../guard'
 import { settled, sideways, tipWorks } from './routes'
 import { visibleWords, wordBudget } from './words'
 
+const $ = (page: Page, id: string) => page.locator(`[data-test="${id}"]`)
 const box = async (l: Locator) => (await l.boundingBox())!
+const whole = (minor: number) => `${minor < 0 ? '-' : ''}$${(Math.abs(minor) / 100).toLocaleString('en-US')}`
 
+/** The value a y pixel stands for on the chart's own axis ($0 gridline and the top one). */
+async function axisOf (page: Page): Promise<(py: number) => number> {
+  const grid = await page.locator('.lw-path__grid').evaluateAll((ls) => ls.map((l) => Number(l.getAttribute('y1'))))
+  const labels = await page.locator('.lw-path__axis text').allTextContents()
+  const zero = grid[labels.indexOf('$0')]
+  const top = grid.at(-1)!
+  const topMinor = Number(labels.at(-1)!.replace(/[$,]/g, '').replace(/k$/, '000').replace(/M$/, '000000')) * 100
+  return (py) => Math.round(((zero - py) / (zero - top)) * topMinor)
+}
 
-test('Overview as mockup 01', async ({ page, request, baseURL }, info) => {
+/** The three things a reader must see without scrolling, in the viewport as it opened. */
+async function firstViewport (page: Page, where: string): Promise<void> {
+  const height = page.viewportSize()!.height
+  for (const [what, l] of [['the answer', page.locator('h1')], ['the floor line', $(page, 'outlook-floor')],
+    ['the cash path', $(page, 'outlook-line')], ['Open simulation', page.locator('a[data-test="open-simulation"]')]] as const) {
+    const b = await box(l)
+    expect(b.y, `${where}: ${what} starts above the page`).toBeGreaterThanOrEqual(0)
+    expect(b.y + b.height, `${where}: ${what} is below the first viewport`).toBeLessThanOrEqual(height)
+  }
+  expect(await page.evaluate(() => window.scrollY), `${where}: the page opened scrolled`).toBe(0)
+}
+
+test('Overview: one payroll decision around the 72-hour cash path', async ({ page, request, baseURL }, info) => {
   const writes = await readOnly(page, baseURL!)
   const touch = Boolean(info.project.use.hasTouch)
-  let width = info.project.use.viewport!.width
-  if (width >= 1200) {
-    width = 1487
-    await page.setViewportSize({ width, height: 1058 })
-  }
+  const width = info.project.use.viewport!.width
   const api = await (await request.get('/api/v1/overview')).json()
+  const late = api.scenario?.outlook ?? []
+  expect(late.length, 'the prepared demonstration serves its late-receipt path').toBeGreaterThan(0)
   await page.goto('/overview')
   await settled(page)
 
-  // the hero
-  await expect(page.locator('h1')).toHaveText('Know your cash. Rehearse the risk.')
-  await expect(page.locator('[data-test="hero-subtitle"]')).toHaveText('Northwind Parts treasury / Observed snapshot', { useInnerText: true })
-  const open = page.locator('[data-test="hero-action"] a[data-test="open-simulation"]')
+  // the answer and its condition, from the API's coverage
+  const hours = Math.round((Date.parse(api.coverage.at) - Date.parse(api.as_of)) / 3_600_000)
+  await expect(page.locator('h1')).toHaveText('Payroll is covered.')
+  await expect($(page, 'hero-subtitle')).toContainText(
+    `Cash dips to ${whole(api.coverage.min_projected.minor)} at hour ${hours}, ${whole(api.coverage.headroom.minor)} above the reserve floor`)
+  await expect($(page, 'hero-subtitle')).toContainText('as long as the $20,000 receivable lands at hour 12.')
+
+  // settled − reserved = spendable, the API's figures
+  await expect($(page, 'settled').locator('.lw-figure')).toHaveText(whole(api.cash.minor))
+  await expect($(page, 'reserved').locator('.lw-figure')).toHaveText(whole(api.accounts[0].buckets.reserved.minor))
+  await expect($(page, 'spendable').locator('.lw-figure')).toHaveText(whole(api.spendable.minor))
+
+  // the chart is the API's data: read back off the drawing's own axis
+  const value = await axisOf(page)
+  expect(value(Number(await $(page, 'outlook-floor').getAttribute('y1'))), 'the floor line').toBe(api.coverage.floor.minor)
+  expect(value(Number(await $(page, 'outlook-low-label').locator('circle').getAttribute('cy'))), 'the trough').toBe(api.coverage.min_projected.minor)
+  const d = (await $(page, 'late-path').locator('path').first().getAttribute('d'))!
+  const lateYs = [...d.matchAll(/[MV]\s*(?:[\d.]+,)?([\d.]+)/g)].map((m) => value(Number(m[1])))
+  expect(lateYs, 'the late path').toEqual(late.map((p: any) => p.value.minor))
+  const lateLow = Math.min(...late.map((p: any) => p.value.minor))
+  await expect($(page, 'outlook-floor-label')).toContainText(whole(api.coverage.floor.minor))
+  await expect($(page, 'outlook-low-label')).toContainText(whole(api.coverage.min_projected.minor))
+  await expect($(page, 'outlook-low-label')).toContainText(`${whole(api.coverage.headroom.minor)} above`)
+  await expect($(page, 'late-low-label')).toContainText(`${whole(lateLow)} if late`)
+  await expect($(page, 'late-low-label')).toContainText(`${whole(api.coverage.floor.minor - lateLow)} below`)
+  await expect($(page, 'outlook-point')).toHaveCount(api.outlook.length)
+
+  // the what-if: the table, Hide path, the action
+  await expect($(page, 'hypothetical')).toHaveText(/hypothetical · dashed path/i)
+  await expect($(page, 'late-row')).toContainText(whole(lateLow))
+  await expect($(page, 'coverage')).toContainText(whole(api.coverage.min_projected.minor))
+  const open = page.locator('a[data-test="open-simulation"]')
   await expect(open).toHaveText('Open simulation')
   await expect(open).toHaveAttribute('href', `/simulation?run_id=${api.demo.run_id}`)
 
-  // the four figures, the API's, in the mockup's words and format
-  const metrics = page.locator('[data-test="strip"] .lw-ov-metric')
-  await expect(metrics.locator('.lw-ov-metric__label')).toHaveText(['Settled cash', 'Spendable now', 'Payroll due', 'Reserve headroom'])
-  const whole = (minor: number) => `$${(minor / 100).toLocaleString('en-US')}`
-  await expect(metrics.locator('.lw-figure')).toHaveText([
-    whole(api.cash.minor), whole(api.spendable.minor), whole(api.upcoming_outflows[0].amount.minor), whole(api.coverage.headroom.minor)
-  ])
-  const hours = Math.round((Date.parse(api.upcoming_outflows[0].due_at) - Date.parse(api.as_of)) / 3_600_000)
-  await expect(page.locator('[data-test="next-due-at"]')).toHaveText(`· in ${hours}h`)
+  // the first viewport, then a screenshot of it
+  await firstViewport(page, `${width} px`)
+  await page.screenshot({ path: info.outputPath(`overview-${width}-light.png`) })
+  await info.attach(`overview-${width}-light`, { path: info.outputPath(`overview-${width}-light.png`), contentType: 'image/png' })
 
-  // the outlook: axis, annotations (wide), the lowest point, the floor, the legend
-  const chart = page.locator('[data-test="outlook-chart"]')
-  await expect(chart.locator('.lw-outlook__axis text').first()).toHaveText(/^\$\d/)
-  await expect(page.locator('[data-test="outlook-low-label"]')).toContainText(`${whole(api.coverage.min_projected.minor)} · h40`)
-  await expect(page.locator('[data-test="outlook-floor-label"]')).toContainText(whole(api.coverage.floor.minor))
-  if (width >= 1200) {
-    await expect(page.locator('[data-test="outlook-note"]')).toHaveCount(3) // h0, the receivable, the venue inflow
-    await expect(page.locator('[data-test="outlook-note"]').first()).toContainText('Starting cash')
-  }
-  await expect(page.locator('.lw-outlook__legend li')).toHaveText([/Projected cash \(observed\)/, /Reserve floor \(\$30,000\)/, /Lowest point/])
-  await expect(page.locator('[data-test="outlook-point"]')).toHaveCount(api.outlook.length)
-
-  // the next obligation and the world
-  const next = page.locator('[data-test="next-obligation"]')
-  await expect(next.locator('h2')).toHaveText('Next obligation')
-  await expect(next).toContainText(/Due in\s*in 40h/)
-  await expect(next.locator('[data-test="open-treasury"]')).toBeVisible()
-  const world = page.locator('[data-test="exposure"]')
-  await expect(world.locator('h2')).toHaveText('World exposure')
-  await expect(world.locator('[data-test="treasury-node"]')).toContainText(`Treasury${whole(api.cash.minor)} settled`)
-  expect(await world.locator('[data-test="relation"]').count()).toBeGreaterThanOrEqual(2)
-  await expect(world.locator('[data-test="explore-world"]')).toHaveText('Explore world')
-
-  // the hypothetical, last
-  const scenario = page.locator('[data-test="scenario"]')
-  await expect(scenario.locator('[data-test="hypothetical"]')).toHaveText(/hypothetical/i)
-  await expect(scenario.locator('h2')).toHaveText('What if your $20,000 receivable arrives late?')
-  await expect(scenario.locator('[data-test="preview-scenario"]')).toHaveText('Preview scenario')
-
-  // layout order
-  const hero = await box(page.locator('[data-test="hero"]'))
-  const strip = await box(page.locator('[data-test="strip"]'))
-  const outlook = await box(page.locator('[data-test="outlook"]'))
-  const nextBox = await box(next)
-  const worldBox = await box(world)
-  const banner = await box(scenario)
-  expect(strip.y, 'the figures sit under the hero').toBeGreaterThan(hero.y + hero.height - 1)
-  expect(outlook.y, 'the outlook sits under the figures').toBeGreaterThan(strip.y + strip.height - 1)
-  if (width >= 1200) {
-    expect(nextBox.x, 'the next obligation sits right of the outlook').toBeGreaterThan(outlook.x + outlook.width - 1)
-    expect(nextBox.y).toBeLessThan(outlook.y + 40)
-  } else {
-    expect(nextBox.y, 'narrow: the next obligation follows the outlook').toBeGreaterThan(outlook.y + outlook.height - 1)
-  }
-  expect(worldBox.y, 'the world follows the next obligation').toBeGreaterThanOrEqual(width < 768 ? nextBox.y + nextBox.height - 1 : nextBox.y)
-  expect(banner.y, 'the hypothetical is last').toBeGreaterThan(Math.max(outlook.y + outlook.height, worldBox.y + worldBox.height) - 1)
-
-  // tooltips: every figure, every chart point, every world node carries one
-  for (const m of await metrics.all()) await expect(m.locator('[role="tooltip"]')).toHaveCount(1)
-  await expect(page.locator('[data-test="tip-coverage"] [role="tooltip"]')).toContainText(/lowest point ahead \$40,000 · safety minimum \$30,000/)
-  await tipWorks(page, page.locator('[data-test="spendable"] .lw-tip'), touch, 'a figure')
-  await tipWorks(page, page.locator('[data-test="outlook-point"]').nth(2), touch, 'a chart point')
-  await tipWorks(page, world.locator('[data-test="relation"]').first(), touch, 'a world node')
-
-  // the word budget, and nothing sideways
-  const words = (await visibleWords(page)).length
-  info.annotations.push({ type: 'words', description: `${words} at ${width}` })
-  expect(words, `Overview at ${width} px shows ${words} words`).toBeLessThanOrEqual(wordBudget('overview'))
+  // nothing sideways; a finger's controls are at least 44 px
   expect(await sideways(page), 'the page scrolls sideways').toBeLessThanOrEqual(0)
+  if (touch) {
+    for (const l of [open, $(page, 'toggle-late'), page.locator('a[data-test="outlook-event"]'), page.locator('.lw-ov-fold summary')]) {
+      for (const el of await l.all()) {
+        expect((await box(el)).height, `${await el.innerText()} is shorter than 44 px`).toBeGreaterThanOrEqual(44)
+      }
+    }
+  }
+
+  // tooltips: the equation and every chart point
+  await tipWorks(page, $(page, 'tip-spendable'), touch, 'spendable now')
+  await tipWorks(page, $(page, 'outlook-point').nth(2), touch, 'the low point')
+
+  // Hide path takes the dashed path away; the table keeps its numbers
+  await $(page, 'toggle-late').click()
+  await expect($(page, 'late-path')).toHaveCount(0)
+  await expect($(page, 'late-row')).toContainText(whole(lateLow))
+  await $(page, 'toggle-late').click()
+  await expect($(page, 'late-path')).toHaveCount(1)
+
+  // the payroll under the axis opens its Treasury row
+  await expect(page.locator('a[data-test="outlook-event"]')).toHaveAttribute('href', /\/treasury\?focus=obligation(%3A|:)payroll-1/)
+
+  // the word budget at the mockup's width
+  if (width >= 1200) {
+    await page.setViewportSize({ width: 1487, height: 1058 })
+    const words = (await visibleWords(page)).length
+    info.annotations.push({ type: 'words', description: `${words} at 1487` })
+    expect(words, `Overview at 1487 px shows ${words} words`).toBeLessThanOrEqual(wordBudget('overview'))
+  }
   expect(writes).toEqual([])
 })
+
+for (const size of [{ width: 390, height: 844 }, { width: 1440, height: 900 }]) {
+  for (const scheme of ['light', 'dark'] as const) {
+    test(`first viewport at ${size.width}x${size.height}, ${scheme}: the answer, the cash path with its floor, Open simulation`, async ({ page, baseURL }, info) => {
+      test.skip(info.project.use.viewport!.width !== size.width, 'one run per size, on the project of that width')
+      const writes = await readOnly(page, baseURL!)
+      await page.emulateMedia({ colorScheme: scheme })
+      await page.setViewportSize(size)
+      await page.goto('/overview')
+      await settled(page)
+      await expect($(page, 'late-path')).toHaveCount(1)
+      await firstViewport(page, `${size.width}x${size.height} ${scheme}`)
+      expect(await sideways(page), 'the page scrolls sideways').toBeLessThanOrEqual(0)
+      const file = info.outputPath(`overview-${size.width}-${scheme}.png`)
+      await page.screenshot({ path: file })
+      await info.attach(`overview-${size.width}x${size.height}-${scheme}`, { path: file, contentType: 'image/png' })
+      expect(writes).toEqual([])
+    })
+  }
+}
