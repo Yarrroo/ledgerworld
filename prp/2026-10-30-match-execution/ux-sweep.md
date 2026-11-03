@@ -25,6 +25,7 @@ All heavy checks were run through the shared heavy-command queue. The full `chec
 | Check | Desktop | Tablet | Phone |
 |---|---|---|---|
 | Page grid, banner, aggregate tracker and receipt rows | Pass | Pass | Pass |
+| Panel order: legs left, terms and incidents right (desktop); terms → legs → incidents (tablet, phone), a leg expanded included | Pass | Pass | Pass |
 | Approval stage columns / phone active stage | Pass | Pass | Pass |
 | Light and dark screenshots | Pass | Pass | Pass |
 | No horizontal page overflow | Pass | Pass | Pass |
@@ -43,6 +44,8 @@ Screenshots are in `ux/`, named by width, state and theme. Closed-page word coun
 - The old judge-path selector treated a new `leg-pill` hook as a leg. The new hook uses the receipt namespace. Existing receipt mouse and keyboard selectors were aligned with the row chevron and its outer summary; the timed four-click path remains intact.
 - Nested tooltips consumed Escape before modal dismissal. The modal listener now captures the key while the dialog is open; a unit regression and the existing browser focus test prove dismissal and focus return.
 - The stricter aggregate status requires a settled leg, reconciliation flag, journal and no open incident. The banner, per-leg steps, hero counts and dialog terminal state now agree.
+
+- Correction (2026-11-03): below 1200 px the grid placed Execution legs above Bound approval, and the test asserted that reversed order. The compact grid now reads terms → legs → incidents, matching the DOM; the test checks that order at 834 and 390 px before and after a leg expands (red on the old CSS at both widths, green after).
 
 ## Stability follow-up
 
