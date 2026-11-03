@@ -30,8 +30,9 @@ The full `checks/merge.sh` runs once over the merged batch; it was not run here.
 
 ## Review
 
-Two review rounds (high, then medium on the fixes), plus a security read with no findings. 17
-findings applied, each with a test that fails before the fix: the late path is not served when
+Two review rounds (high, then medium on the fixes), plus a security read with no findings. 12
+correctness findings applied, each with a test that fails before the fix, and 7 quality or doc
+fixes. The correctness ones: the late path is not served when
 moving the flow leaves P unchanged; "is covered" only for an obligation inside the projection;
 the condition names the receipt only when its late path breaks the floor; the y axis steps over
 the whole span; the late low label and its caption stay inside the chart and clear of the
