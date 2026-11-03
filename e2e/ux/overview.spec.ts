@@ -1,20 +1,19 @@
 /**
- * Overview, panels O1–O6 of prp/2026-10-29-ux-pass/HANDOFF.md as rebuilt to mockup 01
- * (prp/2026-10-29-ux-pass/MATCH.md), in motion at every width of e2e/ux.config.ts: the context
- * line and its tooltip (read again when the tab comes back), the four figures with the inputs the
- * API served in their tooltips, the cash outlook (focusable points, each with its tooltip), the
- * next obligation (deep link to its Treasury row), the world exposure and the hypothetical
- * scenario entry. Read-only.
+ * Overview, panels O1–O6 of prp/2026-10-29-ux-pass/HANDOFF.md as rebuilt around the 72-hour cash
+ * path (prp/2026-11-03-overview-cash-path), in motion at every width of e2e/ux.config.ts: the
+ * context line and its tooltip (read again when the tab comes back), the equation settled −
+ * reserved = spendable with the inputs the API served in its tooltips, the cash path (focusable
+ * points, each with its tooltip), the what-if table, and folded under them the next obligation
+ * (deep link to its Treasury row), the world exposure and the scenario as run. Read-only.
  *
  * Two answers drive it: the app's own (whatever state its prepared demonstration left), and the
  * recorded baseline contracts/examples/c6_api/valid-overview-demo-baseline.json — the API's
  * answer on the demo world before any run, kept equal to it by tests/api — for the handoff's
  * exact numbers, with the app's own prepared run and scenario.
  *
- * Removed with the redesign (MATCH.md items 2, 4): the context panel's Refresh (a screen reads
- * again on visibilitychange), the strip's click-to-open metric inputs and their Treasury links
- * (the inputs are each figure's tooltip now), and the outlook's View data table (each point's
- * tooltip carries its time, amount and event).
+ * Removed with the redesigns (MATCH.md items 2, 4; the cash-path Overview): the context panel's
+ * Refresh (a screen reads again on visibilitychange), the strip of four figures (the equation and
+ * the what-if table carry them), and the Preview scenario button (the scenario as run is a fold).
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -93,16 +92,14 @@ test('O1 context: snapshot, currency, company and as of; read again when the tab
   expect(writes).toEqual([])
 })
 
-test('O2 cash strip: the API figures, each with its inputs in a focusable tooltip', async ({ page, baseURL }) => {
+test('O2 the equation: the API figures, each with its inputs in a focusable tooltip', async ({ page, baseURL }) => {
   const writes = await readOnly(page, baseURL!)
   const body = await live(page)
   const [account] = body.accounts
   await open(page)
   await expect($(page, 'settled').locator('.lw-figure')).toHaveText(metric(body.cash)!)
   await expect($(page, 'spendable').locator('.lw-figure')).toHaveText(metric(body.spendable)!)
-  await expect($(page, 'coverage').locator('.lw-figure')).toHaveText(metric(body.coverage.headroom)!)
-  // the strip's figures are set in the heading serif, as the handoff draws them
-  expect(await $(page, 'settled').locator('.lw-figure').evaluate((e) => getComputedStyle(e).fontFamily)).toMatch(/Source Serif 4/)
+  await expect($(page, 'coverage').locator('.lw-figure')).toHaveText(`+${metric(body.coverage.headroom)!}`)
 
   await focusTip(page, $(page, 'tip-settled'), [`${fmt(account.buckets.settled)} settled`, /Known|Stale/])
   await focusTip(page, $(page, 'tip-spendable'), [
@@ -110,7 +107,6 @@ test('O2 cash strip: the API figures, each with its inputs in a focusable toolti
     `${(account.buckets.reserved.minor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })} reserved`,
     `= ${metric(account.spendable)}`
   ])
-  await focusTip(page, $(page, 'tip-next-due'), [/earliest open obligation|Nothing you owe/])
   await focusTip(page, $(page, 'tip-coverage'), ['reserve floor'])
   expect(writes).toEqual([])
 })
@@ -120,7 +116,7 @@ test('O3 cash outlook: the API points, each focusable with its time, amount and 
   const body = await live(page)
   await open(page)
   const points = $(page, 'outlook-point')
-  const tips = page.locator('.lw-outlook__pt')
+  const tips = page.locator('.lw-path__pt')
   await expect(points).toHaveCount(body.outlook.length)
   for (const [n, p] of body.outlook.entries()) {
     await points.nth(n).focus()
@@ -133,7 +129,7 @@ test('O3 cash outlook: the API points, each focusable with its time, amount and 
     await expect(points.nth(n)).toHaveAttribute('aria-describedby', (await tip.getAttribute('id'))!)
   }
   await page.keyboard.press('Tab') // focus leaves the last point: its tip goes
-  await expect(page.locator('.lw-outlook__pt [role="tooltip"]:visible')).toHaveCount(0)
+  await expect(page.locator('.lw-path__pt [role="tooltip"]:visible')).toHaveCount(0)
   // hover on a pointer, a tap on touch: the same tip
   if (info.project.use.hasTouch) await points.nth(1).tap()
   else await points.nth(1).hover()
@@ -147,12 +143,11 @@ test('baseline: the handoff numbers, a green minimum, and the next payroll opens
   const writes = await readOnly(page, baseURL!)
   const body = await baseline(page)
   await open(page)
-  // O2: settled 70k, spendable 20k, payroll 50k due in 40 hours, headroom 10k
+  // O2: settled 70k − reserved 50k = spendable 20k; the low point 10k above the floor
   await expect($(page, 'settled').locator('.lw-figure')).toHaveText('$70,000')
+  await expect($(page, 'reserved').locator('.lw-figure')).toHaveText('$50,000')
   await expect($(page, 'spendable').locator('.lw-figure')).toHaveText('$20,000')
-  await expect($(page, 'next-due').locator('.lw-figure')).toHaveText('$50,000')
-  await expect($(page, 'next-due-at')).toHaveText('· in 40h')
-  await expect($(page, 'coverage').locator('.lw-figure')).toHaveText('$10,000')
+  await expect($(page, 'coverage').locator('.lw-figure')).toHaveText('+$10,000')
   await expect($(page, 'floor-status')).toHaveText(/Above your safety minimum/)
   await expect(bubble($(page, 'tip-spendable'))).toContainText('70,000.00 settled − 50,000.00 reserved − 0.00 pledged = $20,000')
 
@@ -166,12 +161,12 @@ test('baseline: the handoff numbers, a green minimum, and the next payroll opens
   const low = $(page, 'outlook-point').nth(2)
   await expect(low).toHaveAttribute('aria-label', /Lowest point\.$/)
   await expect(low).toHaveAttribute('data-t', body.outlook[2].t)
-  await expect(page.locator('.lw-outlook__dot.is-ok')).toHaveCount(1)
   await expect($(page, 'outlook-low-label')).toHaveClass(/is-ok/)
-  await expect($(page, 'outlook-low-label')).toContainText('$40,000 · h40')
+  await expect($(page, 'outlook-low-label')).toContainText('$40,000')
 
   // O4: amount, exact deadline, reservation, funding account; Open Treasury → its row
   const next = $(page, 'next-obligation')
+  await next.locator('summary').click()
   await expect($(page, 'next-amount')).toHaveText('$50,000')
   await expect($(page, 'due')).toHaveText(/^due 2026-01-02 16:00 UTC · local /)
   await expect(next).toContainText(/Due in\s*in 40h/)
@@ -181,7 +176,7 @@ test('baseline: the handoff numbers, a green minimum, and the next payroll opens
   await expect(next).toContainText('Paid from Operating account · USD')
   await tall(page, '[data-test="open-treasury"]')
   // O6: the receivable the scenario delays, by its amount; nothing observed changes
-  await expect($(page, 'scenario').locator('h2')).toHaveText('What if your $20,000 receivable arrives late?')
+  await expect($(page, 'scenario').locator('h2')).toHaveText('If the $20,000 receivable arrives late')
 
   await $(page, 'open-treasury').click()
   await expect(page).toHaveURL(/\/treasury\?/)
@@ -199,6 +194,7 @@ test('O5 exposure and O6 scenario: the parties the API relates, the prepared run
   const body = await live(page)
   await open(page)
   const me = body.company?.entity_id ?? 'treasury'
+  await $(page, 'exposure').locator('summary').click()
   const world = $(page, 'relations')
   const parties = new Set<string>()
   for (const r of body.relations) {
@@ -220,17 +216,17 @@ test('O5 exposure and O6 scenario: the parties the API relates, the prepared run
 
   await expect($(page, 'hypothetical')).toHaveText(/hypothetical/i)
   const before = await $(page, 'settled').textContent()
-  const preview = $(page, 'preview-scenario')
-  await preview.click()
-  await expect(preview).toHaveAttribute('aria-expanded', 'true')
+  const fold = $(page, 'scenario-about')
+  await fold.locator('summary').click()
+  await expect(fold).toHaveAttribute('open', '')
   const shown = $(page, 'scenario-preview')
   await expect(shown).toContainText(body.scenario.family)
   await expect(shown).toContainText(body.scenario.about)
   if (body.scenario.params.delay_h) {
     await expect($(page, 'scenario-timing')).toContainText(`delayed ${words(body.scenario.params.delay_h)}`)
   }
-  expect(await $(page, 'settled').textContent()).toBe(before) // the preview changes no observed figure
-  await tall(page, '[data-test="preview-scenario"], a[data-test="open-simulation"]')
+  expect(await $(page, 'settled').textContent()).toBe(before) // the scenario changes no observed figure
+  await tall(page, '.lw-ov-fold summary, a[data-test="open-simulation"], [data-test="toggle-late"]')
   expect(await sideways(page)).toBeLessThanOrEqual(0)
 
   await $(page, 'explore-world').click()
@@ -246,12 +242,13 @@ test('no prepared run: the world and the scenario say why, nothing pretends to o
   const body = { ...BASELINE, upcoming_outflows: [], demo: { run_id: null, execution_id: null }, scenario: null }
   await page.route('**/api/v1/overview', (route) => route.fulfill({ json: body }))
   await open(page)
+  for (const fold of await page.locator('.lw-ov-fold summary').all()) await fold.click()
   await expect(bubble($(page, 'explore-why'))).toHaveText('No demonstration run is prepared')
   await expect(page.locator('a[data-test="explore-world"]')).toHaveCount(0)
   await expect($(page, 'open-simulation')).toBeDisabled()
   await expect(bubble($(page, 'open-simulation-why'))).toHaveText('No demonstration run is prepared')
-  await expect($(page, 'preview-scenario')).toBeDisabled()
-  await expect(bubble($(page, 'preview-why'))).toHaveText(/No prepared run/)
+  await expect($(page, 'what-if-why')).toHaveText('No prepared run, so no what-if to draw.')
+  await expect($(page, 'late-path')).toHaveCount(0)
   // the why is shown where the reader looks: on hover over (or a tap on) the disabled action
   if (info.project.use.hasTouch) await $(page, 'explore-why').tap()
   else await $(page, 'explore-why').hover()
@@ -259,6 +256,6 @@ test('no prepared run: the world and the scenario say why, nothing pretends to o
   // no obligation: a neutral empty state, not a zero
   await expect($(page, 'no-obligation')).toHaveText('No open obligation')
   await expect($(page, 'next-obligation')).not.toContainText('$0')
-  await expect($(page, 'next-due').locator('.lw-figure')).toHaveText('None open')
+  await expect(page.locator('h1')).toHaveText('Cash stays above the reserve floor.')
   expect(writes).toEqual([])
 })

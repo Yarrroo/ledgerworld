@@ -5,7 +5,7 @@
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 
 export const ROUTES = [
-  { path: '/overview', title: 'Overview', headline: 'Know your cash. Rehearse the risk.', run: false },
+  { path: '/overview', title: 'Overview', headline: 'Payroll is covered.', run: false },
   { path: '/treasury', title: 'Treasury', headline: 'Every dollar, accounted for.', run: false },
   { path: '/lending', title: 'Lending', headline: 'Capacity you can rely on.', run: false },
   { path: '/simulation', title: 'Simulation', headline: 'See the crisis before it spreads.', run: true },

@@ -50,9 +50,10 @@ test('Overview: the covered-until sentence from the baseline, plain strip, mecha
   await open(page, '/overview')
   expect(await leads(page)).toBe("You're covered until payroll on 2 Jan: $20,000 free now, and your lowest point " +
     'ahead is $40,000 — $10,000 above your $30,000 safety minimum.')
-  // the mockup's strip labels (MATCH.md 01)
-  for (const [key, label] of [['settled', 'Settled cash'], ['spendable', 'Spendable now'], ['coverage', 'Reserve headroom']]) {
-    await expect($(page, key).locator('.lw-ov-metric__label')).toHaveText(label)
+  // the equation's labels and the answer above it
+  await expect(page.locator('h1')).toHaveText('Payroll is covered.')
+  for (const [key, label] of [['settled', 'Settled'], ['reserved', 'Payroll reserve'], ['spendable', 'Spendable now']]) {
+    await expect($(page, key).locator('dt')).toHaveText(new RegExp(`${label}$`))
   }
   await expect($(page, 'coverage')).toContainText('lowest point ahead $40,000 · safety minimum $30,000')
   await expect($(page, 'floor-status')).toHaveText(/Above your safety minimum/)
@@ -74,7 +75,7 @@ test('Overview: the covered-until sentence from the baseline, plain strip, mecha
   // honesty in plain words, visible
   await expect($(page, 'mode')).toHaveText(/^Simulated provider · Scripted agents/)
   await expect($(page, 'mode')).toBeVisible()
-  await expect($(page, 'hypothetical')).toHaveText('Hypothetical')
+  await expect($(page, 'hypothetical')).toHaveText(/^Hypothetical/)
   await expect($(page, 'hypothetical')).toBeVisible()
   // the judge path's button keeps its name
   await expect(page.locator('a[data-test="open-simulation"]')).toHaveText('Open simulation')
@@ -92,6 +93,8 @@ test('Overview: a broken floor leads with the day and the shortfall', async ({ p
   await open(page, '/overview')
   expect(await leads(page)).toBe('Heads up: on 2 Jan you dip $5,000 below your $30,000 safety minimum.')
   await expect($(page, 'floor-status')).toHaveText(/Below your safety minimum/)
+  await expect($(page, 'floor-alert')).toBeVisible()
+  await expect(page.locator('h1')).toHaveText('Cash falls below the reserve floor.')
   expect(writes).toEqual([])
 })
 

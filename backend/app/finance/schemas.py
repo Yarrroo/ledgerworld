@@ -712,11 +712,14 @@ class Relation(_Shape):
 
 class ScenarioPreview(_Shape):
     """The prepared demonstration run's scenario, read-only: its family, what it shocks and its
-    parameters as run. Hypothetical; it changes no observed figure."""
+    parameters as run. Hypothetical; it changes no observed figure. `outlook` is the overview's
+    P with the scenario's flow moved by its delay (`flow_id`, `delay_h`), the what-if's cash
+    path; empty when the scenario moves no flow the overview's accounts carry."""
 
     family: Id
     about: str
     params: dict[str, Any]
+    outlook: list[OutlookPoint] = Field(default_factory=list)
 
 
 class OverviewResponse(Response):

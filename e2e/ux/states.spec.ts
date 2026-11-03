@@ -52,7 +52,8 @@ test('loading: skeletons and a polite Loading in place of amounts; navigation st
     await page.goto(urlOf(route, runId))
     await expect(page.locator('main.lw-main')).toHaveAttribute('aria-busy', 'true')
     await expect(crumb(page)).toHaveText(route.title)
-    await expect(page.locator('h1')).toHaveText(route.headline)
+    // Overview's headline is its answer, so before the answer it is the screen's name
+    await expect(page.locator('h1')).toHaveText(route.path === '/overview' ? route.title : route.headline)
     const loading = $(page, 'loading')
     await expect(loading).toHaveText(`Loading ${route.title}…`)
     await expect(loading).toHaveAttribute('role', 'status')
@@ -79,7 +80,7 @@ test('no prepared run: every screen explains the absence, nothing pretends to op
   await settled(page)
   await expect(bubble($(page, 'explore-why'))).toHaveText('No demonstration run is prepared')
   await expect($(page, 'open-simulation')).toBeDisabled()
-  await expect($(page, 'preview-scenario')).toBeDisabled()
+  await expect($(page, 'what-if-why')).toHaveText('No prepared run, so no what-if to draw.')
 
   await page.goto('/treasury')
   await settled(page)

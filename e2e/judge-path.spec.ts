@@ -64,6 +64,7 @@ async function overview (page: Page): Promise<Demo> {
   }
   await expect(test$(page, 'coverage')).toContainText(/lowest point ahead .*\d.* · safety minimum .*\d/)
   await expect(test$(page, 'coverage').locator('.lw-figure')).toHaveText(/\d|Unknown|Not assessed/)
+  await expect(page.locator('h1')).toHaveText(/covered|reserve floor|Coverage/)
   await expect(test$(page, 'floor-status')).toHaveText(/\w/)
   expect(demo.run_id, 'the deployment names no prepared demonstration run').toBeTruthy()
   expect(demo.execution_id, `run ${demo.run_id} has no linked execution`).toBeTruthy()

@@ -137,7 +137,7 @@ describe('money-views fixture', () => {
     expect(w.get('[data-test="open-simulation"]').attributes('href')).toBe('/simulation?run_id=run-1')
     expect(text(w, 'due')).toContain('2026-01-06 16:00 UTC')
     expect(text(w, 'due')).toContain(formatTime('2026-01-06T16:00:00Z').local)
-    expect(text(w, 'next-due-at')).toContain('in 40h')
+    expect(text(w, 'next-obligation')).toContain('in 40h')
     expect(text(w, 'next-obligation')).toContain('$50,000')
     // source and mode stay on the banner
     expect(text(w, 'context-provider')).toBe(dataStates.labels.fake)
@@ -373,7 +373,7 @@ describe('data-states fixture', () => {
     expect(metricText({ minor: c.value_minor, currency: 'USD', status: c.status })).toBe(asShown(c.expect.text))
     serve({ '/overview': overviewWith({ minor: 0, currency: 'USD', status: 'known' }) })
     const w = await open(Overview, '/overview')
-    expect(shown(w, 'settled')).toBe(`Settled cash${asShown(c.expect.text)}`)
+    expect(shown(w, 'settled')).toBe(`Settled${asShown(c.expect.text)}`)
   })
 
   it('unknown is never zero, and an unknown capacity disables funding', async () => {
@@ -382,7 +382,7 @@ describe('data-states fixture', () => {
     expect(metricText(unknown)).toBe(c.expect.text)
     serve({ '/overview': overviewWith(unknown) })
     const w = await open(Overview, '/overview')
-    expect(shown(w, 'settled')).toBe(`Settled cash${c.expect.text}`)
+    expect(shown(w, 'settled')).toBe(`Settled${c.expect.text}`)
     expect(text(w, 'settled')).not.toMatch(/\$0(?![\d,])/)
 
     serveLending(lendingWithKp(() => unknown))

@@ -27,9 +27,12 @@ import { readOnly } from '../guard'
 import { ROUTES, crumb, demoRunId, settled, sideways, urlOf } from './routes'
 import { visibleWords, wordBudget } from './words'
 
-/** The hero's one action per screen (MATCH.md item 7); null where the mockup's hero has none. */
+/**
+ * The hero's one action per screen (MATCH.md item 7); null where the hero has none. Overview's
+ * hero carries the equation, and Open simulation sits beside the what-if under its chart.
+ */
 const ACTION: Record<string, RegExp | null> = {
-  '/overview': /^Open simulation$/,
+  '/overview': null,
   '/treasury': /^Rehearse a cash shock$/,
   '/lending': /^Compare funding plans$/,
   '/simulation': /^Compare policies$/,
