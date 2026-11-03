@@ -1288,7 +1288,7 @@ watch(stage, async () => {
   display: grid;
   gap: var(--lw-space-6);
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "legs" "terms" "incidents";
+  grid-template-areas: "terms" "legs" "incidents";
   margin-top: var(--lw-space-6);
 }
 .lw-exec__terms { grid-area: terms; }

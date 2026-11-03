@@ -34,6 +34,19 @@ async function controls (page: Page) {
   expect(await sideways(page)).toBeLessThanOrEqual(0)
 }
 
+/** Desktop: legs left, terms and incidents right. Below 1200 px: terms, then legs, then incidents. */
+async function panels (page: Page) {
+  const legs = (await $(page, 'receipts').boundingBox())!, terms = (await $(page, 'summary').boundingBox())!
+  const incidents = (await page.locator('section[aria-labelledby="incidents-heading"]').boundingBox())!
+  if (page.viewportSize()!.width >= 1200) {
+    expect(terms.x).toBeGreaterThanOrEqual(legs.x + legs.width)
+    expect(incidents.y).toBeGreaterThanOrEqual(terms.y + terms.height)
+  } else {
+    expect(legs.y).toBeGreaterThanOrEqual(terms.y + terms.height)
+    expect(incidents.y).toBeGreaterThanOrEqual(legs.y + legs.height)
+  }
+}
+
 // Real read path: values must match the offline app, not the illustrative amounts in the picture.
 test('Execution matches mockup 06', async ({ page, request, baseURL }, info) => {
   const writes = await readOnly(page, baseURL!)
@@ -64,9 +77,7 @@ test('Execution matches mockup 06', async ({ page, request, baseURL }, info) => 
       await expect(rows.nth(i).locator('[data-test="receipt-amount"]')).toHaveText(amount)
     }
   }
-  const left = (await $(page, 'receipts').boundingBox())!, right = (await $(page, 'summary').boundingBox())!
-  if (page.viewportSize()!.width >= 1200) expect(right.x).toBeGreaterThanOrEqual(left.x + left.width)
-  else expect(right.y).toBeGreaterThanOrEqual(left.y + left.height)
+  await panels(page)
   const counts: Record<string, number> = {}
   for (const theme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: theme })
@@ -83,6 +94,7 @@ test('Execution matches mockup 06', async ({ page, request, baseURL }, info) => 
   await expect(rows.first()).not.toHaveAttribute('open', '')
   await rows.first().locator('.lw-leg__chevron').click()
   await expect(rows.first().locator('.lw-leg__detail')).toBeVisible()
+  await panels(page) // an expanded leg grows the legs panel, never past its neighbours
   for (const term of ['Request id', 'Provider id', 'Journal']) {
     await expect(rows.first().getByRole('button', { name: `Copy ${term}`, exact: true })).toBeVisible()
   }
