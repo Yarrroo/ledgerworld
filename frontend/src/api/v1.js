@@ -319,14 +319,13 @@ export function projectionTerms (account, t, obligations, asOf) {
   }
 }
 
-/** An account's pending flows, both directions, in time order. */
 /** A step path's point in force at `t`: its last point at or before `t` (P holds between moves). */
-export const pointAt = (points, t) =>
-  [...points].reverse().find((p) => Date.parse(p.t) <= Date.parse(t)) ?? null
+export const pointAt = (points, t) => points.findLast((p) => Date.parse(p.t) <= Date.parse(t)) ?? null
 
 /** "+$10,000", "−$5,000": a signed gap in minor units, formatted. */
 export const signedMoney = (minor, currency) => `${minor < 0 ? '−' : '+'}${formatMoney(Math.abs(minor), currency)}`
 
+/** An account's pending flows, both directions, in time order. */
 export function pendingFlows (account) {
   return [
     ...account.buckets.pending_in.map((f) => ({ ...f, direction: 'in' })),

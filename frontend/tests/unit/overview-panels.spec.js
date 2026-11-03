@@ -262,6 +262,9 @@ describe('the answer and the chart hold off the recorded answer', () => {
     const w = await open(body)
     const [line] = w.findAll('[data-test="late-low-label"] text')
     expect(line.attributes('text-anchor')).toBe('start')
+    // its caption follows it to the right
+    const caption = w.findAll('[data-test="late-path"] text').find((t) => t.text().includes('hypothetical'))
+    expect(caption.attributes('text-anchor')).toBe('start')
   })
 
   it('the observed low label keeps clear of the what-if low label', async () => {
@@ -283,5 +286,22 @@ describe('the answer and the chart hold off the recorded answer', () => {
     const w = await open(body)
     const rows = w.findAll('[data-test="cash-data"] tbody tr').map((r) => r.text().replace(/\s+/g, ' '))
     expect(rows.some((r) => r.startsWith('36') && r.includes('(if late)'))).toBe(true)
+  })
+
+  it('a receipt the what-if moves onto a planned time is named in that row', async () => {
+    const body = withRun()
+    const receipt = clone(baseline.instance.outlook[1].events[0])
+    body.scenario.outlook[1].events = [receipt, ...body.scenario.outlook[1].events] // lands with payroll at h40
+    const w = await open(body)
+    const row = w.findAll('[data-test="cash-data"] tbody tr').map((r) => r.text().replace(/\s+/g, ' ')).find((r) => r.startsWith('40'))
+    expect(row).toContain('Payroll −$50,000; Receivable +$20,000 (if late)')
+  })
+
+  it('a what-if point that is unknown reads unknown in the tooltip, never an earlier figure', async () => {
+    const body = withRun()
+    body.scenario.outlook[1].value = { ...body.scenario.outlook[1].value, minor: null, status: 'unknown' }
+    const w = await open(body)
+    const tip = w.findAll('[data-test="outlook-tip"]')[2].text()
+    expect(tip).toContain('If late (hypothetical): Unknown')
   })
 })

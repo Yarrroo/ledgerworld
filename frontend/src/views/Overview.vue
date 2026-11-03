@@ -405,14 +405,15 @@ const rows = computed(() => {
   const times = [...new Set([...planned, ...late].map((p) => p.t))].sort((x, y) => Date.parse(x) - Date.parse(y))
   return times.map((t, n) => {
     const own = planned.find((p) => p.t === t)
-    const moved = late.find((p) => p.t === t && !own)
+    // the what-if's own move at t: its events the planned point does not carry
+    const ownRefs = new Set(own?.events.map((e) => e.ref))
+    const movedEvents = late.find((p) => p.t === t)?.events.filter((e) => !ownRefs.has(e.ref)) ?? []
     const p = pointAt(planned, t)
     const l = pointAt(late, t)
     return {
       t, hours: hoursAt(b.as_of, t), planned: p ? metricText(p.value) : '',
-      event: own?.events.length ? words(own.events)
-        : moved?.events.length ? `${words(moved.events)} (if late)`
-          : (n === 0 ? 'Now' : 'End of window'),
+      event: [own?.events.length ? words(own.events) : '', movedEvents.length ? `${words(movedEvents)} (if late)` : '']
+        .filter(Boolean).join('; ') || (n === 0 ? 'Now' : 'End of window'),
       late: l ? metricText(l.value) : '',
       lateBad: l ? againstFloor(l.value, b.coverage.floor).state === 'breached' : false
     }

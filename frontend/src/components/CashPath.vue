@@ -40,7 +40,7 @@
             <line v-for="s in breaches" :key="`b${s.t}`" :x1="s.x1" :x2="s.x2" :y1="s.y" :y2="s.y" class="lw-path__breach" />
             <template v-if="lateLow">
               <path :d="`M${lateLow.px},${lateLow.py - 6}l6,6l-6,6l-6,-6Z`" :class="['lw-path__diamond', `is-${lateLow.tone}`]" />
-              <text v-if="lateLow.from" :x="lateLow.px - 11" :y="lateLow.from + LH + 2" text-anchor="end"
+              <text v-if="lateLow.from" :x="lateLow.x" :y="lateLow.from + LH + 2" :text-anchor="lateLow.anchor"
                     class="lw-path__halo lw-path__muted">{{ wide ? 'if the receipt is late (hypothetical)' : 'if late (hypothetical)' }}</text>
               <g :class="`is-${lateLow.tone}`" data-test="late-low-label">
                 <text :x="lateLow.x" :y="lateLow.py - 3" :text-anchor="lateLow.anchor" class="lw-path__halo lw-path__strong">{{ lateLow.money }} if late</text>
@@ -149,7 +149,7 @@ const range = computed(() => {
   if (floorKnown.value) values.push(props.floor.minor)
   const hi = Math.max(1, ...values)
   const lo = Math.min(0, ...values)
-  // the step covers the top in two and the whole span in at most six
+  // the step reaches the top in two steps, and the span below $0 in at most six more
   const need = Math.max(hi * 0.54, (hi - lo) / 6)
   const mag = 10 ** Math.floor(Math.log10(need))
   const unit = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((s) => s >= need)
@@ -191,7 +191,7 @@ const drawn = computed(() => props.points.map((p) => {
   const shown = metricText(p.value)
   const event = eventText(p)
   const low = p.t === props.lowAt
-  const late = pointAt(lateShown.value, p.t)
+  const late = props.showLate ? pointAt(props.late, p.t) : null
   return {
     ...p, hours: Math.round(h), h: hoursFrom(props.asOf, p.t), utc, money: shown, event, low,
     px: x(h), py: p.value.minor === null ? y(0) : y(p.value.minor),

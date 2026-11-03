@@ -1,7 +1,6 @@
 # Workflow: Overview around the 72-hour cash path
 
-> Execution plan (dev-build stage 3, design folded in). Source: raw.md. Next: implement → close-out.
-> Tier: solo, one pane.
+> Execution plan (design folded in). Source: raw.md. Next: implement → close-out.
 
 ## Shape
 

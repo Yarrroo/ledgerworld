@@ -1,6 +1,6 @@
 # UX sweep: Overview around the 72-hour cash path
 
-> dev-ux evidence (standard depth). Surface: `/overview`. Primary flow: read the answer, read the
+> Viewport sweep evidence. Surface: `/overview`. Primary flow: read the answer, read the
 > cash path against the floor, hide/show the late path, open the payroll row, Open simulation.
 > House system: `frontend/src/styles/tokens.css` (breakpoints 767 / 1199 px, `--lw-*` tokens,
 > 44 px `--lw-target`); the repo's matrix is 1440 / 834 / 390 (`e2e/ux.config.ts`).

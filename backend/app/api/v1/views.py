@@ -138,8 +138,9 @@ def _outlook(views: list[AccountView], now: datetime, status: str,
 def _late_outlook(views: list[AccountView], now: datetime, status: str, scenario: Body,
                   observed: list[Body]) -> list[Body]:
     """The scenario's cash path: the outlook with its flow (`flow_id`) moved by `delay_h` hours,
-    every other flow and deadline as observed; empty when it names no flow these accounts carry.
-    Hypothetical: it changes no observed figure."""
+    every other flow and deadline as observed. Empty when it names no flow these accounts carry,
+    or when moving it leaves P unchanged (a flow overdue by more than the delay is counted now
+    either way). Hypothetical: it changes no observed figure."""
     params = scenario.get("params") or {}
     flow, delay = params.get("flow_id"), params.get("delay_h")
     if not isinstance(flow, str) or type(delay) is not int:
@@ -151,8 +152,9 @@ def _late_outlook(views: list[AccountView], now: datetime, status: str, scenario
 
     late = [replace(v, pending_in=moved(v.pending_in), pending_out=moved(v.pending_out))
             for v in views]
+    if late == views:
+        return []
     path = _outlook(late, now, status)
-    # a flow overdue by more than the delay is still counted now: the same path, no what-if
     return [] if path == observed else path
 
 

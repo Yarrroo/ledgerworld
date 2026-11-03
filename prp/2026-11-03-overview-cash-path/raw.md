@@ -1,6 +1,6 @@
 # Overview: one payroll decision around the 72-hour cash path
 
-> Requirements (dev-build stage 1). Next: workflow → implement. Depth: Medium (one screen and
+> Requirements. Next: workflow → implement. Depth: Medium (one screen and
 > one additive API field; design inputs already approved, so the design is folded into the
 > workflow).
 
@@ -21,7 +21,7 @@ what-if table beside Open simulation), merged with the judge's picks from P and 
 2. The chart's floor, trough and late-path values equal the API's values for the same snapshot;
    nothing on the page invents a number.
 3. No horizontal overflow at 390; key controls at least 44 px on a phone.
-4. dev-ux sweep at phone, tablet and desktop, with screenshots.
+4. A viewport sweep at phone, tablet and desktop, with screenshots.
 5. `npm --prefix frontend run test:unit -- tests/unit/overview-panels.spec.js`,
    `bash scripts/ux-check.sh e2e/ux/match-overview.spec.ts` and `bash checks/merge.sh` green.
 
