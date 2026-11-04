@@ -200,7 +200,7 @@ import Tip from '../components/Tip.vue'
 import { FAMILIES, worldFor } from '../api/world.js'
 import {
   ApiError, ScreenShell, amountText, amountWords, contextKey, formatTime, freshness, getLending, getOverview,
-  getTreasury, hoursFrom, kindText, lastSeen, listWords, longDate, metricStatus, metricText, money, routeExists, staleOf,
+  getTreasury, hoursFrom, kindText, lastSeen, listWords, longDate, metricStatus, metricText, money, routeExists, staleOf, stateOf,
   useReading
 } from '../api/v1.js'
 
@@ -233,8 +233,7 @@ const world = computed(() => worldFor(state.body?.snapshot_id))
 
 const capital = (s) => String(s ?? '').charAt(0).toUpperCase() + String(s ?? '').slice(1)
 const strip = (name) => String(name ?? '').replace(/\s*\(synthetic\)\s*$/i, '')
-const unique = (items) => [...new Set(items)]
-const stateWord = (m) => ({ known: 'Known', stale: 'Stale', unknown: 'Unknown', unassessed: 'Not assessed' })[m?.status] ?? 'Unavailable'
+const stateWord = (m) => (m ? stateOf(m.status).word : 'Unavailable')
 
 /** A party's name: the world file's, else the overview's relations', else its id. */
 function plain (id) {
@@ -321,11 +320,11 @@ const whole = computed(() => {
 })
 
 const me = computed(() => state.body?.company?.entity_id ?? 'treasury')
-/** The active committed lines: the committed undrawn part names its borrower when there is one. */
-const committedTo = computed(() => {
-  const lines = (state.body?.facilities ?? []).filter((f) => f.kind === 'committed_line' && f.state === 'active')
-  return whole.value && lines.length === 1 && capacity.value.parts.committed_undrawn.minor > 0 ? plain(lines[0].borrower) : ''
-})
+/** The active committed lines: the API's committed undrawn part is the sum of what they leave undrawn. */
+const committedLines = computed(() => (state.body?.facilities ?? []).filter((f) => f.kind === 'committed_line' && f.state === 'active'))
+/** The committed part names its borrower when exactly one line makes it up. */
+const committedTo = computed(() => (whole.value && committedLines.value.length === 1 &&
+  capacity.value.parts.committed_undrawn.minor > 0 ? plain(committedLines.value[0].borrower) : ''))
 
 /** The one expected exchange withdrawal the treasury read names, when there is exactly one. */
 const withdrawal = computed(() => {
@@ -337,7 +336,7 @@ const loop = computed(() => {
   if (!whole.value) return null
   const b = state.body
   const p = capacity.value.parts
-  const lines = b.facilities.filter((f) => f.kind === 'committed_line' && f.state === 'active')
+  const lines = committedLines.value
   const borrower = lines.length === 1 && lines[0].borrower !== me.value ? lines[0].borrower : undefined
   const who = committedTo.value || 'borrowers'
   const zeros = PARTS.slice(1).filter(([key]) => p[key].minor === 0).map(([key, label]) => `${label} ${money(p[key])}`)

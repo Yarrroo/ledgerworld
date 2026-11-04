@@ -52,7 +52,7 @@
         <rect :x="box.you.x" :y="box.you.y" :width="box.you.w - 1" :height="box.you.h" rx="8" class="lw-loop__box" stroke-width="1.5" />
         <template v-if="box.phone">
           <text :x="box.you.x + 12" :y="box.you.y + 24" font-size="15" class="is-strong">You</text>
-          <text v-for="(line, i) in box.youLines" :key="line" :x="box.you.x + 12" :y="box.you.y + 42 + 14 * i" :font-size="box.fs"
+          <text v-for="(line, i) in box.youLines" :key="i" :x="box.you.x + 12" :y="box.you.y + 42 + 14 * i" :font-size="box.fs"
                 class="is-muted">{{ line }}</text>
         </template>
         <template v-else>
