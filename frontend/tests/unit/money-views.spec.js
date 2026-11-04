@@ -11,6 +11,7 @@ import { onPage as shown } from './visible.js' // what the page shows, closed to
 import Overview from '../../src/views/Overview.vue'
 import Treasury from '../../src/views/Treasury.vue'
 import Lending from '../../src/views/Lending.vue'
+import CapacityLoop from '../../src/components/CapacityLoop.vue'
 import {
   FLOOR_WORDS, STATES, contextKey, formatMoney, formatTime, freshness, latestOnly, metricText, useReading
 } from '../../src/api/v1.js'
@@ -739,6 +740,60 @@ describe('Lending: the capacity and what it rests on, as one answer', () => {
     expect(shown(w, 'hypothetical')).toBe('Happening now')
   })
 
+  /** The world overview with ``change`` applied, served beside the lending read and one withdrawal. */
+  function serveChanged (change, lend = lending) {
+    const o = { ...clone(overviewBaseline.instance), snapshot_id: lend.snapshot_id, mode: lend.mode }
+    change(o)
+    const t = clone(treasuryDelayed.instance)
+    t.snapshot_id = lend.snapshot_id
+    t.mode = lend.mode
+    t.accounts[0].buckets.pending_in = [{ flow_id: 'withdrawal-1', kind: 'exchange_withdrawal', reservation_id: null,
+      amount: { minor: 1500000, currency: 'USD' }, expected_at: '2026-01-03T00:00:00Z' }]
+    serve({ '/lending': lend, '/overview': o, '/treasury': t })
+  }
+  const venueOf = (w) => w.findAll('[data-test="map-node"]').find((n) => n.attributes('data-node') === 'venue')
+
+  it('names a treasury withdrawal under the venue only when the treasury is exposed to that venue', async () => {
+    serveChanged((o) => { o.relations = o.relations.filter((r) => !(r.kind === 'venue_exposure' && r.source.entity_id === 'treasury')) })
+    const w = await open(Lending, '/lending')
+    expect(venueOf(w).text()).not.toContain('Your treasury')
+    expect(venueOf(w).text()).not.toContain('under both')
+  })
+
+  it('the wide drawing is tall enough for its counted-inside link and label', async () => {
+    serveWorld()
+    const w = await open(Lending, '/lending')
+    const svgH = Number(w.get('[data-test="loop"] svg').attributes('viewBox').split(' ')[3])
+    const ys = venueOf(w).get('path').attributes('d').match(/V(-?[\d.]+)/g).map((v) => Number(v.slice(1)))
+    expect(Math.max(...ys)).toBeLessThanOrEqual(svgH)
+    for (const t of venueOf(w).findAll('text')) expect(Number(t.attributes('y'))).toBeLessThanOrEqual(svgH)
+  })
+
+  it('a venue balance in another currency is not drawn at the column\'s scale', async () => {
+    serveChanged((o) => {
+      const r = o.relations.find((x) => x.kind === 'venue_exposure' && x.source.entity_id === 'lender')
+      r.amount = { minor: 9000000, currency: 'EUR' }
+    })
+    const w = await open(Lending, '/lending')
+    const scale = Number(w.get('rect[data-part="K_p"]').attributes('height')) / lending.capacity.K_p.minor
+    expect(Number(venueOf(w).get('rect').attributes('height')) / scale).not.toBeCloseTo(9000000)
+  })
+
+  it('a reduced reading still shows its relationships as text', async () => {
+    const reduced = clone(lendingFreeze.instance)
+    serveChanged(() => {}, reduced)
+    const w = await open(Lending, '/lending')
+    expect(w.find('[data-test="loop"]').exists()).toBe(false)
+    expect(shown(w, 'relations')).toContain('Pool →')
+  })
+
+  it('the text alternative names no capacity amount the drawing does not show', async () => {
+    serveChanged((o) => { o.lender_capacity = { ...o.lender_capacity, minor: 1234500 } })
+    const w = await open(Lending, '/lending')
+    const can = w.findAll('[data-test="relations"] li').map((li) => li.text()).find((t) => t.includes('Can lend you'))
+    expect(can).not.toContain('$12,345')
+  })
+
   it('the disabled venue-freeze rehearsal says why in words, and no frozen-capacity figure appears', async () => {
     serveWorld()
     const w = await open(Lending, '/lending')
@@ -750,5 +805,27 @@ describe('Lending: the capacity and what it rests on, as one answer', () => {
     }
     expect(shown(w, 'freeze')).not.toMatch(/\$\d/)
     expect(shown(w, 'freeze')).toContain('Hypothetical')
+  })
+})
+
+describe('CapacityLoop on a phone', () => {
+  it('names the treasury in at most two lines inside its box', async () => {
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 358 })
+    try {
+      const w = mount(CapacityLoop, { props: { model: {
+        pool: { id: 'lender', name: 'Pool' }, settled: '$60,000', capacity: '$42,000', settledMinor: 6000000, kpMinor: 4200000,
+        segments: [{ key: 'floor', minor: 1800000, label: 'floor', short: 'floor', sub: '' }],
+        you: { id: 'treasury', name: 'Northwind Regional Treasury Holdings Group', cash: '' }, venue: null
+      } } })
+      await flushPromises()
+      const box = w.get('[data-node="treasury"] rect')
+      const bottom = Number(box.attributes('y')) + Number(box.attributes('height'))
+      const lines = w.findAll('[data-node="treasury"] text')
+      expect(lines.length).toBeLessThanOrEqual(3) // "You" and two lines of the name
+      for (const t of lines) expect(Number(t.attributes('y'))).toBeLessThanOrEqual(bottom)
+    } finally {
+      if (width) Object.defineProperty(HTMLElement.prototype, 'clientWidth', width)
+    }
   })
 })

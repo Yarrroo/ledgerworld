@@ -55,7 +55,8 @@
           <small class="lw-len-act__why">{{ fundingTarget ? 'Compare ways to cover a cash gap. Nothing is lent from this page.' : fundingWhy }}</small>
         </div>
 
-        <ul class="lw-visually-hidden" aria-label="Relationships" data-test="relations">
+        <!-- the drawing's text alternative; without a drawing, the relationships in words -->
+        <ul :class="whole ? 'lw-visually-hidden' : 'lw-len__relations'" aria-label="Relationships" data-test="relations">
           <li v-for="e in edges" :key="e.id" :data-edge="e.id">{{ e.fromShort }} → {{ e.toShort }} · {{ e.label }}{{ e.amount ? ` ${e.amount}` : '' }}. {{ e.tip.join(' ') }}</li>
         </ul>
       </section>
@@ -320,6 +321,8 @@ const whole = computed(() => {
 })
 
 const me = computed(() => state.body?.company?.entity_id ?? 'treasury')
+/** The overview's venue exposures, each a party → venue relation. */
+const venueRelations = computed(() => (state.body?.relations ?? []).filter((r) => r.kind === 'venue_exposure' && r.target))
 /** The active committed lines: the API's committed undrawn part is the sum of what they leave undrawn. */
 const committedLines = computed(() => (state.body?.facilities ?? []).filter((f) => f.kind === 'committed_line' && f.state === 'active'))
 /** The committed part names its borrower when exactly one line makes it up. */
@@ -372,17 +375,20 @@ const loop = computed(() => {
   }
 
   let venue = null
-  const venues = b.relations.filter((r) => r.kind === 'venue_exposure' && r.target)
-  const pooled = venues.find((r) => r.source?.entity_id === b.pool)
+  const pooled = venueRelations.value.find((r) => r.source?.entity_id === b.pool)
   if (pooled) {
     const id = pooled.target.entity_id
-    const yourRel = venues.find((r) => r.source?.entity_id === me.value && r.target.entity_id === id)
-    const flow = withdrawal.value
+    const yourRel = venueRelations.value.find((r) => r.source?.entity_id === me.value && r.target.entity_id === id)
+    // the treasury's withdrawal is named under this venue only when the treasury is exposed to it
+    const flow = yourRel ? withdrawal.value : null
     const at = flow ? longDate(flow.expected_at).replace(/, \d{4}$/, '') : ''
+    // drawn at the column's scale only in its currency and inside the settled known it is counted in
+    const a = pooled.amount
+    const scaled = a && a.currency === p.settled_known.currency && a.minor >= 0 && a.minor <= p.settled_known.minor
     venue = {
       id,
       name: strip(pooled.target.name) || plain(id),
-      minor: pooled.amount?.minor ?? null,
+      minor: scaled ? a.minor : null,
       pool: pooled.amount ? `${money(pooled.amount)} balance, counted` : 'balance counted, not itemised',
       yours: flow ? `${money(flow.amount)} withdrawal expected` : yourRel ? `${yourRel.amount ? money(yourRel.amount) : 'an amount not served'} venue exposure` : '',
       when: flow ? `${at} (${formatTime(flow.expected_at).utc}), not settled` : '',
@@ -441,9 +447,9 @@ const edges = computed(() => {
     link({ id: `facility:${f.facility_id}`, from: pool, to: f.borrower, label: capital(kindText(f.kind)), amount: money(f.principal),
       tip: [`${f.facility_id} · ${kindText(f.kind)} · ${f.state}`, `Principal ${money(f.principal)}, outstanding ${money(f.outstanding)}.`] })
   }
-  const venues = b.relations.filter((r) => r.kind === 'venue_exposure' && r.target)
+  const venues = venueRelations.value
   if (b.lenderCapacity && (b.treasuryCash || venues.some((r) => r.source.entity_id === me.value))) {
-    link({ id: `capacity:${me.value}`, from: pool, to: me.value, label: 'Can lend you', amount: metricText(b.lenderCapacity),
+    link({ id: `capacity:${me.value}`, from: pool, to: me.value, label: 'Can lend you', amount: '',
       tip: ['A relationship is a dependency, not a payment.'] })
   }
   for (const r of venues) {
@@ -687,6 +693,9 @@ const fundingTarget = computed(() => {
 .lw-len__total-row td { border-top: 1.5px solid var(--lw-ink); font-weight: 600 !important; }
 
 .is-minus { color: var(--lw-bad-text); }
+
+.lw-len__relations { display: grid; gap: var(--lw-space-1); margin: var(--lw-space-2) 0 0; padding: 0; list-style: none; font-size: 14px; }
+.lw-len__relations li { padding: var(--lw-space-1) 0; border-top: 1px solid var(--lw-rule); }
 
 @media (max-width: 1199px) {
   .lw-len-act { justify-items: start; }

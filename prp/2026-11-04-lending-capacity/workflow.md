@@ -9,7 +9,7 @@
   any non-zero pledged or obligations hatched, the floor cross-hatched with its threshold line),
   the zero parts named once in words; the dependency arrow to the You box; the venue block at the
   same scale, the dashed "counted inside" link from the column and the line from your expected
-  withdrawal back to You. Two layouts by the measured width (phone under 980 px of drawing).
+  withdrawal back to You. Two layouts by the measured width (phone under 1000 px of drawing).
   Party groups carry `data-test="map-node"`; a visually hidden list `relations` states every link.
 - **`Lending.vue`**: the hero's headline is the answer (the earlier lead variants for unknown,
   zero and reduced), its subtitle the "Not $60,000" sentence, the lead its tooltip; Compare

@@ -167,6 +167,7 @@ const box = computed(() => {
     if (last >= 0 && est(`${youLines[last]} ${word}`, fs) <= 100) youLines[last] += ` ${word}`
     else youLines.push(word)
   }
+  if (youLines.length > 2) youLines.splice(1, youLines.length, `${youLines[1]}…`)
 
   let H = Math.max(floorB, below) + 12
   let venue = null
@@ -196,7 +197,8 @@ const box = computed(() => {
     const rx = phone ? W - 10 : Math.min(W - 112, Math.max(you.x + you.w / 2, end + 24))
     const loop = `M${Math.ceil(end)},${oy - 4} H${rx} V${you.y + you.h + 4}`
     venue = { x: vx, y: vy, h, tx, ty, oy, rx, my: (oy + you.y + you.h) / 2, link, linkX, linkY, loop }
-    H = Math.max(H, vy + h + (phone ? 6 : 40), (v.yours ? oy + (v.when ? (phone ? 16 : 20) : 0) : ty + 42) + (phone ? 6 : 12))
+    const linkBottom = phone ? 0 : Math.max(floorB + 30, vy + h + 24) + 8
+    H = Math.max(H, linkBottom, vy + h + (phone ? 6 : 40), (v.yours ? oy + (v.when ? (phone ? 16 : 20) : 0) : ty + 42) + (phone ? 6 : 12))
   }
   return {
     W, H: Math.ceil(H), phone, ...L, kpH, capB, capY, floorY, segments, you, youLines, arrow,
