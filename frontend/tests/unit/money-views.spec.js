@@ -24,6 +24,7 @@ import lendingLf2 from '../../../contracts/examples/c6_api/valid-lending-lf2.jso
 import lendingFreeze from '../../../contracts/examples/c6_api/valid-lending-lf2-venue-freeze.json'
 import overviewStale from '../../../contracts/examples/c6_api/valid-overview-lf-stale.json'
 import lendingStale from '../../../contracts/examples/c6_api/valid-lending-lf-stale.json'
+import overviewBaseline from '../../../contracts/examples/c6_api/valid-overview-demo-baseline.json'
 
 const record = (view, kase) => moneyViews.records.find((r) => r.view === view && r.case === kase)
 const stateCase = (id) => dataStates.cases.find((c) => c.id === id)
@@ -209,7 +210,7 @@ describe('money-views fixture', () => {
     expect(text(w, 'calculation')).toContain(want.calculation)
     expect(text(w, 'view-repayments')).toBe('View repayment schedule')
     const facilities = text(w, 'facilities')
-    expect(facilities).toContain('adv-a · revenue_advance')
+    expect(facilities).toContain('adv-a · revenue advance')
     expect(facilities).toContain('$10,000') // principal
     expect(facilities).toContain('$800') // fee
     expect(facilities).toContain('$10,800') // owed
@@ -613,12 +614,13 @@ describe('Treasury as mockup 02 keeps its rules', () => {
   })
 })
 
-describe('Lending as mockup 03: the map draws each party once', () => {
+describe('Lending: the main object draws each party once', () => {
   const venue = (source) => ({ kind: 'venue_exposure', ref: `x-${source}`, source: { entity_id: source, name: source },
     target: { entity_id: 'venue', name: 'Exchange venue' }, amount: null })
   const withOverview = (change) => { const o = clone(overviewLf1.instance); change(o); return o }
   const nodeIds = (w) => w.findAll('[data-test="map-node"]').map((n) => n.attributes('data-node'))
-  const relations = (w) => w.findAll('[data-test="relations"] li').map((li) => shown({ get: () => li }, null))
+  // the drawing's text alternative: a list a screen reader reads, not shown on the page
+  const relations = (w) => w.findAll('[data-test="relations"] li').map((li) => li.text().replace(/\s+/g, ' '))
 
   it('a treasury that is also a borrower is one node', async () => {
     serveLending(lendingLf2.instance, withOverview((o) => {
@@ -663,6 +665,90 @@ describe('Lending as mockup 03: the map draws each party once', () => {
     serveLending(lendingLf2.instance, withOverview((o) => { o.cash = null; o.relations = [venue('treasury')] }))
     const w = await open(Lending, '/lending')
     const node = w.findAll('[data-test="map-node"]').find((n) => n.attributes('data-node') === 'treasury')
-    expect(node.get('[role="tooltip"]').text()).not.toContain('Unavailable')
+    expect(node.text()).not.toContain('Unavailable')
+    expect(node.text()).not.toContain('Settled cash')
+  })
+})
+
+// ------------------------------------------- Lending as one answer: what the capacity rests on (177)
+
+describe('Lending: the capacity and what it rests on, as one answer', () => {
+  const lending = lendingLf2.instance
+  /** The demonstration world's overview and one expected venue withdrawal, in Lending's context. */
+  function serveWorld (flows = 1) {
+    const t = clone(treasuryDelayed.instance)
+    t.snapshot_id = lending.snapshot_id
+    t.mode = lending.mode
+    t.accounts[0].buckets.pending_in = Array.from({ length: flows }, (_, i) => ({ flow_id: `withdrawal-${i + 1}`,
+      kind: 'exchange_withdrawal', reservation_id: null, amount: { minor: 1500000, currency: 'USD' }, expected_at: '2026-01-03T00:00:00Z' }))
+    serve({
+      '/lending': lending,
+      '/overview': { ...clone(overviewBaseline.instance), snapshot_id: lending.snapshot_id, mode: lending.mode },
+      '/treasury': t
+    })
+  }
+  const height = (w, sel) => Number(w.get(sel).attributes('height'))
+
+  it("the headline is the API's K_p, the subtitle what it is not and why", async () => {
+    serveWorld()
+    const w = await open(Lending, '/lending')
+    expect(w.get('h1').text()).toBe('Your lender can still lend you up to $42,000.')
+    expect(shown(w, 'hero-subtitle')).toBe('Not $60,000: $10,000 is promised to Bellfield Kitchens and $8,000 is the pool’s own floor.')
+    expect(shown(w, 'capacity-value')).toBe('$42,000')
+  })
+
+  it('the column draws settled known at one scale, each part the API takes away a cut of it', async () => {
+    serveWorld()
+    const w = await open(Lending, '/lending')
+    const p = lending.capacity.parts
+    const kp = height(w, 'rect[data-part="K_p"]')
+    const committed = height(w, 'rect[data-part="committed_undrawn"]')
+    const floor = height(w, 'rect[data-part="floor"]')
+    const scale = kp / lending.capacity.K_p.minor
+    expect(committed / scale).toBeCloseTo(p.committed_undrawn.minor)
+    expect(floor / scale).toBeCloseTo(p.floor.minor)
+    expect((kp + committed + floor) / scale).toBeCloseTo(p.settled_known.minor)
+    expect(w.find('rect[data-part="pledged"]').exists()).toBe(false) // a $0 part is said in words
+    expect(w.get('[data-test="loop"]').text()).toContain('Pledged $0 · Pool obligations $0')
+    // the venue, at the same scale: the pool's counted balance from the overview's relation
+    const venue = w.findAll('[data-test="map-node"]').find((n) => n.attributes('data-node') === 'venue')
+    expect(Number(venue.get('rect').attributes('height')) / scale).toBeCloseTo(1500000)
+    expect(venue.text()).toContain('The pool: $15,000 balance, counted')
+    expect(venue.text()).toContain('which claim it backs is not itemised')
+    expect(venue.text()).toContain('Your treasury: $15,000 withdrawal expected')
+    expect(venue.text()).toContain('January 3 (2026-01-03 00:00 UTC), not settled')
+    const borrower = w.findAll('[data-test="map-node"]').find((n) => n.attributes('data-node') === 'borrower-b')
+    expect(borrower.text()).toContain('−$10,000 promised to Bellfield Kitchens')
+  })
+
+  it('names no withdrawal when the treasury expects two', async () => {
+    serveWorld(2)
+    const w = await open(Lending, '/lending')
+    expect(w.get('[data-test="loop"]').text()).not.toContain('withdrawal expected')
+    expect(w.get('[data-test="loop"]').text()).toContain('Your treasury: $15,000 venue exposure')
+  })
+
+  it('reduced authority falls back to the known-funds wording, no drawing, funding disabled', async () => {
+    serve({ '/lending': lendingFreeze.instance, '/overview': overviewFreeze.instance })
+    const w = await open(Lending, '/lending')
+    expect(w.find('[data-test="loop"]').exists()).toBe(false)
+    expect(w.get('h1').text()).toBe('Your lender can still lend you up to $27,000 from the money we can see.')
+    expect(shown(w, 'capacity-value')).toBe('$27,000 (known funds only)')
+    expect(shown(w, 'not-current')).toContain('Lender venue account')
+    expect(disabled(w, 'fund')).toBe(true)
+    expect(shown(w, 'hypothetical')).toBe('Happening now')
+  })
+
+  it('the disabled venue-freeze rehearsal says why in words, and no frozen-capacity figure appears', async () => {
+    serveWorld()
+    const w = await open(Lending, '/lending')
+    const button = w.get('[data-test="rehearse-freeze"]')
+    if (button.element.tagName === 'BUTTON') {
+      expect(button.attributes('disabled')).toBeDefined()
+      expect(shown(w, 'freeze-why')).toMatch(/\w/)
+      expect(w.get(`#${button.attributes('aria-describedby')}`).attributes('data-test')).toBe('freeze-why')
+    }
+    expect(shown(w, 'freeze')).not.toMatch(/\$\d/)
+    expect(shown(w, 'freeze')).toContain('Hypothetical')
   })
 })

@@ -52,8 +52,8 @@ test('loading: skeletons and a polite Loading in place of amounts; navigation st
     await page.goto(urlOf(route, runId))
     await expect(page.locator('main.lw-main')).toHaveAttribute('aria-busy', 'true')
     await expect(crumb(page)).toHaveText(route.title)
-    // Overview's headline is its answer, so before the answer it is the screen's name
-    await expect(page.locator('h1')).toHaveText(route.path === '/overview' ? route.title : route.headline)
+    // Overview's and Lending's headlines are their answers, so before the answer it is the screen's name
+    await expect(page.locator('h1')).toHaveText(['/overview', '/lending'].includes(route.path) ? route.title : route.headline)
     const loading = $(page, 'loading')
     await expect(loading).toHaveText(`Loading ${route.title}…`)
     await expect(loading).toHaveAttribute('role', 'status')
@@ -90,7 +90,8 @@ test('no prepared run: every screen explains the absence, nothing pretends to op
   await page.goto('/lending')
   await settled(page)
   await expect($(page, 'rehearse-freeze')).toBeDisabled()
-  await expect(bubble($(page, 'freeze-why'))).toHaveText(/\w/)
+  await expect($(page, 'freeze-why')).toBeVisible() // the reason in words, not on hover
+  await expect($(page, 'freeze-why')).toHaveText(/\w/)
 
   for (const route of ROUTES.filter((r) => r.run)) {
     await page.goto(route.path)

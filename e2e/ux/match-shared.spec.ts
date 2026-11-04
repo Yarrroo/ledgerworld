@@ -83,8 +83,11 @@ test('the shared page: hero, header, sidebar, no noise, tooltips', async ({ page
     const action = ACTION[route.path]
     if (action) {
       await expect(actions, where).toHaveCount(1)
-      await expect(actions.first(), where).toBeVisible()
-      expect((await actions.first().innerText()).trim(), where).toMatch(action)
+      // Lending's one action sits under its main object on a phone (board item 177)
+      const shownAction = route.path === '/lending' && !(await actions.first().isVisible())
+        ? page.locator('[data-test="fund-phone"]') : actions.first()
+      await expect(shownAction, where).toBeVisible()
+      expect((await shownAction.innerText()).trim(), where).toMatch(action)
     } else {
       await expect(actions, where).toHaveCount(0)
     }

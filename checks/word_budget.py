@@ -19,11 +19,13 @@ import math
 import sys
 from pathlib import Path
 
-#: The mockup's visible words per screen; 07 Approval flow is a dialog over Execution.
+#: The mockup's visible words per screen; 07 Approval flow is a dialog over Execution. Lending's is
+#: the accepted 2026-11-02 Lending design (its answer and main object replaced mockup 03), counted
+#: at 1487 px the way e2e/ux/words.ts counts, with its folds closed.
 MOCKUP_WORDS: dict[str, int] = {
     "overview": 160,
     "treasury": 192,
-    "lending": 167,
+    "lending": 356,
     "simulation": 210,
     "decisions": 185,
     "execution": 206,
