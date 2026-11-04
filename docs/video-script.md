@@ -20,9 +20,10 @@ capture area for POSTs. Do not film environment files, headers containing creden
 entry. Reserve enough time and model budget for a genuinely fresh branch during the take. If it
 cannot finish, record that limitation rather than cutting a replay into a purported live shot.
 
-The opening minute visits Overview → Live Simulation → Decisions → Execution (preview), then
-returns to the branch. The full execution happens in the Execute beat. Pause the narration for
-necessary UI navigation; the final edit must preserve ordering, labels and waiting-time disclosures.
+The opening minute visits Overview → Live Simulation → Decisions → Lending → Execution (preview),
+then returns to the branch. The full execution happens in the Execute beat. Pause the narration for
+necessary UI navigation; the final edit must preserve ordering, labels and waiting-time
+disclosures.
 
 Rehearse the timing first with `bash scripts/walkthrough.sh "$LEDGERWORLD_URL"`. It drives the
 deployed app read-only through the seven beats below in real time with each Shot as a caption,
@@ -40,11 +41,17 @@ than 2 s late.
 
 ## 00:00-00:15 State
 
-**Shot:** Overview with the mode banner, `as_of`, snapshot, cash buckets and next obligation. Name
-the prepared `run_id` and associated execution, or show unavailable and stop the success take.
+**Shot:** Overview with the mode banner and `as_of`. Hold on the payroll answer in the headline (on
+the prepared world, “Payroll is covered.”) and its condition under it, with settled − reserved =
+spendable beside it. Then the 72-hour cash path chart: the reserve floor horizon, the low point and
+the dashed late-receipt path, then the what-if table under it (low point as planned and if late,
+against the floor) and Open simulation. Name the prepared `run_id` and associated execution
+(Overview does not print the ID; show the structured result alongside), or show unavailable and
+stop the success take.
 
-**Voice:** “Will you have enough for payroll? See cash in the bank, money set aside and payments
-still due. This is made-up company data; nothing moves until you approve and send.”
+**Voice:** “Will you have enough for payroll? The line is your cash for three days against money
+set aside; dashed, a payment arrives late. Made-up company data; nothing moves until you approve
+and send.”
 
 ## 00:15-00:25 World
 
@@ -69,15 +76,19 @@ what happened, not why an agent thought it should.”
 ## 00:40-01:35 Fork
 
 **Shot:** Compare the three policy branches with the same shock seed and checkpoint, their reserve
-floor and obligation outcomes, and the lender's binding capacity. By 00:55, preview Execution to
-complete the judge's first-minute path, without implying that execution has happened. Return to
-Simulation and start one genuinely fresh branch on camera with the authorized operator action.
-Show the new branch metadata and committed rounds as it completes; label every precomputed cohort
-**Replay**. A re-fork may reuse a branch ID, so identity alone is not freshness evidence.
+floor and obligation outcomes, and the lender's binding capacity. Open Lending for that capacity:
+the headline amount the lender can still lend you, the subtitle naming what comes off its settled
+cash, and the drawing of what that rests on (pool, venue and you, as served); open no fold. By
+00:55, preview Execution to complete the judge's first-minute path, without implying that execution
+has happened. Return to Simulation and start one genuinely fresh branch on camera with the
+authorized operator action. Show the new branch metadata and committed rounds as it completes;
+label every precomputed cohort **Replay**. A re-fork may reuse a branch ID, so identity alone is
+not freshness evidence.
 
 **Voice:** “Compare doing nothing, keeping a fixed buffer and borrowing just enough. Which plan
 covers payroll, stays above your safety minimum, and at what fee? Each plan guides your company's
-choices; your lender and the other borrowers respond again. We're running a new what-if now.
+choices; your lender and the other borrowers respond again. Lending shows how much your lender
+can still lend you and what that rests on. We're running a new what-if now.
 Earlier results are labelled Replay. Fresh does not mean the agents used a live model, and neither
 Fresh nor Replay tells you whether the bank connection is simulated or sandbox. Comparing plans
 does not approve a payment.”
