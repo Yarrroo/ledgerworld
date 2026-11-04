@@ -155,14 +155,20 @@ test('Lending: what the lender can still lend, then how; K_p one click down', as
   const kp = body.capacity.K_p
   if (kp.minor === null) expect(text).toMatch(/unknown/)
   else expect(text).toMatch(new RegExp(`^Your lender can still lend you up to ${fmt(kp).replace(/[$.]/g, '\\$&')}`))
-  await expect(page.locator('#capacity-heading')).toHaveText('Available pool capacity')
-  await expect($(page, 'parts').locator('[data-part="K_p"]')).toContainText('Available capacity')
-  await expect($(page, 'parts').locator('[data-part="settled_known"]')).toContainText('Settled known')
+  await expect(page.locator('#capacity-heading')).toHaveText(kp.minor > 0 && body.capacity.authority === 'full'
+    ? new RegExp(`^What the ${fmt(kp).replace(/[$.]/g, '\\$&')} rests on`) : /^Available pool capacity$/)
+  await expect($(page, 'breakdown').locator('[data-row="K_p"]')).toContainText('Available capacity')
+  await expect($(page, 'breakdown').locator('[data-row="settled_known"]')).toContainText('Settled known')
   await plainHeadings(page)
+  // Source and authority: a fold, closed, opened from the keyboard
   await expect($(page, 'authority')).not.toBeVisible()
-  await folded(page, 'how-lending', [body.snapshot_id, 'K_p', `Balance authority ${body.capacity.authority}`])
+  const how = $(page, 'how-lending')
+  await how.locator('summary').focus()
+  await page.keyboard.press('Enter')
+  for (const fact of [body.snapshot_id, 'K_p', `Balance authority ${body.capacity.authority}`]) await expect(how).toContainText(fact)
+  await expect($(page, 'authority')).toBeVisible()
   await expect($(page, 'freeze')).toContainText(body.capacity.authority === 'full' ? 'What-if' : 'Happening now')
-  for (const hook of ['pool', 'capacity-value', 'capacity-status', 'parts', 'expand-calculation', 'evidence', 'relations', 'fund']) {
+  for (const hook of ['capacity-value', 'capacity-status', 'calculation', 'evidence', 'relations', 'fund']) {
     await expect($(page, hook)).toHaveCount(1)
   }
   expect(writes).toEqual([])

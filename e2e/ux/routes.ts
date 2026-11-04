@@ -7,7 +7,7 @@ import { expect, type APIRequestContext, type Locator, type Page } from '@playwr
 export const ROUTES = [
   { path: '/overview', title: 'Overview', headline: 'Payroll is covered.', run: false },
   { path: '/treasury', title: 'Treasury', headline: 'Every dollar, accounted for.', run: false },
-  { path: '/lending', title: 'Lending', headline: 'Capacity you can rely on.', run: false },
+  { path: '/lending', title: 'Lending', headline: 'Your lender can still lend you up to $42,000.', run: false },
   { path: '/simulation', title: 'Simulation', headline: 'See the crisis before it spreads.', run: true },
   { path: '/decisions', title: 'Decisions', headline: 'Protect payroll. Preserve your reserve.', run: true },
   { path: '/execution', title: 'Execution', headline: 'From approved plan to proof.', run: true }
